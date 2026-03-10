@@ -19,7 +19,14 @@ from .const import (
 
 LOGGER = logging.getLogger(__name__)
 
-PLATFORMS = [Platform.CONVERSATION, Platform.AI_TASK]
+PLATFORMS = [Platform.CONVERSATION]
+
+try:
+    from homeassistant.components import ai_task  # noqa: F401
+
+    PLATFORMS.append(Platform.AI_TASK)
+except (ImportError, AttributeError):
+    pass
 
 
 async def update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
