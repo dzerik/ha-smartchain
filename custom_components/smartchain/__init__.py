@@ -1,4 +1,4 @@
-"""The GigaChain integration."""
+"""The SmartChain integration."""
 
 import logging
 
@@ -28,7 +28,7 @@ async def update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Initialize GigaChain."""
+    """Initialize SmartChain."""
     engine = entry.data.get(CONF_ENGINE) or ID_GIGACHAT
     model = entry.options.get(CONF_CHAT_MODEL_USER)
     if not model or not model.strip():
@@ -56,5 +56,5 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Unload GigaChain."""
+    """Unload SmartChain."""
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)

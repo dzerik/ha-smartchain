@@ -1,6 +1,5 @@
 __pycache__
 .idea
-# Default ignored files
 /shelf/
 /workspace.xml
 /httpRequests/
@@ -10,3 +9,5 @@ __pycache__
 *.iml
 *.ipr
 /.mcp.json
+/.serena/
+.pytest_cache

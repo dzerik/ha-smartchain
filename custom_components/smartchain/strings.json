@@ -2,7 +2,7 @@
   "config": {
     "step": {
       "user": {
-        "title": "GigaChain configuration - select engine",
+        "title": "SmartChain configuration - select engine",
         "data": {
           "engine": "LLM Engine"
         }
@@ -47,6 +47,7 @@
       "init": {
         "title": "Model configuration",
         "data": {
+          "llm_hass_api": "Assist API (Control HA devices)",
           "prompt": "Prompt Template",
           "model": "Completion Model",
           "model_user": "Custom Model Name (leave empty to use from list above)",

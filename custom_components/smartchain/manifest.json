@@ -1,14 +1,14 @@
 {
-  "domain": "gigachain",
-  "name": "GigaChain",
+  "domain": "smartchain",
+  "name": "SmartChain",
   "codeowners": ["@gritaro"],
   "config_flow": true,
   "dependencies": ["conversation"],
-  "documentation": "https://github.com/gritaro/gigachain",
+  "documentation": "https://github.com/gritaro/ha-smartchain",
   "homekit": {},
   "integration_type": "service",
   "iot_class": "cloud_polling",
-  "issue_tracker": "https://github.com/gritaro/gigachain/issues",
+  "issue_tracker": "https://github.com/gritaro/ha-smartchain/issues",
   "requirements": [
     "home-assistant-intents",
     "langchain-gigachat>=0.3.0",
@@ -16,5 +16,5 @@
     "langchain-community>=0.4.0",
     "yandexcloud==0.295.0"
   ],
-  "version": "0.5.0"
+  "version": "0.7.0"
 }

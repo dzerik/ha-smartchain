@@ -1,4 +1,4 @@
-"""Tests for GigaChain config flow."""
+"""Tests for SmartChain config flow."""
 
 from unittest.mock import AsyncMock, patch
 
@@ -9,7 +9,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 from httpx import ConnectError
 
-from custom_components.gigachain.const import (
+from custom_components.smartchain.const import (
     CONF_API_KEY,
     CONF_ENGINE,
     CONF_FOLDER_ID,
@@ -133,7 +133,7 @@ async def test_openai_full_flow(
 async def test_gigachat_connect_error(hass: HomeAssistant) -> None:
     """Test GigaChat config flow handles connection error."""
     with patch(
-        "custom_components.gigachain.config_flow.validate_client",
+        "custom_components.smartchain.config_flow.validate_client",
         side_effect=ConnectError("Connection failed"),
     ):
         result = await hass.config_entries.flow.async_init(
@@ -153,7 +153,7 @@ async def test_gigachat_connect_error(hass: HomeAssistant) -> None:
 async def test_gigachat_invalid_response(hass: HomeAssistant) -> None:
     """Test GigaChat config flow handles invalid response."""
     with patch(
-        "custom_components.gigachain.config_flow.validate_client",
+        "custom_components.smartchain.config_flow.validate_client",
         side_effect=ResponseError("Unauthorized"),
     ):
         result = await hass.config_entries.flow.async_init(
@@ -173,7 +173,7 @@ async def test_gigachat_invalid_response(hass: HomeAssistant) -> None:
 async def test_gigachat_unknown_error(hass: HomeAssistant) -> None:
     """Test GigaChat config flow handles unknown error."""
     with patch(
-        "custom_components.gigachain.config_flow.validate_client",
+        "custom_components.smartchain.config_flow.validate_client",
         side_effect=RuntimeError("Something unexpected"),
     ):
         result = await hass.config_entries.flow.async_init(
@@ -195,7 +195,7 @@ async def test_skip_validation(
 ) -> None:
     """Test config flow with skip_validation=True skips API call."""
     with patch(
-        "custom_components.gigachain.config_flow.validate_client",
+        "custom_components.smartchain.config_flow.validate_client",
         new_callable=AsyncMock,
     ) as mock_validate:
         result = await hass.config_entries.flow.async_init(

@@ -2,20 +2,20 @@
   "config": {
     "step": {
       "user": {
-        "title": "GigaChain конфигурация - выбор LLM",
+        "title": "SmartChain - выбор LLM провайдера",
         "data": {
-          "engine": "Большая языковая модель"
+          "engine": "LLM провайдер"
         }
       },
       "gigachat": {
-        "title": "Конфигурация GigaChat",
+        "title": "GigaChat",
         "data": {
           "api_key": "Авторизационные данные",
           "skip_validation": "Пропустить проверку"
         }
       },
       "yandexgpt": {
-        "title": "Конфигурация YandexGPT",
+        "title": "YandexGPT",
         "data": {
           "api_key": "API ключ",
           "folder_id": "Идентификатор каталога (Folder ID)",
@@ -23,7 +23,7 @@
         }
       },
       "openai": {
-        "title": "Конфигурация OpenAI",
+        "title": "OpenAI",
         "data": {
           "api_key": "API ключ",
           "skip_validation": "Пропустить проверку"
@@ -31,7 +31,7 @@
       }
     },
     "abort": {
-      "already_configured": "Эта модель уже настроена"
+      "already_configured": "Этот провайдер уже настроен"
     },
     "error": {
       "cannot_connect": "Не удаётся подключиться",
@@ -45,16 +45,17 @@
     },
     "step": {
       "init": {
-        "title": "Конфигурация модели",
+        "title": "Настройки модели",
         "data": {
+          "llm_hass_api": "Assist API (управление устройствами HA)",
           "prompt": "Системный промпт",
           "model": "Модель",
-          "model_user": "Своё имя модели (оставьте пустым для использования имени из списка)",
+          "model_user": "Своё имя модели (оставьте пустым для использования из списка)",
           "temperature": "Температура",
           "max_tokens": "Максимум токенов",
           "profanity": "Цензура",
           "verify_ssl": "Проверка SSL сертификатов",
-          "process_builtin_sentences": "Использовать встроенный HA командный процессор",
+          "process_builtin_sentences": "Встроенный командный процессор HA",
           "chat_history": "История сообщений"
         }
       }

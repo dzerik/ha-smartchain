@@ -1,8 +1,8 @@
-"""Constants for the GigaChain integration."""
+"""Constants for the SmartChain integration."""
 
 from homeassistant.helpers import selector
 
-DOMAIN = "gigachain"
+DOMAIN = "smartchain"
 CONF_ENGINE = "engine"
 CONF_CHAT_MODEL = "model"
 CONF_CHAT_MODEL_USER = "model_user"
@@ -21,9 +21,12 @@ DEFAULT_PROCESS_BUILTIN_SENTENCES = True
 CONF_CHAT_HISTORY = "chat_history"
 DEFAULT_CHAT_HISTORY = True
 CONF_PROMPT = "prompt"
-DEFAULT_PROMPT = """Ты HAL 9000, компьютер из цикла произведений «Космическая одиссея» Артура Кларка, обладающий способностью к самообучению.
-Мы находимся в умном доме под управлением системы Home Assistant.
-В доме есть следующие помещения и устройства:
+DEFAULT_PROMPT = """You are a smart home voice assistant {{ ha_name }} powered by Home Assistant.
+Answer truthfully and to the point. Answer in plain text, briefly and clearly.
+Answer in the user's language."""
+
+DEFAULT_DEVICES_PROMPT = """
+The following rooms, devices and sensors are available in the home:
 {%- for area in areas() %}
   {%- set area_info = namespace(printed=false) %}
   {%- for device in area_devices(area) -%}
@@ -34,11 +37,20 @@ DEFAULT_PROMPT = """Ты HAL 9000, компьютер из цикла произ
         {%- set area_info.printed = true %}
       {%- endif %}
 - {{ device_attr(device, "name") }}{% if device_attr(device, "model") and (device_attr(device, "model") | string) not in (device_attr(device, "name") | string) %} ({{ device_attr(device, "model") }}){% endif %}
+
+      {%- for entity_id in device_entities(device) %}
+        {%- set entity_domain = entity_id.split('.')[0] %}
+        {%- set dc = state_attr(entity_id, 'device_class') %}
+        {%- set friendly = state_attr(entity_id, 'friendly_name') %}
+        {%- set entity_state = states(entity_id) %}
+        {%- if entity_state and entity_state != 'unavailable' %}
+  - {{ entity_id }} ({{ entity_domain }}{% if dc %}, {{ dc }}{% endif %}): {{ entity_state }}{% if state_attr(entity_id, 'unit_of_measurement') %} {{ state_attr(entity_id, 'unit_of_measurement') }}{% endif %}
+
+        {%- endif %}
+      {%- endfor %}
     {%- endif %}
   {%- endfor %}
-{%- endfor %}
-Когда отвечаешь, обращайся к собеседнику по имени Дэйв.
-"""
+{%- endfor %}"""
 
 ID_GIGACHAT = "gigachat"
 ID_YANDEX_GPT = "yandexgpt"
@@ -69,14 +81,14 @@ MODELS_GIGACHAT = [
 DEFAULT_MODELS_YANDEX_GPT = ["", "YandexGPT", "YandexGPT Lite", "Summary"]
 MODELS_OPENAI = [
     "",
+    "gpt-4.1",
+    "gpt-4.1-mini",
+    "gpt-4.1-nano",
     "gpt-4o",
     "gpt-4o-mini",
-    "gpt-4-turbo",
-    "gpt-4",
-    "gpt-3.5-turbo",
-    "o1",
-    "o1-mini",
+    "o3",
     "o3-mini",
+    "o4-mini",
 ]
 ENGINE_MODELS = {
     UNIQUE_ID_GIGACHAT: MODELS_GIGACHAT,
@@ -85,9 +97,12 @@ ENGINE_MODELS = {
 }
 DEFAULT_MODEL = {
     ID_GIGACHAT: None,
-    ID_OPENAI: "gpt-4o-mini",
+    ID_OPENAI: "gpt-4.1-mini",
     ID_YANDEX_GPT: None,
 }
 
+CONF_LLM_HASS_API = "llm_hass_api"
 CONF_API_KEY = "api_key"
 CONF_FOLDER_ID = "folder_id"
+
+MAX_TOOL_ITERATIONS = 10
