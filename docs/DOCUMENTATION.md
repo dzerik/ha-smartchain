@@ -1,68 +1,49 @@
-# GigaChain — Техническая документация
+# SmartChain — Technical Documentation
 
-## Оглавление
+## Overview
 
-1. [Обзор проекта](#обзор-проекта)
-2. [Архитектура](#архитектура)
-3. [Структура файлов](#структура-файлов)
-4. [Поддерживаемые LLM](#поддерживаемые-llm)
-5. [Поток конфигурации](#поток-конфигурации)
-6. [Обработка диалогов](#обработка-диалогов)
-7. [Конфигурационные параметры](#конфигурационные-параметры)
-8. [Тестирование](#тестирование)
-9. [CI/CD и инструменты качества](#cicd-и-инструменты-качества)
-10. [Зависимости](#зависимости)
-11. [Changelog](#changelog)
-12. [Оставшиеся рекомендации](#оставшиеся-рекомендации)
+**SmartChain** is a custom component for [Home Assistant](https://www.home-assistant.io/) providing a voice/conversation assistant using multiple LLM providers via LangChain.
 
----
+- **Version:** 0.7.0
+- **Domain:** `smartchain`
+- **Integration type:** service
+- **IoT class:** cloud_polling
+- **Distribution:** [HACS](https://hacs.xyz/)
 
-## Обзор проекта
-
-**GigaChain** — это custom component (интеграция) для [Home Assistant](https://www.home-assistant.io/), реализующая голосового/диалогового ассистента с использованием больших языковых моделей (LLM) через фреймворк LangChain.
-
-- **Версия:** 0.5.0
-- **Тип интеграции:** service (`integration_type: "service"`)
-- **IoT-класс:** cloud_polling
-- **Распространение:** через [HACS](https://hacs.xyz/) (Home Assistant Community Store)
-- **Автор:** [@gritaro](https://github.com/gritaro)
-
----
-
-## Архитектура
-
-Интеграция реализует `ConversationEntity` из Home Assistant, что позволяет использовать LLM в качестве entity-based backend-а для голосового ассистента HA с поддержкой `ChatLog` API.
+## Architecture
 
 ```mermaid
 flowchart TD
-    A[Пользователь] -->|Голос / Текст| B[Home Assistant Voice Pipeline]
+    A[User] -->|Voice / Text| B[Home Assistant Voice Pipeline]
     B --> C{Builtin Sentence Processor}
-    C -->|Распознана команда| D[HA Intent Handler]
-    C -->|Не распознана| E[GigaChainConversationEntity]
-    E --> F{Выбранный LLM Engine}
+    C -->|Recognized| D[HA Intent Handler]
+    C -->|Not recognized| E[SmartChainConversationEntity]
+    E --> F{LLM Engine}
     F --> G[GigaChat API]
     F --> H[YandexGPT API]
     F --> I[OpenAI API]
-    G --> J[Ответ пользователю]
+    G --> J[Response to user]
     H --> J
     I --> J
     D --> J
+
+    K[HA Automation] -->|ai_task.generate_data| L[SmartChainAITaskEntity]
+    L --> F
 ```
 
-### Ключевые компоненты
+### Key Components
 
 ```mermaid
 classDiagram
-    class GigaChainConversationEntity {
+    class SmartChainConversationEntity {
         +entry: ConfigEntry
         +supported_languages: list
         +_async_handle_message(user_input, chat_log) ConversationResult
     }
 
-    class ConversationEntity {
-        <<abstract>>
-        +async_process(user_input) ConversationResult
-        +_async_handle_message(user_input, chat_log) ConversationResult
+    class SmartChainAITaskEntity {
+        +entry: ConfigEntry
+        +_async_generate_data(task, chat_log) GenDataTaskResult
     }
 
     class ConfigFlow {
@@ -70,12 +51,6 @@ classDiagram
         +async_step_gigachat(user_input) ConfigFlowResult
         +async_step_yandexgpt(user_input) ConfigFlowResult
         +async_step_openai(user_input) ConfigFlowResult
-        -_common_model_async_step(engine, user_input) ConfigFlowResult
-    }
-
-    class OptionsFlow {
-        +config_entry: ConfigEntry
-        +async_step_init(user_input) ConfigFlowResult
     }
 
     class client_util {
@@ -83,293 +58,146 @@ classDiagram
         +get_client(hass, engine, entry, common_args)
     }
 
-    GigaChainConversationEntity --|> ConversationEntity : наследует
-    GigaChainConversationEntity --> client_util : использует
-    ConfigFlow --> client_util : валидация
-    ConfigFlow --> OptionsFlow : создаёт
+    SmartChainConversationEntity --|> ConversationEntity
+    SmartChainAITaskEntity --|> AITaskEntity
+    SmartChainConversationEntity --> client_util
+    SmartChainAITaskEntity --> client_util
 ```
 
-### Хранение данных
-
-Клиент LLM хранится в `entry.runtime_data` (согласно best practices HA), а не в `hass.data[DOMAIN]`. Это обеспечивает автоматическую очистку при unload.
-
-### Управление историей (ChatLog)
-
-С v0.4.0 история диалогов полностью управляется нативным `ChatLog` Home Assistant. Собственный `OrderedDict` удалён. `ConversationEntity` автоматически получает `chat_log` в `_async_handle_message` — HA управляет сессиями и историей через `chat_session`.
-
-Конвертация ChatLog в LangChain messages выполняется функцией `_chatlog_to_langchain()`:
-- `SystemContent` → `SystemMessage`
-- `UserContent` → `HumanMessage`
-- `AssistantContent` → `AIMessage`
-
----
-
-## Структура файлов
+## File Structure
 
 ```
-gigachain/
+ha-smartchain/
 ├── custom_components/
-│   └── gigachain/
-│       ├── __init__.py          # Основной модуль: setup/unload entry
-│       ├── conversation.py      # ConversationEntity (основная логика агента)
-│       ├── config_flow.py       # Config Flow и Options Flow для UI настройки
-│       ├── client_util.py       # Фабрика LLM-клиентов и валидация подключения
-│       ├── const.py             # Константы, модели, дефолтный промпт
-│       ├── manifest.json        # Метаданные интеграции для HA
-│       ├── strings.json         # Строки локализации (en, базовые)
+│   └── smartchain/
+│       ├── __init__.py          # Entry setup/unload, platform registration
+│       ├── conversation.py      # ConversationEntity (streaming, tool calling)
+│       ├── ai_task.py           # AITaskEntity (data generation)
+│       ├── config_flow.py       # Config Flow + Options Flow
+│       ├── client_util.py       # LLM client factory + validation
+│       ├── const.py             # Constants, prompts, model lists
+│       ├── manifest.json        # Integration metadata
+│       ├── strings.json         # Base localization strings
 │       └── translations/
-│           ├── en.json          # Английская локализация
-│           └── ru.json          # Русская локализация
+│           ├── en.json          # English localization
+│           └── ru.json          # Russian localization
 ├── tests/
-│   ├── __init__.py              # Пакет тестов
-│   ├── conftest.py              # Фикстуры (hass, mock LLM client)
-│   ├── test_config_flow.py      # Тесты Config Flow (11 тестов)
-│   ├── test_init.py             # Тесты ConversationEntity (11 тестов)
-│   └── test_setup.py            # Тесты setup/unload (4 теста)
-├── static/                      # Изображения для README
-├── .github/
-│   ├── workflows/
-│   │   ├── push.yml             # CI на push в main (lint + test)
-│   │   ├── pull.yml             # CI на pull request (lint + test)
-│   │   └── cron.yaml            # Ежедневная валидация
-│   ├── CODEOWNERS
-│   ├── settings.yml             # Настройки GitHub репозитория
-│   └── dependabot.yaml          # Автообновление зависимостей
+│   ├── conftest.py              # Fixtures (hass, mock LLM client)
+│   ├── test_config_flow.py      # Config Flow tests (11)
+│   ├── test_init.py             # Conversation entity tests (19)
+│   ├── test_ai_task.py          # AI Task entity tests (7)
+│   └── test_setup.py            # Setup/unload tests (4)
 ├── docs/
-│   └── DOCUMENTATION.md         # Техническая документация (этот файл)
-├── pytest.ini                   # Конфигурация pytest
-├── .pre-commit-config.yaml      # Pre-commit hooks (ruff)
+│   ├── DOCUMENTATION.md         # This file
+│   ├── COMPETITIVE_ANALYSIS.md  # Competitive analysis
+│   └── ROADMAP.md               # Development roadmap
+├── CLAUDE.md                    # Project rules for Claude Code
+├── CHANGELOG.md                 # Version changelog
+├── TODO.md                      # Task checklist
+├── README.md / README-ru.md     # User documentation (EN/RU)
+├── pytest.ini                   # Pytest configuration
+├── requirements_test.txt        # Test dependencies
 ├── hacs.json                    # HACS metadata
-├── CHANGELOG.md                 # Список изменений по версиям
-├── LICENSE                      # MIT лицензия
-├── requirements.txt             # (пустой)
-├── requirements_test.txt        # pytest-homeassistant-custom-component
-├── README.md                    # Документация (EN)
-└── README-ru.md                 # Документация (RU)
+└── LICENSE                      # MIT license
 ```
 
----
+## Supported LLM Providers
 
-## Поддерживаемые LLM
+| Provider      | ID          | Client Class                           | Auth Parameters          |
+| ------------- | ----------- | -------------------------------------- | ------------------------ |
+| **GigaChat**  | `gigachat`  | `GigaChat` (langchain-gigachat)        | `credentials`            |
+| **YandexGPT** | `yandexgpt` | `ChatYandexGPT` (langchain-community)  | `api_key` + `folder_id`  |
+| **OpenAI**    | `openai`    | `ChatOpenAI` (langchain-openai)        | `openai_api_key`         |
 
-| Engine       | ID          | Статус  | Класс клиента                          | Параметры аутентификации       |
-| ------------ | ----------- | ------- | -------------------------------------- | ------------------------------ |
-| **GigaChat** | `gigachat`  | Активен | `GigaChat` (langchain-gigachat)        | `credentials` (auth data)      |
-| **YandexGPT**| `yandexgpt` | Активен | `ChatYandexGPT` (langchain-community)  | `api_key` + `folder_id`        |
-| **OpenAI**   | `openai`    | Активен | `ChatOpenAI` (langchain-openai)        | `openai_api_key`               |
-
-### Доступные модели
+### Available Models
 
 - **GigaChat:** GigaChat, GigaChat:latest, GigaChat-Plus, GigaChat-Pro, GigaChat-Max
 - **YandexGPT:** YandexGPT, YandexGPT Lite, Summary
-- **OpenAI:** gpt-4o, gpt-4o-mini, gpt-4-turbo, gpt-4, gpt-3.5-turbo, o1, o1-mini, o3-mini
+- **OpenAI:** gpt-4.1, gpt-4.1-mini, gpt-4.1-nano, gpt-4o, gpt-4o-mini, o3, o3-mini, o4-mini
 
-Пользователь также может ввести произвольное имя модели в поле "Custom Model Name".
+Custom model names are also supported.
 
----
-
-## Поток конфигурации
-
-### Первоначальная настройка (Config Flow)
-
-```mermaid
-sequenceDiagram
-    participant U as Пользователь
-    participant CF as ConfigFlow
-    participant CU as client_util
-    participant LLM as LLM API
-
-    U->>CF: async_step_user() - выбор engine
-    CF->>U: Форма ввода API ключа
-    U->>CF: async_step_{engine}() - ввод credentials
-    CF->>CU: validate_client()
-    CU->>LLM: Тестовый запрос через async_add_executor_job
-    LLM-->>CU: Ответ / Ошибка
-    CU-->>CF: OK / Exception
-    CF->>U: Создание config entry / Показ ошибки
-```
-
-### Изменение опций (Options Flow)
-
-Пользователь может настроить:
-- Выбор модели из списка или ввод пользовательского имени модели
-- Системный промпт (шаблон Jinja2 HA)
-- Температуру генерации (0.0 - 1.0, шаг 0.05)
-- Максимум токенов
-- Использование встроенного HA командного процессора
-- Историю чата
-- Цензуру (только для GigaChat)
-- Проверку SSL (только для GigaChat)
-
----
-
-## Обработка диалогов
-
-### Алгоритм `_async_handle_message`
+## Conversation Flow
 
 ```mermaid
 flowchart TD
-    A[Входящее сообщение + ChatLog] --> B[Установить system prompt через Jinja2]
-    B --> C{history enabled?}
-    C -->|Да| D[Конвертировать ChatLog → LangChain messages]
-    C -->|Нет| E[Создать SystemMessage + HumanMessage]
-    D --> F{builtin_sentences включён?}
-    E --> F
-    F -->|Да| G[Отправить в HA Default Agent]
-    G --> H{Распознана команда?}
-    H -->|Да| I[Добавить AssistantContent в ChatLog]
-    I --> J[Вернуть результат HA]
-    H -->|Нет| K[Отправить в LLM через executor]
-    F -->|Нет| K
-    K --> L{Успешно?}
-    L -->|Да| M[Добавить AssistantContent в ChatLog]
-    M --> N[Вернуть ответ пользователю]
-    L -->|Нет| O[Вернуть ошибку IntentResponseErrorCode.UNKNOWN]
+    A[Message + ChatLog] --> B{Assist API configured?}
+    B -->|Yes| C[async_provide_llm_data - tools + prompt]
+    B -->|No| D[Manual Jinja2 prompt + device list]
+    C --> E{Builtin sentences?}
+    D --> F{Builtin sentences enabled?}
+    F -->|Yes| G[Try HA Default Agent]
+    F -->|No| H[Build LangChain messages]
+    E --> H
+    G --> I{Recognized?}
+    I -->|Yes| J[Return HA response]
+    I -->|No| H
+    H --> K[client.astream - streaming]
+    K --> L{Tool calls?}
+    L -->|Yes| M[Execute tools via HA]
+    M --> H
+    L -->|No| N[Return response]
 ```
 
-### Управление историей
+### Streaming
+Responses stream token-by-token via `ChatLog.async_add_delta_content_stream()`. The `_async_langchain_stream()` generator converts LangChain `AIMessageChunk` to HA delta dicts.
 
-История полностью управляется нативным `ChatLog` Home Assistant. При включённой опции `chat_history` весь ChatLog конвертируется в LangChain messages через `_chatlog_to_langchain()`. При отключённой — в LLM отправляются только system prompt и текущее сообщение.
+### Tool Calling (Assist API)
+When `llm_hass_api` is configured, HA tools (lights, switches, etc.) are converted to LangChain format via `_ha_tool_to_dict()` and bound to the client with `bind_tools()`. The tool calling loop runs up to `MAX_TOOL_ITERATIONS = 10` times.
 
-### Streaming (v0.5.0)
+### AI Task Entity
+`SmartChainAITaskEntity` implements `ai_task.AITaskEntity` for use in automations via `ai_task.generate_data`. Supports:
+- Plain text generation
+- Structured output (JSON parsing with `task.structure`)
+- Tool calling (same as conversation entity)
 
-Ответы LLM передаются потоково через `ChatLog.async_add_delta_content_stream()`. Async генератор `_async_langchain_stream()` конвертирует `AIMessageChunk` от LangChain `client.astream()` в HA delta dicts (`{"role": "assistant", "content": "..."}`).
+## Configuration Parameters
 
-### Системный промпт
+### Data (set during installation)
 
-По умолчанию промпт настраивает модель как HAL 9000 и включает информацию об устройствах и зонах Home Assistant через Jinja2-шаблоны.
+| Parameter | Key         | Type  | Description                              |
+| --------- | ----------- | ----- | ---------------------------------------- |
+| Engine    | `engine`    | `str` | LLM engine ID                            |
+| API Key   | `api_key`   | `str` | Authentication key                       |
+| Folder ID | `folder_id` | `str` | Yandex Cloud folder (YandexGPT only)     |
 
-Доступные переменные шаблона:
-- `ha_name` - название установки Home Assistant
-- `areas()` - список зон
-- `area_devices(area)` - устройства в зоне
-- `device_attr(device, attr)` - атрибуты устройства
+### Options (configurable after installation)
 
----
+| Parameter              | Key                        | Type       | Default  | Description                          |
+| ---------------------- | -------------------------- | ---------- | -------- | ------------------------------------ |
+| Model (list)           | `model`                    | `str`      | `""`     | Model from provider list             |
+| Model (custom)         | `model_user`               | `str`      | `""`     | Custom model name                    |
+| Assist API             | `llm_hass_api`             | `list`     | -        | HA LLM API for device control        |
+| Prompt                 | `prompt`                   | `template` | Default  | System prompt (Jinja2)               |
+| Temperature            | `temperature`              | `float`    | `0.1`    | Generation temperature               |
+| Max Tokens             | `max_tokens`               | `int`      | -        | Max response tokens                  |
+| Builtin Sentences      | `process_builtin_sentences`| `bool`     | `True`   | Try HA builtin handler first         |
+| Chat History           | `chat_history`             | `bool`     | `True`   | Keep conversation history            |
+| Profanity              | `profanity`                | `bool`     | `False`  | Profanity filter (GigaChat only)     |
+| Verify SSL             | `verify_ssl`               | `bool`     | `False`  | SSL cert verification (GigaChat)     |
 
-## Конфигурационные параметры
-
-### Данные интеграции (data) - задаются при установке
-
-| Параметр  | Ключ        | Тип   | Описание                                        |
-| --------- | ----------- | ----- | ----------------------------------------------- |
-| Engine    | `engine`    | `str` | ID LLM engine (gigachat, yandexgpt, openai)     |
-| API Key   | `api_key`   | `str` | Ключ аутентификации                              |
-| Folder ID | `folder_id` | `str` | ID каталога Yandex Cloud (только YandexGPT)      |
-
-### Опции (options) - настраиваются после установки
-
-| Параметр                   | Ключ                       | Тип        | По умолчанию    | Описание                                    |
-| -------------------------- | -------------------------- | ---------- | --------------- | ------------------------------------------- |
-| Модель (из списка)         | `model`                    | `str`      | `""`            | Модель из предложенного списка               |
-| Модель (пользовательская)  | `model_user`               | `str`      | `""`            | Произвольное имя модели                      |
-| Промпт                     | `prompt`                   | `template` | HAL 9000 prompt | Системный промпт (Jinja2)                    |
-| Температура                | `temperature`              | `float`    | `0.1`           | Температура генерации                        |
-| Макс. токенов              | `max_tokens`               | `int`      | -               | Максимум токенов в ответе                    |
-| HA процессор               | `process_builtin_sentences`| `bool`     | `True`          | Сначала пробовать встроенный HA обработчик    |
-| История чата               | `chat_history`             | `bool`     | `True`          | Сохранять историю диалога                    |
-| Цензура                    | `profanity`                | `bool`     | `False`         | Фильтр ненорматива (только GigaChat)         |
-| Проверка SSL               | `verify_ssl`               | `bool`     | `False`         | Проверка SSL сертификатов (только GigaChat)   |
-
----
-
-## Тестирование
-
-### Запуск тестов
+## Testing
 
 ```bash
 pip install pytest-homeassistant-custom-component
 python3 -m pytest tests/ -v
 ```
 
-### Покрытие (29 тестов)
+### Test Coverage (41 tests)
 
-**`tests/test_config_flow.py`** — 11 тестов:
-- Отображение формы выбора engine (user step)
-- Выбор каждого engine → показ соответствующей формы (3 теста)
-- Полный flow для GigaChat, YandexGPT, OpenAI (3 теста)
-- Обработка ошибок: `ConnectError`, `ResponseError`, неизвестная ошибка (3 теста)
-- Skip validation (1 тест)
+- **test_config_flow.py** — 11 tests (engine selection, full flows, error handling, skip validation)
+- **test_init.py** — 19 tests (conversation entity, streaming, tool calling, history, prompts)
+- **test_ai_task.py** — 7 tests (data generation, structured output, errors, tools)
+- **test_setup.py** — 4 tests (setup, unload, entity creation)
 
-**`tests/test_init.py`** — 14 тестов:
-- Базовый запрос к LLM через `_async_handle_message` (streaming)
-- Установка system prompt в ChatLog
-- Отправка корректных messages в LLM
-- Сохранение истории диалога (system + human + ai) через ChatLog
-- Отключение истории (`chat_history: False`)
-- Обработка ошибок LLM (graceful error response)
-- Делегирование в builtin HA agent (не распознано → LLM)
-- Делегирование в builtin HA agent (распознано → HA response)
-- `supported_languages` возвращает непустой список
-- `_attr_supports_streaming` включён
-- `_chatlog_to_langchain` конвертация (2 теста)
-- `_async_langchain_stream` конвертация чанков (2 теста)
+## Dependencies
 
-**`tests/test_setup.py`** — 4 теста:
-- Setup entry для GigaChat
-- Setup entry для OpenAI
-- Unload entry
-- Создание conversation entity при setup
+| Package                    | Description                    |
+| -------------------------- | ------------------------------ |
+| `home-assistant-intents`   | Language support               |
+| `langchain-gigachat>=0.3.0`| GigaChat LLM client           |
+| `langchain-openai>=0.3.0`  | OpenAI LLM client             |
+| `langchain-community>=0.4.0`| YandexGPT + LangChain utils  |
+| `yandexcloud==0.295.0`     | Yandex Cloud SDK              |
 
-### Фикстуры
-
-- `setup_ha_components` (autouse) — настраивает `homeassistant` и `conversation` компоненты
-- `mock_llm_client` — мок LLM клиента с `invoke()` возвращающим `AIMessage`
-- `mock_validate_client` — мок валидации для пропуска реальных API вызовов
-- `enable_custom_integrations` — включает custom components в тестовом HA
-
----
-
-## CI/CD и инструменты качества
-
-### GitHub Actions Workflows
-
-| Workflow    | Триггер      | Действия                                                   |
-| ----------- | ------------ | ---------------------------------------------------------- |
-| `push.yml`  | push в main  | HACS + Hassfest валидация, ruff lint + format, pytest      |
-| `pull.yml`  | pull request | HACS + Hassfest валидация, ruff lint + format, pytest      |
-| `cron.yaml` | ежедневно    | HACS + Hassfest валидация                                  |
-
-### Pre-commit hooks
-
-- **ruff** (v0.9.7) - линтер + форматирование (заменяет black, isort, flake8)
-
----
-
-## Зависимости
-
-Определены в `manifest.json`:
-
-| Зависимость                | Описание                                       |
-| -------------------------- | ---------------------------------------------- |
-| `home-assistant-intents`   | Поддержка языков для conversation agent         |
-| `langchain-gigachat>=0.3.0`| GigaChat LLM клиент                            |
-| `langchain-openai>=0.3.0`  | OpenAI LLM клиент                              |
-| `langchain-community>=0.4.0`| YandexGPT и утилиты LangChain                 |
-| `yandexcloud==0.295.0`     | Yandex Cloud SDK                                |
-
-Внутренние зависимости HA: `conversation`
-
----
-
-## Changelog
-
-Подробный список изменений по версиям — см. [CHANGELOG.md](../CHANGELOG.md).
-
-### Основные вехи
-
-- **v0.5.0** — Streaming ответов LLM через `async_add_delta_content_stream`, 29 тестов
-- **v0.4.0** — ChatLog для истории (удалён OrderedDict), миграция на langchain-gigachat/langchain-openai, pytest в CI
-- **v0.3.0** — Миграция на ConversationEntity, conversation.py, 20 тестов
-- **v0.2.1** — verify_ssl, обновление GitHub Actions, MIT лицензия
-- **v0.2.0** — Исправление блокировки event loop, удаление Anyscale, модернизация
-- **v0.1.x** — Первоначальные релизы: GigaChat, YandexGPT, OpenAI, Config/Options Flow
-
----
-
-## Оставшиеся рекомендации
-
-Все рекомендации из предыдущих версий выполнены. Возможные направления развития:
-
-1. **LLM API интеграция** — использовать `chat_log.async_provide_llm_data()` для доступа к HA tools (управление устройствами через LLM)
-2. **Миграция ChatYandexGPT** — когда появится отдельный пакет `langchain-yandex`, мигрировать с `langchain_community`
+HA dependencies: `ai_task`, `conversation`
