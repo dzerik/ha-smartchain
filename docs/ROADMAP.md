@@ -1,6 +1,6 @@
 # SmartChain — Дорожная карта развития
 
-Дата: 2026-03-10 | Текущая версия: 0.8.0
+Дата: 2026-03-10 | Текущая версия: 0.9.0
 
 ## Оглавление
 
@@ -25,22 +25,33 @@
 | 0.4.0 | Миграция на ChatLog, langchain-gigachat/langchain-openai, CI pytest (26 тестов) |
 | 0.5.0 | Streaming ответов через `astream()` + `async_add_delta_content_stream()` (29 тестов) |
 | 0.6.0 | **Assist API** — управление устройствами через tool calling, LLM API selector, обновление промпта и моделей (34 теста) |
+| 0.7.0 | **Переименование GigaChain → SmartChain**, AI Task entity |
+| 0.8.0 | **Ollama, DeepSeek, Anthropic** — 6 LLM провайдеров, 51 тест |
+| 0.9.0 | **Sub-entries** — множественные агенты на одном провайдере, ConfigSubentryFlow (67 тестов) |
 
 ### Текущая архитектура
 
 ```mermaid
 graph TB
-    subgraph "SmartChain v0.6.0"
+    subgraph "SmartChain v0.9.0"
         CF[Config Flow] --> CU[client_util.py]
         CU --> GC[GigaChat]
         CU --> YGP[YandexGPT]
         CU --> OAI[OpenAI]
+        CU --> OL[Ollama]
+        CU --> DS[DeepSeek]
+        CU --> AN[Anthropic]
 
-        CE[ConversationEntity] --> CL[ChatLog]
-        CE --> ST[Streaming]
-        CE --> AA[Assist API]
+        SF[SubentryFlow] --> SE[Sub-entries]
+        SE --> CE1[Agent 1]
+        SE --> CE2[Agent 2]
+        CE1 --> CL[ChatLog]
+        CE1 --> ST[Streaming]
+        CE1 --> AA[Assist API]
         AA --> TC[Tool Calling Loop]
         TC --> BT[bind_tools]
+
+        AT[AITaskEntity] --> CL
     end
 
     subgraph "Home Assistant"
@@ -60,7 +71,7 @@ graph TB
 | Vision | + (OpenAI, Gemini) | - | - | - | - |
 | Генерация изображений | - | - | + | - | - |
 | Function calling (custom) | - | + | + | + | - |
-| Sub-entries | + | - | - | - | - |
+| Sub-entries | + | - | - | - | **+ (v0.9)** |
 | Ollama / локальные модели | + | - | - | + | **+ (v0.8)** |
 | Multi-agent | - | + | - | - | - |
 | Telegram-бот | - | - | + | - | - |

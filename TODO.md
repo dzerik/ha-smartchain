@@ -7,7 +7,7 @@
 - [x] v0.8.1 Ollama — local models (Llama, Qwen, Gemma, T-Pro, Home-3B)
 - [x] v0.8.2 DeepSeek — cheapest cloud provider (V3, R1)
 - [x] v0.8.3 Anthropic — Claude via LangChain
-- [ ] v0.9 Sub-entries — multiple agents with different models/prompts
+- [x] v0.9 Sub-entries — multiple agents with different models/prompts
 
 ## Phase 2 — Differentiation
 
@@ -26,7 +26,7 @@
 
 ## Technical debt
 
-- [ ] Tests: Options Flow (config_flow)
+- [x] Tests: Options Flow (config_flow)
 - [ ] Test: integration with real ChatLog (not mock)
-- [ ] E2E test: tool calling loop
+- [x] E2E test: tool calling loop
 - [ ] HACS: verify compatibility and publish

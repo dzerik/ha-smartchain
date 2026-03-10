@@ -5,6 +5,28 @@ All notable changes to this project are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 project follows [Semantic Versioning](https://semver.org/).
 
+## [0.9.0] - 2026-03-10
+
+### Added
+- **Sub-entries** — multiple conversation agents per provider via `ConfigSubentryFlow`. Each sub-entry has its own model, prompt, temperature, LLM API, and creates independent ConversationEntity + AITaskEntity
+- `ConversationSubentryFlow` with `async_step_user()` and `async_step_reconfigure()` for adding/editing agents
+- `async_get_supported_subentry_types()` on ConfigFlow returns `{"conversation": ConversationSubentryFlow}`
+- Backward compatible: entries without sub-entries continue working in legacy mode (single agent from `entry.options`)
+- **Options Flow tests** — 7 new tests covering form display, model validation, GigaChat-specific fields, LLM API handling
+- **E2E tool calling loop test** — full simulation: user request → tool_call → tool execution → final response
+- **Sub-entries tests** — 8 tests covering subentry flow, setup with subentries, multiple agents, legacy fallback
+
+### Changed
+- `conversation.py` — `SmartChainConversationEntity` now accepts `subentry_id` and `options` params; uses `_agent_options` and `_client` properties
+- `ai_task.py` — `SmartChainAITaskEntity` now accepts `subentry_id`; uses `_client` property
+- `__init__.py` — `async_setup_entry` creates per-subentry clients dict or single legacy client
+- `config_flow.py` — renamed `common_config_option_schema()` → `_subentry_schema()` (backward-compatible alias kept)
+- `OptionsFlow` — removed `__init__` (config_entry is read-only property in modern HA)
+- Total: 67 tests passing
+
+### Fixed
+- `OptionsFlow.__init__` — removed setter for `self.config_entry` (read-only property in HA 2025+)
+
 ## [0.8.0] - 2026-03-10
 
 ### Added

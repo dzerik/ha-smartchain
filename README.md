@@ -23,6 +23,7 @@ SmartChain is a Home Assistant custom integration that provides a voice/conversa
 ### Key Features
 
 - **6 LLM providers** — cloud and local, switch without losing configuration
+- **Sub-entries** — multiple agents with different models/prompts per provider
 - **Streaming responses** — real-time token-by-token output
 - **Assist API (tool calling)** — control HA devices via LLM (lights, switches, locks, etc.)
 - **AI Task entity** — use LLM in automations via `ai_task.generate_data`
