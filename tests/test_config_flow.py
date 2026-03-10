@@ -8,14 +8,25 @@ from homeassistant import config_entries
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 from httpx import ConnectError
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.smartchain.const import (
     CONF_API_KEY,
     CONF_BASE_URL,
+    CONF_CHAT_MODEL,
+    CONF_CHAT_MODEL_USER,
     CONF_ENGINE,
     CONF_FOLDER_ID,
+    CONF_LLM_HASS_API,
+    CONF_PROCESS_BUILTIN_SENTENCES,
+    CONF_PROFANITY,
+    CONF_PROMPT,
     CONF_SKIP_VALIDATION,
+    CONF_TEMPERATURE,
+    CONF_VERIFY_SSL,
     DEFAULT_OLLAMA_BASE_URL,
+    DEFAULT_PROMPT,
+    DEFAULT_TEMPERATURE,
     DOMAIN,
     ID_ANTHROPIC,
     ID_DEEPSEEK,
@@ -319,3 +330,206 @@ async def test_ollama_connect_error(hass: HomeAssistant) -> None:
         )
     assert result["type"] is FlowResultType.FORM
     assert result["errors"] == {"base": "cannot_connect"}
+
+
+# --- Options Flow Tests ---
+
+
+@pytest.fixture
+def mock_gigachat_options_entry(hass: HomeAssistant):
+    """Create a mock GigaChat config entry for options flow."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_ENGINE: ID_GIGACHAT, CONF_API_KEY: "test-credentials"},
+        options={},
+        unique_id="GigaChat",
+    )
+    entry.add_to_hass(hass)
+    return entry
+
+
+@pytest.fixture
+def mock_openai_options_entry(hass: HomeAssistant):
+    """Create a mock OpenAI config entry for options flow."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_ENGINE: ID_OPENAI, CONF_API_KEY: "test-openai-key"},
+        options={},
+        unique_id="OpenAI",
+    )
+    entry.add_to_hass(hass)
+    return entry
+
+
+async def test_options_flow_shows_form(
+    hass: HomeAssistant, mock_gigachat_options_entry, mock_llm_client
+) -> None:
+    """Test that options flow init step shows form."""
+    with patch(
+        "custom_components.smartchain.get_client",
+        new_callable=AsyncMock,
+        return_value=mock_llm_client,
+    ):
+        await hass.config_entries.async_setup(mock_gigachat_options_entry.entry_id)
+        await hass.async_block_till_done()
+
+    result = await hass.config_entries.options.async_init(mock_gigachat_options_entry.entry_id)
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "init"
+
+
+async def test_options_flow_submit_with_model(
+    hass: HomeAssistant, mock_gigachat_options_entry, mock_llm_client
+) -> None:
+    """Test options flow creates entry when model is selected."""
+    with patch(
+        "custom_components.smartchain.get_client",
+        new_callable=AsyncMock,
+        return_value=mock_llm_client,
+    ):
+        await hass.config_entries.async_setup(mock_gigachat_options_entry.entry_id)
+        await hass.async_block_till_done()
+
+    result = await hass.config_entries.options.async_init(mock_gigachat_options_entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            CONF_CHAT_MODEL: "GigaChat",
+            CONF_PROMPT: DEFAULT_PROMPT,
+            CONF_TEMPERATURE: DEFAULT_TEMPERATURE,
+            CONF_PROCESS_BUILTIN_SENTENCES: True,
+        },
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["data"][CONF_CHAT_MODEL] == "GigaChat"
+
+
+async def test_options_flow_model_required_error(
+    hass: HomeAssistant, mock_gigachat_options_entry, mock_llm_client
+) -> None:
+    """Test options flow shows error when no model selected."""
+    with patch(
+        "custom_components.smartchain.get_client",
+        new_callable=AsyncMock,
+        return_value=mock_llm_client,
+    ):
+        await hass.config_entries.async_setup(mock_gigachat_options_entry.entry_id)
+        await hass.async_block_till_done()
+
+    result = await hass.config_entries.options.async_init(mock_gigachat_options_entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            CONF_CHAT_MODEL: "",
+            CONF_CHAT_MODEL_USER: "",
+            CONF_PROMPT: DEFAULT_PROMPT,
+            CONF_TEMPERATURE: DEFAULT_TEMPERATURE,
+            CONF_PROCESS_BUILTIN_SENTENCES: True,
+        },
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {"base": "model_required"}
+
+
+async def test_options_flow_custom_model_user(
+    hass: HomeAssistant, mock_gigachat_options_entry, mock_llm_client
+) -> None:
+    """Test options flow accepts custom model_user even without dropdown model."""
+    with patch(
+        "custom_components.smartchain.get_client",
+        new_callable=AsyncMock,
+        return_value=mock_llm_client,
+    ):
+        await hass.config_entries.async_setup(mock_gigachat_options_entry.entry_id)
+        await hass.async_block_till_done()
+
+    result = await hass.config_entries.options.async_init(mock_gigachat_options_entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            CONF_CHAT_MODEL: "",
+            CONF_CHAT_MODEL_USER: "GigaChat-Pro-2",
+            CONF_PROMPT: DEFAULT_PROMPT,
+            CONF_TEMPERATURE: 0.5,
+            CONF_PROCESS_BUILTIN_SENTENCES: True,
+        },
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["data"][CONF_CHAT_MODEL_USER] == "GigaChat-Pro-2"
+    assert result["data"][CONF_TEMPERATURE] == 0.5
+
+
+async def test_options_flow_gigachat_extra_fields(
+    hass: HomeAssistant, mock_gigachat_options_entry, mock_llm_client
+) -> None:
+    """Test GigaChat options flow includes profanity and verify_ssl fields."""
+    with patch(
+        "custom_components.smartchain.get_client",
+        new_callable=AsyncMock,
+        return_value=mock_llm_client,
+    ):
+        await hass.config_entries.async_setup(mock_gigachat_options_entry.entry_id)
+        await hass.async_block_till_done()
+
+    result = await hass.config_entries.options.async_init(mock_gigachat_options_entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            CONF_CHAT_MODEL: "GigaChat",
+            CONF_PROMPT: DEFAULT_PROMPT,
+            CONF_TEMPERATURE: DEFAULT_TEMPERATURE,
+            CONF_PROCESS_BUILTIN_SENTENCES: True,
+            CONF_PROFANITY: True,
+            CONF_VERIFY_SSL: True,
+        },
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["data"][CONF_PROFANITY] is True
+    assert result["data"][CONF_VERIFY_SSL] is True
+
+
+async def test_options_flow_openai_no_gigachat_fields(
+    hass: HomeAssistant, mock_openai_options_entry, mock_llm_client
+) -> None:
+    """Test OpenAI options flow does not include GigaChat-specific fields."""
+    with patch(
+        "custom_components.smartchain.get_client",
+        new_callable=AsyncMock,
+        return_value=mock_llm_client,
+    ):
+        await hass.config_entries.async_setup(mock_openai_options_entry.entry_id)
+        await hass.async_block_till_done()
+
+    result = await hass.config_entries.options.async_init(mock_openai_options_entry.entry_id)
+    assert result["type"] is FlowResultType.FORM
+    # Schema should not contain profanity/verify_ssl for non-GigaChat
+    schema_keys = [str(k) for k in result["data_schema"].schema]
+    assert CONF_PROFANITY not in schema_keys
+    assert CONF_VERIFY_SSL not in schema_keys
+
+
+async def test_options_flow_empty_llm_api_removed(
+    hass: HomeAssistant, mock_gigachat_options_entry, mock_llm_client
+) -> None:
+    """Test that empty LLM API selection is removed from options."""
+    with patch(
+        "custom_components.smartchain.get_client",
+        new_callable=AsyncMock,
+        return_value=mock_llm_client,
+    ):
+        await hass.config_entries.async_setup(mock_gigachat_options_entry.entry_id)
+        await hass.async_block_till_done()
+
+    result = await hass.config_entries.options.async_init(mock_gigachat_options_entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            CONF_CHAT_MODEL: "GigaChat",
+            CONF_PROMPT: DEFAULT_PROMPT,
+            CONF_TEMPERATURE: DEFAULT_TEMPERATURE,
+            CONF_PROCESS_BUILTIN_SENTENCES: True,
+            CONF_LLM_HASS_API: [],
+        },
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert CONF_LLM_HASS_API not in result["data"]
