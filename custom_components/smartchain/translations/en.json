@@ -28,6 +28,27 @@
           "api_key": "API Key",
           "skip_validation": "Skip validation"
         }
+      },
+      "ollama": {
+        "title": "Ollama configuration",
+        "data": {
+          "base_url": "Base URL",
+          "skip_validation": "Skip validation"
+        }
+      },
+      "deepseek": {
+        "title": "DeepSeek configuration",
+        "data": {
+          "api_key": "API Key",
+          "skip_validation": "Skip validation"
+        }
+      },
+      "anthropic": {
+        "title": "Anthropic (Claude) configuration",
+        "data": {
+          "api_key": "API Key",
+          "skip_validation": "Skip validation"
+        }
       }
     },
     "abort": {

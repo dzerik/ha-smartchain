@@ -21,12 +21,6 @@ from langchain_core.messages import (
     ToolMessage,
 )
 
-from custom_components.smartchain.conversation import (
-    SmartChainConversationEntity,
-    _async_langchain_stream,
-    _chatlog_to_langchain,
-    _ha_tool_to_dict,
-)
 from custom_components.smartchain.const import (
     CONF_CHAT_HISTORY,
     CONF_ENGINE,
@@ -34,6 +28,12 @@ from custom_components.smartchain.const import (
     CONF_PROCESS_BUILTIN_SENTENCES,
     CONF_PROMPT,
     ID_GIGACHAT,
+)
+from custom_components.smartchain.conversation import (
+    SmartChainConversationEntity,
+    _async_langchain_stream,
+    _chatlog_to_langchain,
+    _ha_tool_to_dict,
 )
 
 
@@ -110,9 +110,7 @@ def mock_chat_log():
     return _make_chat_log()
 
 
-async def test_handle_message_basic(
-    hass: HomeAssistant, entity, user_input, mock_chat_log
-) -> None:
+async def test_handle_message_basic(hass: HomeAssistant, entity, user_input, mock_chat_log) -> None:
     """Test basic _async_handle_message returns a response."""
     result = await entity._async_handle_message(user_input, mock_chat_log)
 
@@ -144,9 +142,7 @@ async def test_handle_message_sends_correct_messages_to_llm(
     assert call_args[1].content == "Hello, assistant!"
 
 
-async def test_handle_message_with_history(
-    hass: HomeAssistant, entity, user_input
-) -> None:
+async def test_handle_message_with_history(hass: HomeAssistant, entity, user_input) -> None:
     """Test that ChatLog history is converted to LangChain messages."""
     chat_log = _make_chat_log()
     chat_log.content = [

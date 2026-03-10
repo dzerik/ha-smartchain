@@ -28,6 +28,27 @@
           "api_key": "API ключ",
           "skip_validation": "Пропустить проверку"
         }
+      },
+      "ollama": {
+        "title": "Ollama (локальные модели)",
+        "data": {
+          "base_url": "Адрес сервера",
+          "skip_validation": "Пропустить проверку"
+        }
+      },
+      "deepseek": {
+        "title": "DeepSeek",
+        "data": {
+          "api_key": "API ключ",
+          "skip_validation": "Пропустить проверку"
+        }
+      },
+      "anthropic": {
+        "title": "Anthropic (Claude)",
+        "data": {
+          "api_key": "API ключ",
+          "skip_validation": "Пропустить проверку"
+        }
       }
     },
     "abort": {

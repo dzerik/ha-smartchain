@@ -111,9 +111,7 @@ class SmartChainConversationEntity(ConversationEntity):
             )
             chat_log.content[0] = SystemContent(content=prompt)
 
-        use_builtin = options.get(
-            CONF_PROCESS_BUILTIN_SENTENCES, DEFAULT_PROCESS_BUILTIN_SENTENCES
-        )
+        use_builtin = options.get(CONF_PROCESS_BUILTIN_SENTENCES, DEFAULT_PROCESS_BUILTIN_SENTENCES)
         if use_builtin and not llm_hass_api:
             from homeassistant.components.conversation import agent_manager
 
@@ -121,9 +119,7 @@ class SmartChainConversationEntity(ConversationEntity):
             default_response = await default_agent.async_process(user_input)
 
             if default_response.response.intent:
-                speech = default_response.response.speech.get("plain", {}).get(
-                    "speech", ""
-                )
+                speech = default_response.response.speech.get("plain", {}).get("speech", "")
                 chat_log.async_add_assistant_content_without_tools(
                     AssistantContent(
                         agent_id=user_input.agent_id,
@@ -134,9 +130,7 @@ class SmartChainConversationEntity(ConversationEntity):
 
         client = self.entry.runtime_data
         tools = (
-            [_ha_tool_to_dict(tool) for tool in chat_log.llm_api.tools]
-            if chat_log.llm_api
-            else []
+            [_ha_tool_to_dict(tool) for tool in chat_log.llm_api.tools] if chat_log.llm_api else []
         )
         bound_client = client.bind_tools(tools) if tools else client
 

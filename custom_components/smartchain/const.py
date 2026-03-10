@@ -55,20 +55,32 @@ The following rooms, devices and sensors are available in the home:
 ID_GIGACHAT = "gigachat"
 ID_YANDEX_GPT = "yandexgpt"
 ID_OPENAI = "openai"
+ID_OLLAMA = "ollama"
+ID_DEEPSEEK = "deepseek"
+ID_ANTHROPIC = "anthropic"
 UNIQUE_ID_GIGACHAT = "GigaChat"
 UNIQUE_ID_YANDEX_GPT = "YandexGPT"
 UNIQUE_ID_OPENAI = "OpenAI"
+UNIQUE_ID_OLLAMA = "Ollama"
+UNIQUE_ID_DEEPSEEK = "DeepSeek"
+UNIQUE_ID_ANTHROPIC = "Anthropic"
 
 UNIQUE_ID = {
     ID_GIGACHAT: UNIQUE_ID_GIGACHAT,
     ID_YANDEX_GPT: UNIQUE_ID_YANDEX_GPT,
     ID_OPENAI: UNIQUE_ID_OPENAI,
+    ID_OLLAMA: UNIQUE_ID_OLLAMA,
+    ID_DEEPSEEK: UNIQUE_ID_DEEPSEEK,
+    ID_ANTHROPIC: UNIQUE_ID_ANTHROPIC,
 }
 
 CONF_ENGINE_OPTIONS = [
     selector.SelectOptionDict(value=ID_GIGACHAT, label=UNIQUE_ID_GIGACHAT),
     selector.SelectOptionDict(value=ID_YANDEX_GPT, label=UNIQUE_ID_YANDEX_GPT),
     selector.SelectOptionDict(value=ID_OPENAI, label=UNIQUE_ID_OPENAI),
+    selector.SelectOptionDict(value=ID_OLLAMA, label=UNIQUE_ID_OLLAMA),
+    selector.SelectOptionDict(value=ID_DEEPSEEK, label=UNIQUE_ID_DEEPSEEK),
+    selector.SelectOptionDict(value=ID_ANTHROPIC, label=UNIQUE_ID_ANTHROPIC),
 ]
 MODELS_GIGACHAT = [
     "",
@@ -90,16 +102,50 @@ MODELS_OPENAI = [
     "o3-mini",
     "o4-mini",
 ]
+MODELS_OLLAMA = [
+    "",
+    "llama3.3",
+    "qwen3",
+    "qwen3:4b",
+    "gemma3",
+    "gemma3:4b",
+    "t-pro2",
+    "t-lite",
+    "deepseek-r1",
+    "phi4",
+    "home-3b-v3",
+]
+MODELS_DEEPSEEK = [
+    "",
+    "deepseek-chat",
+    "deepseek-reasoner",
+]
+MODELS_ANTHROPIC = [
+    "",
+    "claude-sonnet-4-6",
+    "claude-haiku-4-5",
+    "claude-opus-4-6",
+]
 ENGINE_MODELS = {
     UNIQUE_ID_GIGACHAT: MODELS_GIGACHAT,
     UNIQUE_ID_YANDEX_GPT: DEFAULT_MODELS_YANDEX_GPT,
     UNIQUE_ID_OPENAI: MODELS_OPENAI,
+    UNIQUE_ID_OLLAMA: MODELS_OLLAMA,
+    UNIQUE_ID_DEEPSEEK: MODELS_DEEPSEEK,
+    UNIQUE_ID_ANTHROPIC: MODELS_ANTHROPIC,
 }
 DEFAULT_MODEL = {
     ID_GIGACHAT: None,
     ID_OPENAI: "gpt-4.1-mini",
     ID_YANDEX_GPT: None,
+    ID_OLLAMA: "llama3.3",
+    ID_DEEPSEEK: "deepseek-chat",
+    ID_ANTHROPIC: "claude-sonnet-4-6",
 }
+
+CONF_BASE_URL = "base_url"
+DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
+DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 
 CONF_LLM_HASS_API = "llm_hass_api"
 CONF_API_KEY = "api_key"
