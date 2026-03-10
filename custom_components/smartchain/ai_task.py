@@ -9,7 +9,11 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import MAX_TOOL_ITERATIONS
-from .conversation import _async_langchain_stream, _chatlog_to_langchain, _ha_tool_to_dict
+from .conversation import (
+    _async_langchain_stream,
+    _chatlog_to_langchain,
+    _ha_tool_to_dict,
+)
 
 LOGGER = logging.getLogger(__name__)
 

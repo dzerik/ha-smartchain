@@ -1,1 +1,1 @@
-"""Tests for the GigaChain integration."""
+"""Tests for the SmartChain integration."""

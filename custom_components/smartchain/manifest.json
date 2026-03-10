@@ -1,14 +1,14 @@
 {
   "domain": "smartchain",
   "name": "SmartChain",
-  "codeowners": ["@gritaro"],
+  "codeowners": ["@dzerik"],
   "config_flow": true,
-  "dependencies": ["conversation"],
-  "documentation": "https://github.com/gritaro/ha-smartchain",
+  "dependencies": ["ai_task", "conversation"],
+  "documentation": "https://github.com/dzerik/ha-smartchain",
   "homekit": {},
   "integration_type": "service",
   "iot_class": "cloud_polling",
-  "issue_tracker": "https://github.com/gritaro/ha-smartchain/issues",
+  "issue_tracker": "https://github.com/dzerik/ha-smartchain/issues",
   "requirements": [
     "home-assistant-intents",
     "langchain-gigachat>=0.3.0",

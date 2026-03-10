@@ -19,7 +19,7 @@ from .const import (
 
 LOGGER = logging.getLogger(__name__)
 
-PLATFORMS = [Platform.CONVERSATION]
+PLATFORMS = [Platform.CONVERSATION, Platform.AI_TASK]
 
 
 async def update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:

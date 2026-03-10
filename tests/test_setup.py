@@ -1,6 +1,6 @@
 """Tests for SmartChain integration setup and unload."""
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from homeassistant.core import HomeAssistant
@@ -12,7 +12,6 @@ from custom_components.smartchain.const import (
     DOMAIN,
     ID_GIGACHAT,
     ID_OPENAI,
-    ID_YANDEX_GPT,
 )
 
 pytestmark = pytest.mark.usefixtures("enable_custom_integrations")
