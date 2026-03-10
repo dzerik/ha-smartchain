@@ -514,3 +514,144 @@ async def test_handle_message_no_llm_api_sets_prompt_manually(
 
     assert isinstance(mock_chat_log.content[0], SystemContent)
     assert "test assistant" in mock_chat_log.content[0].content
+
+
+async def test_tool_calling_loop_e2e(hass: HomeAssistant, mock_llm_client) -> None:
+    """E2E test: LLM calls a tool, gets result, then returns final response.
+
+    Simulates the full tool calling loop:
+    1. User says "Turn on kitchen light"
+    2. LLM returns tool_call for HassTurnOn
+    3. HA executes tool, returns result
+    4. LLM returns final text "Done! Kitchen light is on."
+    """
+    import voluptuous as vol
+
+    entry = MagicMock()
+    entry.entry_id = "test_entry"
+    entry.data = {CONF_ENGINE: ID_GIGACHAT, "api_key": "test"}
+    entry.options = {
+        CONF_PROMPT: "Test prompt.",
+        CONF_CHAT_HISTORY: True,
+        CONF_PROCESS_BUILTIN_SENTENCES: False,
+        CONF_LLM_HASS_API: "assist",
+    }
+    entry.runtime_data = mock_llm_client
+
+    ent = SmartChainConversationEntity(entry)
+    ent.hass = hass
+
+    # Track iteration to switch LLM behavior
+    iteration = 0
+    unresponded = [True]  # mutable flag
+
+    async def _tool_call_stream(messages):
+        """First call: return tool_call. Second call: return text."""
+        nonlocal iteration
+        iteration += 1
+        if iteration == 1:
+            yield AIMessageChunk(
+                content="",
+                tool_calls=[
+                    {
+                        "id": "call_abc",
+                        "name": "HassTurnOn",
+                        "args": {"entity_id": "light.kitchen"},
+                    },
+                ],
+            )
+        else:
+            yield AIMessageChunk(content="Done! Kitchen light is on.")
+
+    mock_llm_client.astream = _tool_call_stream
+
+    # Create a mock tool
+    class MockHassTurnOn(llm.Tool):
+        name = "HassTurnOn"
+        description = "Turn on a device"
+        parameters = vol.Schema({vol.Required("entity_id"): str})
+
+        async def async_call(self, hass, tool_input, llm_context):
+            return {"success": True}
+
+    mock_llm_api = MagicMock()
+    mock_llm_api.tools = [MockHassTurnOn()]
+
+    # Build chat_log that simulates HA's tool execution loop
+    chat_log = MagicMock()
+    chat_log.conversation_id = "test-conv-tool"
+    chat_log.content = [
+        SystemContent(content="System prompt"),
+        UserContent(content="Turn on kitchen light"),
+    ]
+    chat_log.llm_api = mock_llm_api
+
+    # unresponded_tool_results: True after tool_call, False after final text
+    type(chat_log).unresponded_tool_results = property(lambda self: unresponded[0])
+
+    async def _mock_add_delta_stream(agent_id, stream):
+        collected_content = ""
+        collected_tool_calls = []
+        async for delta in stream:
+            if "content" in delta:
+                collected_content += delta["content"]
+            if "tool_calls" in delta:
+                collected_tool_calls.extend(delta["tool_calls"])
+
+        if collected_tool_calls:
+            tc = collected_tool_calls[0]
+            content = AssistantContent(
+                agent_id=agent_id,
+                content=collected_content or "",
+                tool_calls=collected_tool_calls,
+            )
+            chat_log.content.append(content)
+            # Simulate HA executing the tool and adding result
+            chat_log.content.append(
+                ToolResultContent(
+                    agent_id=agent_id,
+                    tool_call_id=tc.id,
+                    tool_name=tc.tool_name,
+                    tool_result={"success": True},
+                )
+            )
+            yield content
+        else:
+            # Final response — no more tool calls
+            unresponded[0] = False
+            content = AssistantContent(agent_id=agent_id, content=collected_content)
+            chat_log.content.append(content)
+            yield content
+
+    chat_log.async_add_delta_content_stream = _mock_add_delta_stream
+
+    # Mock bind_tools to return the client itself (tools already bound)
+    mock_llm_client.bind_tools = MagicMock(return_value=mock_llm_client)
+
+    with patch.object(
+        chat_log, "async_provide_llm_data", new_callable=AsyncMock
+    ):
+        result = await ent._async_handle_message(
+            _make_input(text="Turn on kitchen light"), chat_log
+        )
+
+    # Verify the loop ran twice (tool call + final response)
+    assert iteration == 2
+
+    # Verify chat_log has correct content sequence:
+    # [system, user, assistant(tool_call), tool_result, assistant(final)]
+    assert len(chat_log.content) == 5
+    assert isinstance(chat_log.content[0], SystemContent)
+    assert isinstance(chat_log.content[1], UserContent)
+    assert isinstance(chat_log.content[2], AssistantContent)
+    assert chat_log.content[2].tool_calls is not None
+    assert isinstance(chat_log.content[3], ToolResultContent)
+    assert chat_log.content[3].tool_result == {"success": True}
+    assert isinstance(chat_log.content[4], AssistantContent)
+    assert chat_log.content[4].content == "Done! Kitchen light is on."
+
+    # Verify bind_tools was called with the tool definition
+    mock_llm_client.bind_tools.assert_called_once()
+    tools_arg = mock_llm_client.bind_tools.call_args[0][0]
+    assert len(tools_arg) == 1
+    assert tools_arg[0]["name"] == "HassTurnOn"
