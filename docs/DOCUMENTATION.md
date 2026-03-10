@@ -21,7 +21,7 @@
 
 **GigaChain** — это custom component (интеграция) для [Home Assistant](https://www.home-assistant.io/), реализующая голосового/диалогового ассистента с использованием больших языковых моделей (LLM) через фреймворк LangChain.
 
-- **Версия:** 0.4.0
+- **Версия:** 0.5.0
 - **Тип интеграции:** service (`integration_type: "service"`)
 - **IoT-класс:** cloud_polling
 - **Распространение:** через [HACS](https://hacs.xyz/) (Home Assistant Community Store)
@@ -231,7 +231,9 @@ flowchart TD
 
 История полностью управляется нативным `ChatLog` Home Assistant. При включённой опции `chat_history` весь ChatLog конвертируется в LangChain messages через `_chatlog_to_langchain()`. При отключённой — в LLM отправляются только system prompt и текущее сообщение.
 
-Вызов LLM выполняется через `hass.async_add_executor_job()` + `client.invoke()` для предотвращения блокировки event loop.
+### Streaming (v0.5.0)
+
+Ответы LLM передаются потоково через `ChatLog.async_add_delta_content_stream()`. Async генератор `_async_langchain_stream()` конвертирует `AIMessageChunk` от LangChain `client.astream()` в HA delta dicts (`{"role": "assistant", "content": "..."}`).
 
 ### Системный промпт
 
@@ -280,7 +282,7 @@ pip install pytest-homeassistant-custom-component
 python3 -m pytest tests/ -v
 ```
 
-### Покрытие (26 тестов)
+### Покрытие (29 тестов)
 
 **`tests/test_config_flow.py`** — 11 тестов:
 - Отображение формы выбора engine (user step)
@@ -289,16 +291,19 @@ python3 -m pytest tests/ -v
 - Обработка ошибок: `ConnectError`, `ResponseError`, неизвестная ошибка (3 теста)
 - Skip validation (1 тест)
 
-**`tests/test_init.py`** — 11 тестов:
-- Базовый запрос к LLM через `_async_handle_message`
+**`tests/test_init.py`** — 14 тестов:
+- Базовый запрос к LLM через `_async_handle_message` (streaming)
+- Установка system prompt в ChatLog
+- Отправка корректных messages в LLM
 - Сохранение истории диалога (system + human + ai) через ChatLog
-- Продолжение истории (мультитерновый диалог)
 - Отключение истории (`chat_history: False`)
 - Обработка ошибок LLM (graceful error response)
 - Делегирование в builtin HA agent (не распознано → LLM)
 - Делегирование в builtin HA agent (распознано → HA response)
 - `supported_languages` возвращает непустой список
+- `_attr_supports_streaming` включён
 - `_chatlog_to_langchain` конвертация (2 теста)
+- `_async_langchain_stream` конвертация чанков (2 теста)
 
 **`tests/test_setup.py`** — 4 теста:
 - Setup entry для GigaChat
@@ -353,7 +358,8 @@ python3 -m pytest tests/ -v
 
 ### Основные вехи
 
-- **v0.4.0** — ChatLog для истории (удалён OrderedDict), миграция на langchain-gigachat/langchain-openai, pytest в CI, 26 тестов
+- **v0.5.0** — Streaming ответов LLM через `async_add_delta_content_stream`, 29 тестов
+- **v0.4.0** — ChatLog для истории (удалён OrderedDict), миграция на langchain-gigachat/langchain-openai, pytest в CI
 - **v0.3.0** — Миграция на ConversationEntity, conversation.py, 20 тестов
 - **v0.2.1** — verify_ssl, обновление GitHub Actions, MIT лицензия
 - **v0.2.0** — Исправление блокировки event loop, удаление Anyscale, модернизация
@@ -363,6 +369,7 @@ python3 -m pytest tests/ -v
 
 ## Оставшиеся рекомендации
 
-### Приоритет: Низкий
+Все рекомендации из предыдущих версий выполнены. Возможные направления развития:
 
-1. **Поддержка streaming** — `ConversationEntity` поддерживает `_attr_supports_streaming`, можно реализовать потоковую генерацию ответов.
+1. **LLM API интеграция** — использовать `chat_log.async_provide_llm_data()` для доступа к HA tools (управление устройствами через LLM)
+2. **Миграция ChatYandexGPT** — когда появится отдельный пакет `langchain-yandex`, мигрировать с `langchain_community`

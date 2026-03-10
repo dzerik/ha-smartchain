@@ -6,7 +6,7 @@ import pytest
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, AIMessageChunk
 
 from custom_components.gigachain.const import (
     CONF_API_KEY,
@@ -42,11 +42,17 @@ async def setup_ha_components(hass: HomeAssistant) -> None:
     await hass.async_block_till_done()
 
 
+async def _mock_astream(messages):
+    """Async generator that yields a single AIMessageChunk."""
+    yield AIMessageChunk(content="Test response from LLM")
+
+
 @pytest.fixture
 def mock_llm_client():
-    """Create a mock LLM client."""
+    """Create a mock LLM client with astream support."""
     client = MagicMock()
     client.invoke.return_value = AIMessage(content="Test response from LLM")
+    client.astream = MagicMock(side_effect=_mock_astream)
     return client
 
 
