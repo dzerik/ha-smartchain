@@ -9,7 +9,12 @@ from typing import Any
 import voluptuous as vol
 from gigachat.exceptions import ResponseError
 from homeassistant import config_entries
-from homeassistant.config_entries import ConfigFlowResult
+from homeassistant.config_entries import (
+    ConfigEntry,
+    ConfigFlowResult,
+    ConfigSubentryFlow,
+    SubentryFlowResult,
+)
 from homeassistant.core import callback
 from homeassistant.helpers import llm, selector
 from homeassistant.helpers.selector import (
@@ -55,6 +60,7 @@ from .const import (
     ID_OLLAMA,
     ID_OPENAI,
     ID_YANDEX_GPT,
+    SUBENTRY_TYPE_CONVERSATION,
     UNIQUE_ID,
     UNIQUE_ID_GIGACHAT,
 )
@@ -184,6 +190,93 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Create the options flow."""
         return OptionsFlow()
 
+    @classmethod
+    @callback
+    def async_get_supported_subentry_types(
+        cls, config_entry: ConfigEntry
+    ) -> dict[str, type[ConfigSubentryFlow]]:
+        """Return supported subentry types."""
+        return {SUBENTRY_TYPE_CONVERSATION: ConversationSubentryFlow}
+
+
+class ConversationSubentryFlow(ConfigSubentryFlow):
+    """Handle subentry flow for adding/modifying a conversation agent."""
+
+    async def async_step_user(self, user_input: dict[str, Any] | None = None) -> SubentryFlowResult:
+        """Handle adding a new conversation agent."""
+        entry = self._get_entry()
+        unique_id = entry.unique_id
+        schema = _subentry_schema(self.hass, unique_id, {})
+
+        if user_input is not None:
+            return self._validate_and_create(user_input, unique_id, schema)
+
+        return self.async_show_form(step_id="user", data_schema=schema)
+
+    async def async_step_reconfigure(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Handle reconfiguring an existing conversation agent."""
+        entry = self._get_entry()
+        subentry = self._get_reconfigure_subentry()
+        unique_id = entry.unique_id
+        schema = _subentry_schema(self.hass, unique_id, subentry.data)
+
+        if user_input is not None:
+            return self._validate_and_update(user_input, entry, subentry, unique_id, schema)
+
+        return self.async_show_form(step_id="reconfigure", data_schema=schema)
+
+    def _validate_and_create(
+        self, user_input: dict[str, Any], unique_id: str, schema: vol.Schema
+    ) -> SubentryFlowResult:
+        """Validate user input and create subentry."""
+        model = user_input.get(CONF_CHAT_MODEL_USER)
+        if not model or not model.strip():
+            model = user_input.get(CONF_CHAT_MODEL)
+        if not model or not model.strip():
+            return self.async_show_form(
+                step_id="user",
+                data_schema=schema,
+                errors={"base": "model_required"},
+            )
+
+        if not user_input.get(CONF_LLM_HASS_API):
+            user_input.pop(CONF_LLM_HASS_API, None)
+
+        title = user_input.get(CONF_CHAT_MODEL_USER) or user_input.get(CONF_CHAT_MODEL) or "Agent"
+        return self.async_create_entry(title=title, data=user_input)
+
+    def _validate_and_update(
+        self,
+        user_input: dict[str, Any],
+        entry: ConfigEntry,
+        subentry: Any,
+        unique_id: str,
+        schema: vol.Schema,
+    ) -> SubentryFlowResult:
+        """Validate user input and update subentry."""
+        model = user_input.get(CONF_CHAT_MODEL_USER)
+        if not model or not model.strip():
+            model = user_input.get(CONF_CHAT_MODEL)
+        if not model or not model.strip():
+            return self.async_show_form(
+                step_id="reconfigure",
+                data_schema=schema,
+                errors={"base": "model_required"},
+            )
+
+        if not user_input.get(CONF_LLM_HASS_API):
+            user_input.pop(CONF_LLM_HASS_API, None)
+
+        title = user_input.get(CONF_CHAT_MODEL_USER) or user_input.get(CONF_CHAT_MODEL) or "Agent"
+        return self.async_update_and_abort(
+            entry,
+            subentry,
+            title=title,
+            data=user_input,
+        )
+
 
 class OptionsFlow(config_entries.OptionsFlow):
     """SmartChain config flow options handler."""
@@ -191,7 +284,7 @@ class OptionsFlow(config_entries.OptionsFlow):
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Manage the options."""
         unique_id = self.config_entry.unique_id
-        schema = common_config_option_schema(self.hass, unique_id, self.config_entry.options)
+        schema = _subentry_schema(self.hass, unique_id, self.config_entry.options)
         if user_input is not None:
             model = user_input.get(CONF_CHAT_MODEL_USER)
             if not model or not model.strip():
@@ -215,10 +308,10 @@ class OptionsFlow(config_entries.OptionsFlow):
         )
 
 
-def common_config_option_schema(
-    hass, unique_id: str, options: MappingProxyType[str, Any]
+def _subentry_schema(
+    hass, unique_id: str, options: MappingProxyType[str, Any] | dict[str, Any]
 ) -> vol.Schema:
-    """Return a schema for SmartChain completion options."""
+    """Return a schema for SmartChain agent options (used by both OptionsFlow and SubentryFlow)."""
     if not options:
         options = DEFAULT_OPTIONS
 
@@ -304,3 +397,7 @@ def common_config_option_schema(
             }
         )
     return schema
+
+
+# Keep backward-compatible alias
+common_config_option_schema = _subentry_schema

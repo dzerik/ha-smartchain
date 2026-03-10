@@ -42,6 +42,7 @@ from .const import (
     DEFAULT_PROMPT,
     DOMAIN,
     MAX_TOOL_ITERATIONS,
+    SUBENTRY_TYPE_CONVERSATION,
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -52,8 +53,26 @@ async def async_setup_entry(
     config_entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up conversation entity."""
-    async_add_entities([SmartChainConversationEntity(config_entry)])
+    """Set up conversation entities."""
+    entities: list[SmartChainConversationEntity] = []
+
+    subentries = config_entry.subentries
+    if subentries:
+        for sub_id, subentry in subentries.items():
+            if subentry.subentry_type != SUBENTRY_TYPE_CONVERSATION:
+                continue
+            entities.append(
+                SmartChainConversationEntity(
+                    config_entry,
+                    subentry_id=sub_id,
+                    options=dict(subentry.data),
+                )
+            )
+    else:
+        # Legacy mode: single entity from entry.options
+        entities.append(SmartChainConversationEntity(config_entry))
+
+    async_add_entities(entities)
 
 
 def _ha_tool_to_dict(tool: llm.Tool) -> dict[str, Any]:
@@ -70,13 +89,39 @@ class SmartChainConversationEntity(ConversationEntity):
     """SmartChain conversation entity using ConversationEntity API."""
 
     _attr_has_entity_name = True
-    _attr_name = None
     _attr_supports_streaming = True
 
-    def __init__(self, entry: ConfigEntry) -> None:
+    def __init__(
+        self,
+        entry: ConfigEntry,
+        subentry_id: str | None = None,
+        options: dict[str, Any] | None = None,
+    ) -> None:
         """Initialize the entity."""
         self.entry = entry
-        self._attr_unique_id = entry.entry_id
+        self._subentry_id = subentry_id
+        self._options = options or {}
+
+        if subentry_id:
+            self._attr_unique_id = f"{entry.entry_id}_{subentry_id}"
+            self._attr_name = entry.subentries[subentry_id].title
+        else:
+            self._attr_unique_id = entry.entry_id
+            self._attr_name = None
+
+    @property
+    def _agent_options(self) -> dict[str, Any]:
+        """Return the effective options for this agent."""
+        if self._subentry_id:
+            return self._options
+        return dict(self.entry.options)
+
+    @property
+    def _client(self) -> Any:
+        """Return the LLM client for this agent."""
+        if self._subentry_id and isinstance(self.entry.runtime_data, dict):
+            return self.entry.runtime_data[self._subentry_id]
+        return self.entry.runtime_data
 
     @property
     def supported_languages(self) -> list[str] | Literal["*"]:
@@ -89,7 +134,7 @@ class SmartChainConversationEntity(ConversationEntity):
         chat_log: ChatLog,
     ) -> ConversationResult:
         """Handle a conversation message via ChatLog API."""
-        options = self.entry.options
+        options = self._agent_options
         llm_hass_api = options.get(CONF_LLM_HASS_API)
         user_prompt = options.get(CONF_PROMPT, DEFAULT_PROMPT)
 
@@ -128,7 +173,7 @@ class SmartChainConversationEntity(ConversationEntity):
                 )
                 return default_response
 
-        client = self.entry.runtime_data
+        client = self._client
         tools = (
             [_ha_tool_to_dict(tool) for tool in chat_log.llm_api.tools] if chat_log.llm_api else []
         )

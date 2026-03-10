@@ -152,3 +152,4 @@ CONF_API_KEY = "api_key"
 CONF_FOLDER_ID = "folder_id"
 
 MAX_TOOL_ITERATIONS = 10
+SUBENTRY_TYPE_CONVERSATION = "conversation"

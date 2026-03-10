@@ -81,5 +81,48 @@
         }
       }
     }
+  },
+  "config_subentries": {
+    "conversation": {
+      "initiate_flow": {
+        "user": "Add conversation agent",
+        "reconfigure": "Reconfigure conversation agent"
+      },
+      "step": {
+        "user": {
+          "title": "Add conversation agent",
+          "data": {
+            "model": "Completion Model",
+            "model_user": "Custom Model Name (leave empty to use from list above)",
+            "llm_hass_api": "Assist API (Control HA devices)",
+            "prompt": "Prompt Template",
+            "temperature": "Temperature",
+            "max_tokens": "Max Tokens",
+            "profanity": "Profanity",
+            "verify_ssl": "Verify SSL Certificates",
+            "process_builtin_sentences": "Process HA Builtin Sentences",
+            "chat_history": "Chat History"
+          }
+        },
+        "reconfigure": {
+          "title": "Reconfigure conversation agent",
+          "data": {
+            "model": "Completion Model",
+            "model_user": "Custom Model Name (leave empty to use from list above)",
+            "llm_hass_api": "Assist API (Control HA devices)",
+            "prompt": "Prompt Template",
+            "temperature": "Temperature",
+            "max_tokens": "Max Tokens",
+            "profanity": "Profanity",
+            "verify_ssl": "Verify SSL Certificates",
+            "process_builtin_sentences": "Process HA Builtin Sentences",
+            "chat_history": "Chat History"
+          }
+        }
+      },
+      "error": {
+        "model_required": "Either Model or Custom Model required"
+      }
+    }
   }
 }
