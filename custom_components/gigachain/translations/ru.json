@@ -11,29 +11,22 @@
         "title": "Конфигурация GigaChat",
         "data": {
           "api_key": "Авторизационные данные",
-          "skip_validation": "Skip validation"
-        }
-      },
-      "anyscale": {
-        "title": "Конфигурация Anyscale",
-        "data": {
-          "api_key": "Api ключ",
-          "skip_validation": "Skip validation"
+          "skip_validation": "Пропустить проверку"
         }
       },
       "yandexgpt": {
         "title": "Конфигурация YandexGPT",
         "data": {
           "api_key": "API ключ",
-          "folder_id": "Folder ID",
-          "skip_validation": "Skip validation"
+          "folder_id": "Идентификатор каталога (Folder ID)",
+          "skip_validation": "Пропустить проверку"
         }
       },
       "openai": {
         "title": "Конфигурация OpenAI",
         "data": {
           "api_key": "API ключ",
-          "skip_validation": "Skip validation"
+          "skip_validation": "Пропустить проверку"
         }
       }
     },
@@ -41,28 +34,26 @@
       "already_configured": "Эта модель уже настроена"
     },
     "error": {
-      "cannot_connect": "Can not connect",
-      "invalid_response": "Invalid response",
-      "unknown": "Unknown error"
+      "cannot_connect": "Не удаётся подключиться",
+      "invalid_response": "Некорректный ответ",
+      "unknown": "Неизвестная ошибка"
     }
   },
   "options": {
     "error": {
-      "model_required": "Выберите модель из списка либо задайте свою",
-      "unsupported": "Интеграция больше не поддерживается"
+      "model_required": "Выберите модель из списка либо задайте свою"
     },
     "step": {
       "init": {
         "title": "Конфигурация модели",
         "data": {
-          "prompt": "Промпт темплейт",
+          "prompt": "Системный промпт",
           "model": "Модель",
-          "model_gigachat": "Своё имя модели (оставьте пустым для использования имени из списка)",
-          "model_yandexgpt": "Своё имя модели (оставьте пустым для использования имени из списка)",
-          "model_openai": "Своё имя модели (оставьте пустым для использования имени из списка)",
+          "model_user": "Своё имя модели (оставьте пустым для использования имени из списка)",
           "temperature": "Температура",
           "max_tokens": "Максимум токенов",
           "profanity": "Цензура",
+          "verify_ssl": "Проверка SSL сертификатов",
           "process_builtin_sentences": "Использовать встроенный HA командный процессор",
           "chat_history": "История сообщений"
         }
