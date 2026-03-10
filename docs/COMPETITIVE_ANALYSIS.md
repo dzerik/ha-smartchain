@@ -1,4 +1,4 @@
-# GigaChain — Конкурентный анализ и точки роста
+# SmartChain — Конкурентный анализ и точки роста
 
 Дата: 2026-03-10 | Версия: 0.5.0
 
@@ -83,7 +83,7 @@
 - **Голосовые запросы** — "Была ли активность во дворе вчера?"
 - Провайдеры: OpenAI, Anthropic, Gemini, Ollama, OpenRouter, и др.
 
-#### GigaChain (наш, 15 stars)
+#### SmartChain (наш, 15 stars)
 - GigaChat + YandexGPT + OpenAI через LangChain
 - Streaming ответов
 - ChatLog для истории
@@ -226,13 +226,13 @@
 
 #### 5.1 Управление устройствами через Assist API
 - **Что:** Использовать `chat_log.async_provide_llm_data()` для доступа к HA tools
-- **Зачем:** Главная фича, которую имеют ВСЕ конкуренты. Без неё GigaChain — только чат-бот, не smart home agent
+- **Зачем:** Главная фича, которую имеют ВСЕ конкуренты. Без неё SmartChain — только чат-бот, не smart home agent
 - **Как:** HA LLM API предоставляет intents для управления exposed entities. Нужно передать tools в LLM и обработать tool calls
 - **Сложность:** Средняя. GigaChat и DeepSeek поддерживают function calling. Паттерн задокументирован в HA developer docs
 
 #### 5.2 AI Task entity
 - **Что:** Добавить `AITaskEntity` с методом `_async_generate_data()`
-- **Зачем:** Позволит использовать GigaChain в автоматизациях, скриптах, шаблонах через `ai_task.generate_data`
+- **Зачем:** Позволит использовать SmartChain в автоматизациях, скриптах, шаблонах через `ai_task.generate_data`
 - **Как:** Новый entity наряду с ConversationEntity, может разделять общую логику обработки chat_log
 - **Сложность:** Низкая-средняя
 
@@ -279,7 +279,7 @@
 - LLM анализирует тренды и прошлые события ("Какая была температура вчера?")
 
 #### 5.10 Telegram-бот
-- Использовать GigaChain как backend для Telegram (как у YandexGPT)
+- Использовать SmartChain как backend для Telegram (как у YandexGPT)
 
 #### 5.11 STT/TTS интеграция
 - Связка с Yandex SpeechKit или GigaChat TTS для полного voice pipeline на русском
@@ -302,7 +302,7 @@
 
 ### Текущее УТП (Unique Selling Proposition)
 
-GigaChain — **единственная** HA интеграция, объединяющая GigaChat + YandexGPT + OpenAI в одном компоненте через LangChain. Это позволяет:
+SmartChain — **единственная** HA интеграция, объединяющая GigaChat + YandexGPT + OpenAI в одном компоненте через LangChain. Это позволяет:
 - Переключаться между провайдерами без переустановки
 - Использовать единый интерфейс для разных LLM
 - Легко добавлять новые модели через LangChain экосистему
@@ -318,7 +318,7 @@ GigaChain — **единственная** HA интеграция, объеди
 
 ```mermaid
 gantt
-    title GigaChain Roadmap
+    title SmartChain Roadmap
     dateFormat  YYYY-MM
     section Высокий приоритет
     Assist API + Device Control    :2026-03, 2026-04

@@ -1,4 +1,4 @@
-# GigaChain — Дорожная карта развития
+# SmartChain — Дорожная карта развития
 
 Дата: 2026-03-10 | Текущая версия: 0.6.0
 
@@ -30,7 +30,7 @@
 
 ```mermaid
 graph TB
-    subgraph "GigaChain v0.6.0"
+    subgraph "SmartChain v0.6.0"
         CF[Config Flow] --> CU[client_util.py]
         CU --> GC[GigaChat]
         CU --> YGP[YandexGPT]
@@ -51,7 +51,7 @@ graph TB
 
 ### Разрыв с конкурентами
 
-| Фича | Official HA | Extended OpenAI | YandexGPT | Home-LLM | GigaChain |
+| Фича | Official HA | Extended OpenAI | YandexGPT | Home-LLM | SmartChain |
 |-------|:-----------:|:---------------:|:---------:|:--------:|:---------:|
 | Assist API / Device Control | + | + | + | + | **+ (v0.6)** |
 | AI Task entity | + | - | - | + | - |
@@ -80,18 +80,18 @@ graph TB
 
 **Что:**
 - Добавить `AITaskEntity` с методом `_async_generate_data(task, chat_log)`
-- Позволяет использовать GigaChain в автоматизациях HA через `ai_task.generate_data`
+- Позволяет использовать SmartChain в автоматизациях HA через `ai_task.generate_data`
 - Примеры: "Составь план уборки на основе загрязнённости комнат", "Проанализируй расход электричества за неделю"
 
 **Файлы:**
-- `custom_components/gigachain/ai_task.py` — новый файл с `GigaChainAITaskEntity`
-- `custom_components/gigachain/__init__.py` — добавить `Platform.AI_TASK`
-- `custom_components/gigachain/manifest.json` — добавить `"ai_task"` в dependencies
+- `custom_components/smartchain/ai_task.py` — новый файл с `SmartChainAITaskEntity`
+- `custom_components/smartchain/__init__.py` — добавить `Platform.AI_TASK`
+- `custom_components/smartchain/manifest.json` — добавить `"ai_task"` в dependencies
 - `tests/test_ai_task.py` — тесты
 
 **Реализация:**
 ```python
-class GigaChainAITaskEntity(AITaskEntity):
+class SmartChainAITaskEntity(AITaskEntity):
     async def _async_generate_data(
         self, task: ai_task.GenData, chat_log: ChatLog
     ) -> None:
@@ -143,7 +143,7 @@ class GigaChainAITaskEntity(AITaskEntity):
 
 #### 0.8.3 — Anthropic (Claude)
 
-Для пользователей, которые хотят Claude через GigaChain.
+Для пользователей, которые хотят Claude через SmartChain.
 
 **Файлы:**
 - `const.py` — `ID_ANTHROPIC`, модели (`claude-sonnet-4-6`, `claude-haiku-4-5`)
@@ -206,7 +206,7 @@ class GigaChainAITaskEntity(AITaskEntity):
 **Что:**
 - GigaChat 2.0 имеет встроенную генерацию через Kandinsky
 - YandexGPT имеет YandexART API
-- Результат: `image` entity или сервис `gigachain.generate_image`
+- Результат: `image` entity или сервис `smartchain.generate_image`
 
 **Реализация:**
 - Для GigaChat: уже поддерживается через API (модель сама решает, когда генерировать)
@@ -273,7 +273,7 @@ class GigaChainAITaskEntity(AITaskEntity):
 **Сложность:** Низкая
 
 **Что:**
-- Использование GigaChain как backend для Telegram-бота
+- Использование SmartChain как backend для Telegram-бота
 - Управление домом через Telegram
 - Отправка уведомлений с анализом камер
 
@@ -287,7 +287,7 @@ class GigaChainAITaskEntity(AITaskEntity):
 **Что:**
 - Связка с Yandex SpeechKit для STT/TTS на русском
 - GigaChat TTS (когда появится)
-- Полный voice pipeline: микрофон → STT → GigaChain → TTS → динамик
+- Полный voice pipeline: микрофон → STT → SmartChain → TTS → динамик
 
 ---
 
@@ -348,7 +348,7 @@ class GigaChainAITaskEntity(AITaskEntity):
 
 ```mermaid
 gantt
-    title GigaChain Roadmap 2026
+    title SmartChain Roadmap 2026
     dateFormat  YYYY-MM
     axisFormat  %b %Y
 
