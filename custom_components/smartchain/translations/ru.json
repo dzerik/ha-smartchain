@@ -81,5 +81,48 @@
         }
       }
     }
+  },
+  "config_subentries": {
+    "conversation": {
+      "initiate_flow": {
+        "user": "Добавить агента",
+        "reconfigure": "Изменить агента"
+      },
+      "step": {
+        "user": {
+          "title": "Добавить агента",
+          "data": {
+            "model": "Модель",
+            "model_user": "Своё имя модели (оставьте пустым для использования из списка)",
+            "llm_hass_api": "Assist API (управление устройствами HA)",
+            "prompt": "Системный промпт",
+            "temperature": "Температура",
+            "max_tokens": "Максимум токенов",
+            "profanity": "Цензура",
+            "verify_ssl": "Проверка SSL сертификатов",
+            "process_builtin_sentences": "Встроенный командный процессор HA",
+            "chat_history": "История сообщений"
+          }
+        },
+        "reconfigure": {
+          "title": "Изменить агента",
+          "data": {
+            "model": "Модель",
+            "model_user": "Своё имя модели (оставьте пустым для использования из списка)",
+            "llm_hass_api": "Assist API (управление устройствами HA)",
+            "prompt": "Системный промпт",
+            "temperature": "Температура",
+            "max_tokens": "Максимум токенов",
+            "profanity": "Цензура",
+            "verify_ssl": "Проверка SSL сертификатов",
+            "process_builtin_sentences": "Встроенный командный процессор HA",
+            "chat_history": "История сообщений"
+          }
+        }
+      },
+      "error": {
+        "model_required": "Выберите модель из списка либо задайте свою"
+      }
+    }
   }
 }

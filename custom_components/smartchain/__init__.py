@@ -15,6 +15,7 @@ from .const import (
     CONF_TEMPERATURE,
     DEFAULT_TEMPERATURE,
     ID_GIGACHAT,
+    SUBENTRY_TYPE_CONVERSATION,
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -34,18 +35,15 @@ async def update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
     await hass.config_entries.async_reload(entry.entry_id)
 
 
-async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Initialize SmartChain."""
-    engine = entry.data.get(CONF_ENGINE) or ID_GIGACHAT
-    model = entry.options.get(CONF_CHAT_MODEL_USER)
+def _resolve_client_args(options: dict) -> dict:
+    """Build common LLM client args from options dict."""
+    model = options.get(CONF_CHAT_MODEL_USER)
     if not model or not model.strip():
-        model = entry.options.get(CONF_CHAT_MODEL)
-    temperature = entry.options.get(CONF_TEMPERATURE, DEFAULT_TEMPERATURE)
-    max_tokens = entry.options.get(CONF_MAX_TOKENS)
+        model = options.get(CONF_CHAT_MODEL)
+    temperature = options.get(CONF_TEMPERATURE, DEFAULT_TEMPERATURE)
+    max_tokens = options.get(CONF_MAX_TOKENS)
 
-    entry.async_on_unload(entry.add_update_listener(update_listener))
-
-    common_args = {
+    common_args: dict = {
         "verbose": False,
         "model": model,
     }
@@ -53,10 +51,30 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         common_args["temperature"] = temperature
     if max_tokens is not None:
         common_args["max_tokens"] = max_tokens
+    return common_args
 
-    client = await get_client(hass, engine, entry, common_args)
 
-    entry.runtime_data = client
+async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Initialize SmartChain."""
+    engine = entry.data.get(CONF_ENGINE) or ID_GIGACHAT
+
+    entry.async_on_unload(entry.add_update_listener(update_listener))
+
+    # Build clients: one per subentry, or one from legacy options
+    subentries = entry.subentries
+    if subentries:
+        clients: dict[str, object] = {}
+        for sub_id, subentry in subentries.items():
+            if subentry.subentry_type != SUBENTRY_TYPE_CONVERSATION:
+                continue
+            common_args = _resolve_client_args(dict(subentry.data))
+            clients[sub_id] = await get_client(hass, engine, entry, common_args)
+        entry.runtime_data = clients
+    else:
+        # Legacy mode: single client from entry.options
+        common_args = _resolve_client_args(dict(entry.options))
+        client = await get_client(hass, engine, entry, common_args)
+        entry.runtime_data = client
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True

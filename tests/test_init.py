@@ -628,12 +628,8 @@ async def test_tool_calling_loop_e2e(hass: HomeAssistant, mock_llm_client) -> No
     # Mock bind_tools to return the client itself (tools already bound)
     mock_llm_client.bind_tools = MagicMock(return_value=mock_llm_client)
 
-    with patch.object(
-        chat_log, "async_provide_llm_data", new_callable=AsyncMock
-    ):
-        result = await ent._async_handle_message(
-            _make_input(text="Turn on kitchen light"), chat_log
-        )
+    with patch.object(chat_log, "async_provide_llm_data", new_callable=AsyncMock):
+        await ent._async_handle_message(_make_input(text="Turn on kitchen light"), chat_log)
 
     # Verify the loop ran twice (tool call + final response)
     assert iteration == 2
