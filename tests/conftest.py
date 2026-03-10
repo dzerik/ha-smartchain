@@ -1,4 +1,4 @@
-"""Fixtures for GigaChain tests."""
+"""Fixtures for SmartChain tests."""
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -8,7 +8,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
 from langchain_core.messages import AIMessage, AIMessageChunk
 
-from custom_components.gigachain.const import (
+from custom_components.smartchain.const import (
     CONF_API_KEY,
     CONF_ENGINE,
     DOMAIN,
@@ -75,7 +75,7 @@ def mock_config_entry():
 def mock_validate_client():
     """Mock validate_client to skip actual API calls."""
     with patch(
-        "custom_components.gigachain.config_flow.validate_client",
+        "custom_components.smartchain.config_flow.validate_client",
         new_callable=AsyncMock,
     ) as mock:
         yield mock
@@ -85,7 +85,7 @@ def mock_validate_client():
 def mock_get_client(mock_llm_client):
     """Mock get_client to return a fake LLM client."""
     with patch(
-        "custom_components.gigachain.get_client",
+        "custom_components.smartchain.get_client",
         new_callable=AsyncMock,
         return_value=mock_llm_client,
     ) as mock:

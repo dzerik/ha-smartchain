@@ -1,5 +1,6 @@
-"""Tests for GigaChain conversation entity."""
+"""Tests for SmartChain conversation entity."""
 
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -7,20 +8,29 @@ from homeassistant.components.conversation import ConversationInput, Conversatio
 from homeassistant.components.conversation.chat_log import (
     AssistantContent,
     SystemContent,
+    ToolResultContent,
     UserContent,
 )
 from homeassistant.core import Context, HomeAssistant
-from homeassistant.helpers import intent
-from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, SystemMessage
+from homeassistant.helpers import intent, llm
+from langchain_core.messages import (
+    AIMessage,
+    AIMessageChunk,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+)
 
-from custom_components.gigachain.conversation import (
-    GigaChainConversationEntity,
+from custom_components.smartchain.conversation import (
+    SmartChainConversationEntity,
     _async_langchain_stream,
     _chatlog_to_langchain,
+    _ha_tool_to_dict,
 )
-from custom_components.gigachain.const import (
+from custom_components.smartchain.const import (
     CONF_CHAT_HISTORY,
     CONF_ENGINE,
+    CONF_LLM_HASS_API,
     CONF_PROCESS_BUILTIN_SENTENCES,
     CONF_PROMPT,
     ID_GIGACHAT,
@@ -49,8 +59,9 @@ def _make_chat_log(conversation_id="test-conv-id", user_text="Hello, assistant!"
         UserContent(content=user_text),
     ]
     chat_log.async_add_assistant_content_without_tools = MagicMock()
+    chat_log.llm_api = None
+    chat_log.unresponded_tool_results = False
 
-    # Support streaming: async_add_delta_content_stream collects deltas into AssistantContent
     async def _mock_add_delta_stream(agent_id, stream):
         collected = ""
         async for delta in stream:
@@ -81,8 +92,8 @@ def mock_entry(mock_llm_client):
 
 @pytest.fixture
 def entity(hass: HomeAssistant, mock_entry):
-    """Create a GigaChainConversationEntity."""
-    ent = GigaChainConversationEntity(mock_entry)
+    """Create a SmartChainConversationEntity."""
+    ent = SmartChainConversationEntity(mock_entry)
     ent.hass = hass
     return ent
 
@@ -116,7 +127,6 @@ async def test_handle_message_sets_system_prompt(
     """Test that system prompt is set in ChatLog."""
     await entity._async_handle_message(user_input, mock_chat_log)
 
-    # content[0] should be replaced with the rendered system prompt
     assert isinstance(mock_chat_log.content[0], SystemContent)
     assert "test assistant" in mock_chat_log.content[0].content
 
@@ -127,7 +137,6 @@ async def test_handle_message_sends_correct_messages_to_llm(
     """Test that LLM receives correct LangChain messages from ChatLog."""
     await entity._async_handle_message(user_input, mock_chat_log)
 
-    # Check what was passed to client.astream
     call_args = entity.entry.runtime_data.astream.call_args[0][0]
     assert len(call_args) == 2  # system + human
     assert isinstance(call_args[0], SystemMessage)
@@ -174,10 +183,9 @@ async def test_handle_message_history_disabled(
     }
     entry.runtime_data = mock_llm_client
 
-    ent = GigaChainConversationEntity(entry)
+    ent = SmartChainConversationEntity(entry)
     ent.hass = hass
 
-    # ChatLog has history, but history is disabled
     chat_log = _make_chat_log()
     chat_log.content = [
         SystemContent(content=""),
@@ -188,9 +196,8 @@ async def test_handle_message_history_disabled(
 
     await ent._async_handle_message(user_input, chat_log)
 
-    # Only system + current user message (not old history)
     call_args = mock_llm_client.astream.call_args[0][0]
-    assert len(call_args) == 2  # system + human (no history)
+    assert len(call_args) == 2
     assert isinstance(call_args[0], SystemMessage)
     assert isinstance(call_args[1], HumanMessage)
     assert call_args[1].content == "Hello, assistant!"
@@ -230,12 +237,12 @@ async def test_handle_message_with_builtin_not_recognized(
 
     mock_default_response = MagicMock(spec=ConversationResult)
     mock_default_response.response = MagicMock()
-    mock_default_response.response.intent = None  # Not recognized
+    mock_default_response.response.intent = None
 
     mock_default_agent = AsyncMock()
     mock_default_agent.async_process.return_value = mock_default_response
 
-    ent = GigaChainConversationEntity(entry)
+    ent = SmartChainConversationEntity(entry)
     ent.hass = hass
 
     with patch(
@@ -263,7 +270,7 @@ async def test_handle_message_builtin_recognized(
     entry.runtime_data = mock_llm_client
 
     mock_intent_response = MagicMock()
-    mock_intent_response.intent = MagicMock()  # Truthy = recognized
+    mock_intent_response.intent = MagicMock()
     mock_intent_response.speech = {"plain": {"speech": "HA handled this"}}
 
     mock_default_response = MagicMock(spec=ConversationResult)
@@ -272,7 +279,7 @@ async def test_handle_message_builtin_recognized(
     mock_default_agent = AsyncMock()
     mock_default_agent.async_process.return_value = mock_default_response
 
-    ent = GigaChainConversationEntity(entry)
+    ent = SmartChainConversationEntity(entry)
     ent.hass = hass
 
     with patch(
@@ -333,7 +340,7 @@ def test_chatlog_to_langchain_skips_empty_assistant() -> None:
 
     messages = _chatlog_to_langchain(chat_log)
 
-    assert len(messages) == 2  # system + human (empty assistant skipped)
+    assert len(messages) == 2
 
 
 async def test_async_langchain_stream() -> None:
@@ -369,8 +376,141 @@ async def test_async_langchain_stream_skips_empty_chunks() -> None:
     async for delta in _async_langchain_stream(client, []):
         deltas.append(delta)
 
-    # First chunk has role but no content — still yielded because it has "role"
-    # Second chunk has content
     assert len(deltas) == 2
     assert deltas[0] == {"role": "assistant"}
     assert deltas[1] == {"content": "data"}
+
+
+def test_chatlog_to_langchain_with_tool_calls() -> None:
+    """Test conversion of ChatLog with tool calls and tool results."""
+    tool_input = llm.ToolInput(
+        tool_name="HassTurnOn",
+        tool_args={"entity_id": "light.kitchen"},
+        id="call_123",
+    )
+    chat_log = MagicMock()
+    chat_log.content = [
+        SystemContent(content="System prompt"),
+        UserContent(content="Turn on kitchen light"),
+        AssistantContent(
+            agent_id="test",
+            content="",
+            tool_calls=[tool_input],
+        ),
+        ToolResultContent(
+            agent_id="test",
+            tool_call_id="call_123",
+            tool_name="HassTurnOn",
+            tool_result={"success": True},
+        ),
+        AssistantContent(agent_id="test", content="Done!"),
+    ]
+
+    messages = _chatlog_to_langchain(chat_log)
+
+    assert len(messages) == 5
+    assert isinstance(messages[0], SystemMessage)
+    assert isinstance(messages[1], HumanMessage)
+    assert isinstance(messages[2], AIMessage)
+    assert len(messages[2].tool_calls) == 1
+    assert messages[2].tool_calls[0]["name"] == "HassTurnOn"
+    assert messages[2].tool_calls[0]["id"] == "call_123"
+    assert isinstance(messages[3], ToolMessage)
+    assert messages[3].tool_call_id == "call_123"
+    assert json.loads(messages[3].content) == {"success": True}
+    assert isinstance(messages[4], AIMessage)
+    assert messages[4].content == "Done!"
+
+
+def test_ha_tool_to_dict() -> None:
+    """Test conversion of HA llm.Tool to dict for LangChain."""
+    import voluptuous as vol
+
+    class MockTool(llm.Tool):
+        name = "HassTurnOn"
+        description = "Turn on a device"
+        parameters = vol.Schema({
+            vol.Required("entity_id"): str,
+        })
+
+        async def async_call(self, hass, tool_input, llm_context):
+            return {"success": True}
+
+    tool = MockTool()
+    result = _ha_tool_to_dict(tool)
+
+    assert result["name"] == "HassTurnOn"
+    assert result["description"] == "Turn on a device"
+    assert "properties" in result["parameters"]
+    assert "entity_id" in result["parameters"]["properties"]
+
+
+async def test_async_langchain_stream_with_tool_calls() -> None:
+    """Test that tool_calls from LLM are converted to HA ToolInput in stream."""
+    client = MagicMock()
+
+    async def _fake_astream(messages):
+        yield AIMessageChunk(
+            content="",
+            tool_calls=[
+                {"id": "call_1", "name": "HassTurnOn", "args": {"entity_id": "light.kitchen"}},
+            ],
+        )
+
+    client.astream = _fake_astream
+
+    deltas = []
+    async for delta in _async_langchain_stream(client, []):
+        deltas.append(delta)
+
+    assert len(deltas) == 1
+    assert deltas[0]["role"] == "assistant"
+    assert "tool_calls" in deltas[0]
+    assert len(deltas[0]["tool_calls"]) == 1
+    tc = deltas[0]["tool_calls"][0]
+    assert isinstance(tc, llm.ToolInput)
+    assert tc.tool_name == "HassTurnOn"
+    assert tc.tool_args == {"entity_id": "light.kitchen"}
+    assert tc.id == "call_1"
+
+
+async def test_handle_message_with_llm_api(
+    hass: HomeAssistant, mock_llm_client, user_input
+) -> None:
+    """Test _async_handle_message with LLM Hass API configured."""
+    entry = MagicMock()
+    entry.entry_id = "test_entry"
+    entry.data = {CONF_ENGINE: ID_GIGACHAT, "api_key": "test"}
+    entry.options = {
+        CONF_PROMPT: "Test prompt.",
+        CONF_CHAT_HISTORY: True,
+        CONF_PROCESS_BUILTIN_SENTENCES: False,
+        CONF_LLM_HASS_API: "assist",
+    }
+    entry.runtime_data = mock_llm_client
+
+    ent = SmartChainConversationEntity(entry)
+    ent.hass = hass
+
+    chat_log = _make_chat_log()
+
+    with patch.object(
+        chat_log,
+        "async_provide_llm_data",
+        new_callable=AsyncMock,
+    ) as mock_provide:
+        chat_log.llm_api = None
+        await ent._async_handle_message(user_input, chat_log)
+
+    mock_provide.assert_called_once()
+    assert mock_provide.call_args[0][1] == "assist"
+
+
+async def test_handle_message_no_llm_api_sets_prompt_manually(
+    hass: HomeAssistant, entity, user_input, mock_chat_log
+) -> None:
+    """Test that without LLM API configured, system prompt is set manually."""
+    await entity._async_handle_message(user_input, mock_chat_log)
+
+    assert isinstance(mock_chat_log.content[0], SystemContent)
+    assert "test assistant" in mock_chat_log.content[0].content

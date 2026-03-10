@@ -1,4 +1,4 @@
-"""Tests for GigaChain integration setup and unload."""
+"""Tests for SmartChain integration setup and unload."""
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -6,7 +6,7 @@ import pytest
 from homeassistant.core import HomeAssistant
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.gigachain.const import (
+from custom_components.smartchain.const import (
     CONF_API_KEY,
     CONF_ENGINE,
     DOMAIN,
@@ -49,7 +49,7 @@ async def test_setup_entry_gigachat(
 ) -> None:
     """Test successful setup of GigaChat entry."""
     with patch(
-        "custom_components.gigachain.get_client",
+        "custom_components.smartchain.get_client",
         new_callable=AsyncMock,
         return_value=mock_llm_client,
     ):
@@ -65,7 +65,7 @@ async def test_setup_entry_openai(
 ) -> None:
     """Test successful setup of OpenAI entry."""
     with patch(
-        "custom_components.gigachain.get_client",
+        "custom_components.smartchain.get_client",
         new_callable=AsyncMock,
         return_value=mock_llm_client,
     ):
@@ -81,7 +81,7 @@ async def test_unload_entry(
 ) -> None:
     """Test unloading a config entry."""
     with patch(
-        "custom_components.gigachain.get_client",
+        "custom_components.smartchain.get_client",
         new_callable=AsyncMock,
         return_value=mock_llm_client,
     ):
@@ -99,16 +99,14 @@ async def test_setup_creates_conversation_entity(
 ) -> None:
     """Test that setup creates a conversation entity."""
     with patch(
-        "custom_components.gigachain.get_client",
+        "custom_components.smartchain.get_client",
         new_callable=AsyncMock,
         return_value=mock_llm_client,
     ):
         await hass.config_entries.async_setup(mock_gigachat_entry.entry_id)
         await hass.async_block_till_done()
 
-    # Check that a conversation entity was created
     states = [s for s in hass.states.async_all() if s.domain == "conversation"]
-    # Should have default HA agent + our GigaChain entity
     assert len(states) >= 2
     entity_ids = [s.entity_id for s in states]
-    assert any("gigachain" in eid for eid in entity_ids)
+    assert any("smartchain" in eid for eid in entity_ids)

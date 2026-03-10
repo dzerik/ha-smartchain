@@ -1,4 +1,4 @@
-"""Config flow for GigaChain integration."""
+"""Config flow for SmartChain integration."""
 
 from __future__ import annotations
 
@@ -18,12 +18,14 @@ from homeassistant.helpers.selector import (NumberSelector,
                                             TemplateSelector)
 from httpx import ConnectError
 
+from homeassistant.helpers import llm
+
 from .client_util import validate_client
 from .const import (CONF_API_KEY, CONF_CHAT_MODEL, CONF_CHAT_MODEL_USER,
                     CONF_ENGINE, CONF_ENGINE_OPTIONS, CONF_FOLDER_ID,
-                    CONF_MAX_TOKENS, CONF_PROFANITY, CONF_PROMPT,
-                    CONF_SKIP_VALIDATION, CONF_TEMPERATURE, CONF_VERIFY_SSL,
-                    DEFAULT_CHAT_MODEL, DEFAULT_VERIFY_SSL,
+                    CONF_LLM_HASS_API, CONF_MAX_TOKENS, CONF_PROFANITY,
+                    CONF_PROMPT, CONF_SKIP_VALIDATION, CONF_TEMPERATURE,
+                    CONF_VERIFY_SSL, DEFAULT_CHAT_MODEL, DEFAULT_VERIFY_SSL,
                     ENGINE_MODELS, DEFAULT_PROFANITY, DEFAULT_PROMPT,
                     DEFAULT_SKIP_VALIDATION, DEFAULT_TEMPERATURE, DOMAIN,
                     ID_GIGACHAT, ID_OPENAI, ID_YANDEX_GPT, UNIQUE_ID,
@@ -75,7 +77,7 @@ DEFAULT_OPTIONS = MappingProxyType(
 
 
 class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
-    """Handle a config flow for GigaChain."""
+    """Handle a config flow for SmartChain."""
 
     VERSION = 1
 
@@ -146,7 +148,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
 
 class OptionsFlow(config_entries.OptionsFlow):
-    """GigaChain config flow options handler."""
+    """SmartChain config flow options handler."""
 
     def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
         """Initialize options flow."""
@@ -158,7 +160,7 @@ class OptionsFlow(config_entries.OptionsFlow):
         """Manage the options."""
         unique_id = self.config_entry.unique_id
         schema = common_config_option_schema(
-            unique_id, self.config_entry.options
+            self.hass, unique_id, self.config_entry.options
         )
         if user_input is not None:
             model = user_input.get(CONF_CHAT_MODEL_USER)
@@ -170,6 +172,10 @@ class OptionsFlow(config_entries.OptionsFlow):
                     errors={"base": "model_required"},
                 )
 
+            # Remove empty LLM API selection
+            if not user_input.get(CONF_LLM_HASS_API):
+                user_input.pop(CONF_LLM_HASS_API, None)
+
             return self.async_create_entry(title=unique_id, data=user_input)
 
         return self.async_show_form(
@@ -179,11 +185,17 @@ class OptionsFlow(config_entries.OptionsFlow):
 
 
 def common_config_option_schema(
-        unique_id: str, options: MappingProxyType[str, Any]
+        hass, unique_id: str, options: MappingProxyType[str, Any]
 ) -> vol.Schema:
-    """Return a schema for GigaChain completion options."""
+    """Return a schema for SmartChain completion options."""
     if not options:
         options = DEFAULT_OPTIONS
+
+    hass_apis: list[selector.SelectOptionDict] = [
+        selector.SelectOptionDict(value=api.id, label=api.name)
+        for api in llm.async_get_apis(hass)
+    ]
+
     schema = vol.Schema({
         vol.Optional(
             CONF_CHAT_MODEL,
@@ -201,8 +213,15 @@ def common_config_option_schema(
             },
         ): str,
         vol.Optional(
+            CONF_LLM_HASS_API,
+        ): selector.SelectSelector(
+            selector.SelectSelectorConfig(
+                options=hass_apis, multiple=True, mode=SelectSelectorMode("dropdown")
+            ),
+        ),
+        vol.Optional(
             CONF_PROMPT,
-            description={"suggested_value": options[CONF_PROMPT]},
+            description={"suggested_value": options.get(CONF_PROMPT, DEFAULT_PROMPT)},
             default=DEFAULT_PROMPT,
         ): TemplateSelector(),
         vol.Optional(
