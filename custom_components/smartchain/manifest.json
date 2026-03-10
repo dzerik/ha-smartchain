@@ -11,6 +11,7 @@
   "issue_tracker": "https://github.com/dzerik/ha-smartchain/issues",
   "requirements": [
     "home-assistant-intents",
+    "gigachat>=0.2.0",
     "langchain-gigachat>=0.3.0",
     "langchain-openai>=0.3.0",
     "langchain-community>=0.3.0,<0.4",
@@ -18,5 +19,5 @@
     "langchain-ollama>=0.3.0,<1",
     "yandexcloud==0.295.0"
   ],
-  "version": "0.8.0"
+  "version": "0.8.1"
 }
