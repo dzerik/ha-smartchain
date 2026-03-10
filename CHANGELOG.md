@@ -5,6 +5,24 @@ All notable changes to this project are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 project follows [Semantic Versioning](https://semver.org/).
 
+## [0.8.0] - 2026-03-10
+
+### Added
+- **Ollama provider** — local models (Llama 3.3, Qwen3, Gemma 3, T-Pro 2, T-Lite, DeepSeek R1, Phi 4, Home-3B). Config: base_url only, no API key needed
+- **DeepSeek provider** — cheapest cloud LLM (deepseek-chat, deepseek-reasoner). Uses ChatOpenAI with DeepSeek base URL
+- **Anthropic provider** — Claude models (claude-sonnet-4-6, claude-haiku-4-5, claude-opus-4-6) via ChatAnthropic
+
+### Changed
+- **ai_task made optional** — no longer in manifest.json dependencies, detected dynamically. Fixes hang on HA versions without ai_task support
+- Config Flow extended with `async_step_ollama`, `async_step_deepseek`, `async_step_anthropic`
+- `client_util.py` — new client factories for Ollama (ChatOllama), DeepSeek (ChatOpenAI), Anthropic (ChatAnthropic)
+- `manifest.json` — added `langchain-anthropic`, `langchain-ollama` to requirements
+- `pyproject.toml` — migrated to `requires-python>=3.13`, added all langchain dev deps
+
+### Fixed
+- ResponseError test updated for new gigachat API signature
+- Dependency resolution: pinned langchain packages to compatible ranges (core<1)
+
 ## [0.7.0] - 2026-03-10
 
 ### Changed

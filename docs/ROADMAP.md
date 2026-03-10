@@ -1,6 +1,6 @@
 # SmartChain — Дорожная карта развития
 
-Дата: 2026-03-10 | Текущая версия: 0.6.0
+Дата: 2026-03-10 | Текущая версия: 0.8.0
 
 ## Оглавление
 
@@ -54,14 +54,14 @@ graph TB
 | Фича | Official HA | Extended OpenAI | YandexGPT | Home-LLM | SmartChain |
 |-------|:-----------:|:---------------:|:---------:|:--------:|:---------:|
 | Assist API / Device Control | + | + | + | + | **+ (v0.6)** |
-| AI Task entity | + | - | - | + | - |
+| AI Task entity | + | - | - | + | **+ (v0.7)** |
 | Streaming | + | + | - | + | **+ (v0.5)** |
 | MCP | + | - | - | - | - |
 | Vision | + (OpenAI, Gemini) | - | - | - | - |
 | Генерация изображений | - | - | + | - | - |
 | Function calling (custom) | - | + | + | + | - |
 | Sub-entries | + | - | - | - | - |
-| Ollama / локальные модели | + | - | - | + | - |
+| Ollama / локальные модели | + | - | - | + | **+ (v0.8)** |
 | Multi-agent | - | + | - | - | - |
 | Telegram-бот | - | - | + | - | - |
 | История состояний | - | + | - | - | - |
@@ -339,7 +339,7 @@ class SmartChainAITaskEntity(AITaskEntity):
 
 | Фаза | Версия | Тестов | Провайдеров | Ключевая фича |
 |-------|--------|--------|-------------|---------------|
-| Текущая | 0.6.0 | 34 | 3 | Assist API |
+| Текущая | 0.8.0 | 51 | 6 | Ollama + DeepSeek + Anthropic |
 | Фаза 1 | 0.9.0 | ~60 | 6 | AI Task + Ollama + Sub-entries |
 | Фаза 2 | 1.3.0 | ~80 | 6 | Vision + MCP + Image Gen |
 | Фаза 3 | 1.8.0 | ~100 | 6+ | Multi-agent + Telegram + Skills |
