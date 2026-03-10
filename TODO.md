@@ -4,9 +4,9 @@
 
 - [x] v0.6 Assist API — device control via tool calling
 - [x] v0.7 Rename GigaChain -> SmartChain + AI Task entity
-- [ ] v0.8.1 Ollama — local models (T-Pro, Qwen, Llama, Home-3B)
-- [ ] v0.8.2 DeepSeek — cheapest cloud provider
-- [ ] v0.8.3 Anthropic — Claude via LangChain
+- [x] v0.8.1 Ollama — local models (Llama, Qwen, Gemma, T-Pro, Home-3B)
+- [x] v0.8.2 DeepSeek — cheapest cloud provider (V3, R1)
+- [x] v0.8.3 Anthropic — Claude via LangChain
 - [ ] v0.9 Sub-entries — multiple agents with different models/prompts
 
 ## Phase 2 — Differentiation
