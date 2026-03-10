@@ -1,19 +1,22 @@
 """Conversation entity for GigaChain integration."""
 
 import logging
-from collections import OrderedDict
 from typing import Literal
 
 from home_assistant_intents import get_languages
 from homeassistant.components.conversation import (
-    AssistantContent,
     ChatLog,
     ConversationEntity,
     ConversationInput,
     ConversationResult,
 )
+from homeassistant.components.conversation.chat_log import (
+    AssistantContent,
+    SystemContent,
+    UserContent,
+)
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.helpers import intent
+from homeassistant.helpers import intent, template
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from langchain_core.messages import (
     AIMessage,
@@ -29,8 +32,6 @@ from .const import (
     DEFAULT_CHAT_HISTORY,
     DEFAULT_PROCESS_BUILTIN_SENTENCES,
     DEFAULT_PROMPT,
-    DOMAIN,
-    MAX_HISTORY_CONVERSATIONS,
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -54,7 +55,6 @@ class GigaChainConversationEntity(ConversationEntity):
     def __init__(self, entry: ConfigEntry) -> None:
         """Initialize the entity."""
         self.entry = entry
-        self.history: OrderedDict[str, list[BaseMessage]] = OrderedDict()
         self._attr_unique_id = entry.entry_id
 
     @property
@@ -68,25 +68,28 @@ class GigaChainConversationEntity(ConversationEntity):
         chat_log: ChatLog,
     ) -> ConversationResult:
         """Handle a conversation message via ChatLog API."""
+        conversation_id = chat_log.conversation_id
+
+        # Generate system prompt
         raw_prompt = self.entry.options.get(CONF_PROMPT, DEFAULT_PROMPT)
+        prompt = template.Template(raw_prompt, self.hass).async_render(
+            {"ha_name": self.hass.config.location_name},
+            parse_result=False,
+        )
+        chat_log.content[0] = SystemContent(content=prompt)
+
+        # Convert ChatLog content → LangChain messages for LLM
         chat_history_enabled = self.entry.options.get(
             CONF_CHAT_HISTORY, DEFAULT_CHAT_HISTORY
         )
-        conversation_id = chat_log.conversation_id
-
-        # Build LangChain message list
-        if conversation_id in self.history and chat_history_enabled:
-            messages = self.history[conversation_id]
+        if chat_history_enabled:
+            messages = _chatlog_to_langchain(chat_log)
         else:
-            from homeassistant.helpers import template
-
-            prompt = template.Template(raw_prompt, self.hass).async_render(
-                {"ha_name": self.hass.config.location_name},
-                parse_result=False,
-            )
-            messages = [SystemMessage(content=prompt)]
-
-        messages.append(HumanMessage(content=user_input.text))
+            # Without history: only system prompt + current user message
+            messages = [
+                SystemMessage(content=prompt),
+                HumanMessage(content=user_input.text),
+            ]
 
         # Try builtin HA sentence processor first
         use_builtin = self.entry.options.get(
@@ -102,9 +105,6 @@ class GigaChainConversationEntity(ConversationEntity):
                 speech = (
                     default_response.response.speech.get("plain", {}).get("speech", "")
                 )
-                messages.append(AIMessage(content=speech))
-                self._save_history(conversation_id, messages)
-
                 chat_log.async_add_assistant_content_without_tools(
                     AssistantContent(
                         agent_id=user_input.agent_id,
@@ -129,11 +129,9 @@ class GigaChainConversationEntity(ConversationEntity):
                 conversation_id=conversation_id, response=response
             )
 
-        messages.append(res)
-        self._save_history(conversation_id, messages)
-        LOGGER.debug("Conversation %s: %s", conversation_id, messages)
-
         content_text = res.content
+        LOGGER.debug("Conversation %s: LLM response: %s", conversation_id, content_text)
+
         chat_log.async_add_assistant_content_without_tools(
             AssistantContent(
                 agent_id=user_input.agent_id,
@@ -147,10 +145,16 @@ class GigaChainConversationEntity(ConversationEntity):
             conversation_id=conversation_id, response=response
         )
 
-    def _save_history(
-        self, conversation_id: str, messages: list[BaseMessage]
-    ) -> None:
-        """Save conversation history with size limit."""
-        self.history[conversation_id] = messages
-        while len(self.history) > MAX_HISTORY_CONVERSATIONS:
-            self.history.popitem(last=False)
+
+def _chatlog_to_langchain(chat_log: ChatLog) -> list[BaseMessage]:
+    """Convert ChatLog content to LangChain message list."""
+    messages: list[BaseMessage] = []
+    for content in chat_log.content:
+        if isinstance(content, SystemContent):
+            messages.append(SystemMessage(content=content.content))
+        elif isinstance(content, UserContent):
+            messages.append(HumanMessage(content=content.content))
+        elif isinstance(content, AssistantContent):
+            if content.content:
+                messages.append(AIMessage(content=content.content))
+    return messages

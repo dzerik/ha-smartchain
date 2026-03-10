@@ -1,28 +1,21 @@
 """The GigaChain integration."""
 
 import logging
-from collections import OrderedDict
-from typing import Literal
 
-from home_assistant_intents import get_languages
-from homeassistant.components import conversation
-from homeassistant.components.conversation import agent_manager
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import intent, template
-from homeassistant.util import ulid
-from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage, AIMessage
 
 from .client_util import get_client
-from .const import (CONF_CHAT_MODEL, CONF_CHAT_MODEL_USER,
-                    CONF_ENGINE, CONF_MAX_TOKENS,
-                    CONF_PROFANITY, CONF_PROMPT, CONF_TEMPERATURE,
-                    DEFAULT_PROFANITY, DEFAULT_PROMPT,
-                    CONF_PROCESS_BUILTIN_SENTENCES, DEFAULT_PROCESS_BUILTIN_SENTENCES,
-                    CONF_CHAT_HISTORY, DEFAULT_CHAT_HISTORY,
-                    DEFAULT_TEMPERATURE, DOMAIN, ID_GIGACHAT,
-                    MAX_HISTORY_CONVERSATIONS)
+from .const import (
+    CONF_CHAT_MODEL,
+    CONF_CHAT_MODEL_USER,
+    CONF_ENGINE,
+    CONF_MAX_TOKENS,
+    CONF_TEMPERATURE,
+    DEFAULT_TEMPERATURE,
+    ID_GIGACHAT,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -47,7 +40,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     common_args = {
         "verbose": False,
-        "model": model
+        "model": model,
     }
     if temperature is not None:
         common_args["temperature"] = temperature

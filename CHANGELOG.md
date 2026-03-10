@@ -5,6 +5,24 @@
 Формат основан на [Keep a Changelog](https://keepachangelog.com/ru/1.0.0/),
 проект придерживается [Semantic Versioning](https://semver.org/lang/ru/).
 
+## [0.4.0] - 2026-03-10
+
+### Changed
+- **ChatLog для истории** — удалён собственный `OrderedDict` для хранения истории, используется нативный `ChatLog` HA. История автоматически управляется через `chat_session`
+- **Миграция на langchain-gigachat/langchain-openai** — `GigaChat` импортируется из `langchain_gigachat`, `ChatOpenAI` из `langchain_openai` (вместо deprecated `langchain_community.chat_models`)
+- Зависимости в `manifest.json`: `gigachain` fork заменён на `langchain-gigachat>=0.3.0`, `langchain-openai>=0.3.0`, `langchain-community>=0.4.0`
+- CI: добавлен шаг `pytest` в `push.yml` и `pull.yml`
+- Конвертация ChatLog ↔ LangChain messages через `_chatlog_to_langchain()`
+
+### Added
+- Тесты setup/unload (`test_setup.py`): 4 теста
+- Тесты `_chatlog_to_langchain`: 2 теста
+- Итого: 26 тестов (11 config flow + 11 conversation + 4 setup)
+
+### Removed
+- `MAX_HISTORY_CONVERSATIONS` константа (больше не нужна, ChatLog управляет историей)
+- `OrderedDict` история из `GigaChainConversationEntity`
+
 ## [0.3.0] - 2026-03-10
 
 ### Added

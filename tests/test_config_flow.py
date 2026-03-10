@@ -154,7 +154,7 @@ async def test_gigachat_invalid_response(hass: HomeAssistant) -> None:
     """Test GigaChat config flow handles invalid response."""
     with patch(
         "custom_components.gigachain.config_flow.validate_client",
-        side_effect=ResponseError(url="https://test", status_code=401, content=b"Unauthorized", headers=None),
+        side_effect=ResponseError("Unauthorized"),
     ):
         result = await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": config_entries.SOURCE_USER}

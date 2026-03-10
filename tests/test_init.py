@@ -1,23 +1,28 @@
 """Tests for GigaChain conversation entity."""
 
-from collections import OrderedDict
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from homeassistant.components.conversation import ConversationInput, ConversationResult
+from homeassistant.components.conversation.chat_log import (
+    AssistantContent,
+    SystemContent,
+    UserContent,
+)
 from homeassistant.core import Context, HomeAssistant
 from homeassistant.helpers import intent
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
-from custom_components.gigachain.conversation import GigaChainConversationEntity
+from custom_components.gigachain.conversation import (
+    GigaChainConversationEntity,
+    _chatlog_to_langchain,
+)
 from custom_components.gigachain.const import (
     CONF_CHAT_HISTORY,
     CONF_ENGINE,
     CONF_PROCESS_BUILTIN_SENTENCES,
     CONF_PROMPT,
-    DOMAIN,
     ID_GIGACHAT,
-    MAX_HISTORY_CONVERSATIONS,
 )
 
 
@@ -32,6 +37,18 @@ def _make_input(text="Hello, assistant!", conversation_id=None):
         language="ru",
         agent_id="test_agent",
     )
+
+
+def _make_chat_log(conversation_id="test-conv-id", user_text="Hello, assistant!"):
+    """Create a mock ChatLog with proper content list."""
+    chat_log = MagicMock()
+    chat_log.conversation_id = conversation_id
+    chat_log.content = [
+        SystemContent(content=""),
+        UserContent(content=user_text),
+    ]
+    chat_log.async_add_assistant_content_without_tools = MagicMock()
+    return chat_log
 
 
 @pytest.fixture
@@ -66,10 +83,7 @@ def user_input():
 @pytest.fixture
 def mock_chat_log():
     """Create a mock ChatLog."""
-    chat_log = MagicMock()
-    chat_log.conversation_id = "test-conv-id"
-    chat_log.async_add_assistant_content_without_tools = MagicMock()
-    return chat_log
+    return _make_chat_log()
 
 
 async def test_handle_message_basic(
@@ -84,38 +98,62 @@ async def test_handle_message_basic(
     mock_chat_log.async_add_assistant_content_without_tools.assert_called_once()
 
 
-async def test_handle_message_saves_history(
+async def test_handle_message_sets_system_prompt(
     hass: HomeAssistant, entity, user_input, mock_chat_log
 ) -> None:
-    """Test that _async_handle_message saves conversation history."""
-    result = await entity._async_handle_message(user_input, mock_chat_log)
-    conversation_id = result.conversation_id
-
-    assert conversation_id in entity.history
-    messages = entity.history[conversation_id]
-    assert len(messages) == 3  # system + human + ai
-    assert isinstance(messages[0], SystemMessage)
-    assert isinstance(messages[1], HumanMessage)
-    assert isinstance(messages[2], AIMessage)
-
-
-async def test_handle_message_continues_history(
-    hass: HomeAssistant, entity, user_input, mock_chat_log
-) -> None:
-    """Test that subsequent messages use existing history."""
+    """Test that system prompt is set in ChatLog."""
     await entity._async_handle_message(user_input, mock_chat_log)
 
-    user_input2 = _make_input(text="Second message")
-    await entity._async_handle_message(user_input2, mock_chat_log)
+    # content[0] should be replaced with the rendered system prompt
+    assert isinstance(mock_chat_log.content[0], SystemContent)
+    assert "test assistant" in mock_chat_log.content[0].content
 
-    messages = entity.history[mock_chat_log.conversation_id]
-    assert len(messages) == 5  # system + human + ai + human + ai
+
+async def test_handle_message_sends_correct_messages_to_llm(
+    hass: HomeAssistant, entity, user_input, mock_chat_log
+) -> None:
+    """Test that LLM receives correct LangChain messages from ChatLog."""
+    await entity._async_handle_message(user_input, mock_chat_log)
+
+    # Check what was passed to client.invoke
+    call_args = entity.entry.runtime_data.invoke.call_args[0][0]
+    assert len(call_args) == 2  # system + human
+    assert isinstance(call_args[0], SystemMessage)
+    assert isinstance(call_args[1], HumanMessage)
+    assert call_args[1].content == "Hello, assistant!"
+
+
+async def test_handle_message_with_history(
+    hass: HomeAssistant, entity, user_input
+) -> None:
+    """Test that ChatLog history is converted to LangChain messages."""
+    chat_log = MagicMock()
+    chat_log.conversation_id = "test-conv-id"
+    chat_log.content = [
+        SystemContent(content=""),
+        UserContent(content="First message"),
+        AssistantContent(agent_id="test", content="First response"),
+        UserContent(content="Hello, assistant!"),
+    ]
+    chat_log.async_add_assistant_content_without_tools = MagicMock()
+
+    await entity._async_handle_message(user_input, chat_log)
+
+    call_args = entity.entry.runtime_data.invoke.call_args[0][0]
+    assert len(call_args) == 4  # system + human + ai + human
+    assert isinstance(call_args[0], SystemMessage)
+    assert isinstance(call_args[1], HumanMessage)
+    assert call_args[1].content == "First message"
+    assert isinstance(call_args[2], AIMessage)
+    assert call_args[2].content == "First response"
+    assert isinstance(call_args[3], HumanMessage)
+    assert call_args[3].content == "Hello, assistant!"
 
 
 async def test_handle_message_history_disabled(
-    hass: HomeAssistant, mock_llm_client, user_input, mock_chat_log
+    hass: HomeAssistant, mock_llm_client, user_input
 ) -> None:
-    """Test that history is not used when disabled."""
+    """Test that only current message is sent when history disabled."""
     entry = MagicMock()
     entry.entry_id = "test_entry"
     entry.data = {CONF_ENGINE: ID_GIGACHAT, "api_key": "test"}
@@ -129,33 +167,25 @@ async def test_handle_message_history_disabled(
     ent = GigaChainConversationEntity(entry)
     ent.hass = hass
 
-    await ent._async_handle_message(user_input, mock_chat_log)
+    # ChatLog has history, but history is disabled
+    chat_log = MagicMock()
+    chat_log.conversation_id = "test-conv-id"
+    chat_log.content = [
+        SystemContent(content=""),
+        UserContent(content="Old message"),
+        AssistantContent(agent_id="test", content="Old response"),
+        UserContent(content="Hello, assistant!"),
+    ]
+    chat_log.async_add_assistant_content_without_tools = MagicMock()
 
-    # Call again with same conversation_id - should start fresh (new system message)
-    mock_chat_log2 = MagicMock()
-    mock_chat_log2.conversation_id = mock_chat_log.conversation_id
-    mock_chat_log2.async_add_assistant_content_without_tools = MagicMock()
+    await ent._async_handle_message(user_input, chat_log)
 
-    user_input2 = _make_input(text="Second")
-    await ent._async_handle_message(user_input2, mock_chat_log2)
-
-    # Messages should be fresh (3, not 5)
-    messages = ent.history[mock_chat_log.conversation_id]
-    assert len(messages) == 3  # system + human + ai (fresh)
-
-
-async def test_history_eviction(
-    hass: HomeAssistant, entity
-) -> None:
-    """Test that history evicts oldest entries beyond MAX_HISTORY_CONVERSATIONS."""
-    for i in range(MAX_HISTORY_CONVERSATIONS + 10):
-        conv_id = f"conv_{i}"
-        entity._save_history(conv_id, [SystemMessage(content=f"msg {i}")])
-
-    assert len(entity.history) == MAX_HISTORY_CONVERSATIONS
-    assert "conv_0" not in entity.history
-    assert "conv_9" not in entity.history
-    assert f"conv_{MAX_HISTORY_CONVERSATIONS + 9}" in entity.history
+    # Only system + current user message (not old history)
+    call_args = mock_llm_client.invoke.call_args[0][0]
+    assert len(call_args) == 2  # system + human (no history)
+    assert isinstance(call_args[0], SystemMessage)
+    assert isinstance(call_args[1], HumanMessage)
+    assert call_args[1].content == "Hello, assistant!"
 
 
 async def test_handle_message_llm_error(
@@ -249,3 +279,40 @@ async def test_supported_languages(
     languages = entity.supported_languages
     assert isinstance(languages, list)
     assert len(languages) > 0
+
+
+def test_chatlog_to_langchain() -> None:
+    """Test conversion of ChatLog content to LangChain messages."""
+    chat_log = MagicMock()
+    chat_log.content = [
+        SystemContent(content="System prompt"),
+        UserContent(content="User message"),
+        AssistantContent(agent_id="test", content="AI response"),
+        UserContent(content="Follow-up"),
+    ]
+
+    messages = _chatlog_to_langchain(chat_log)
+
+    assert len(messages) == 4
+    assert isinstance(messages[0], SystemMessage)
+    assert messages[0].content == "System prompt"
+    assert isinstance(messages[1], HumanMessage)
+    assert messages[1].content == "User message"
+    assert isinstance(messages[2], AIMessage)
+    assert messages[2].content == "AI response"
+    assert isinstance(messages[3], HumanMessage)
+    assert messages[3].content == "Follow-up"
+
+
+def test_chatlog_to_langchain_skips_empty_assistant() -> None:
+    """Test that assistant content without text is skipped."""
+    chat_log = MagicMock()
+    chat_log.content = [
+        SystemContent(content="Prompt"),
+        UserContent(content="Hello"),
+        AssistantContent(agent_id="test", content=None),
+    ]
+
+    messages = _chatlog_to_langchain(chat_log)
+
+    assert len(messages) == 2  # system + human (empty assistant skipped)

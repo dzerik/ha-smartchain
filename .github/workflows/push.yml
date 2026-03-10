@@ -36,3 +36,16 @@ jobs:
     - run: python3 -m pip install ruff
     - run: ruff check .
     - run: ruff format --check .
+
+  test:
+    runs-on: "ubuntu-latest"
+    name: Run tests
+    steps:
+    - uses: "actions/checkout@v4"
+    - uses: "actions/setup-python@v5"
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+    - run: |
+        python3 -m pip install -r requirements_test.txt
+        python3 -m pip install langchain-core gigachat
+    - run: python3 -m pytest tests/ -v

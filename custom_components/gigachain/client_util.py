@@ -3,7 +3,9 @@ import logging
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from langchain_core.messages import SystemMessage
-from langchain_community.chat_models import ChatOpenAI, ChatYandexGPT, GigaChat
+from langchain_community.chat_models import ChatYandexGPT
+from langchain_gigachat import GigaChat
+from langchain_openai import ChatOpenAI
 
 from .const import (CONF_API_KEY, CONF_ENGINE, CONF_FOLDER_ID, CONF_PROFANITY,
                     CONF_SKIP_VALIDATION, CONF_VERIFY_SSL, DEFAULT_PROFANITY,
