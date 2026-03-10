@@ -5,6 +5,18 @@
 Формат основан на [Keep a Changelog](https://keepachangelog.com/ru/1.0.0/),
 проект придерживается [Semantic Versioning](https://semver.org/lang/ru/).
 
+## [0.5.0] - 2026-03-10
+
+### Added
+- **Streaming ответов** — `_attr_supports_streaming = True`, ответы LLM передаются потоково через `ChatLog.async_add_delta_content_stream()`
+- Async генератор `_async_langchain_stream()` для конвертации `AIMessageChunk` → HA delta dicts
+- Тесты streaming: `test_supports_streaming`, `test_async_langchain_stream`, `test_async_langchain_stream_skips_empty_chunks`
+- Итого: 29 тестов (11 config flow + 14 conversation + 4 setup)
+
+### Changed
+- `client.invoke()` через `async_add_executor_job` заменён на `client.astream()` (async, без executor)
+- `async_add_assistant_content_without_tools` заменён на `async_add_delta_content_stream` для потоковой передачи
+
 ## [0.4.0] - 2026-03-10
 
 ### Changed

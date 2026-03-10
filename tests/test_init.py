@@ -11,10 +11,11 @@ from homeassistant.components.conversation.chat_log import (
 )
 from homeassistant.core import Context, HomeAssistant
 from homeassistant.helpers import intent
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, SystemMessage
 
 from custom_components.gigachain.conversation import (
     GigaChainConversationEntity,
+    _async_langchain_stream,
     _chatlog_to_langchain,
 )
 from custom_components.gigachain.const import (
@@ -40,7 +41,7 @@ def _make_input(text="Hello, assistant!", conversation_id=None):
 
 
 def _make_chat_log(conversation_id="test-conv-id", user_text="Hello, assistant!"):
-    """Create a mock ChatLog with proper content list."""
+    """Create a mock ChatLog with proper content list and streaming support."""
     chat_log = MagicMock()
     chat_log.conversation_id = conversation_id
     chat_log.content = [
@@ -48,6 +49,18 @@ def _make_chat_log(conversation_id="test-conv-id", user_text="Hello, assistant!"
         UserContent(content=user_text),
     ]
     chat_log.async_add_assistant_content_without_tools = MagicMock()
+
+    # Support streaming: async_add_delta_content_stream collects deltas into AssistantContent
+    async def _mock_add_delta_stream(agent_id, stream):
+        collected = ""
+        async for delta in stream:
+            if "content" in delta:
+                collected += delta["content"]
+        content = AssistantContent(agent_id=agent_id, content=collected)
+        chat_log.content.append(content)
+        yield content
+
+    chat_log.async_add_delta_content_stream = _mock_add_delta_stream
     return chat_log
 
 
@@ -95,7 +108,6 @@ async def test_handle_message_basic(
     assert isinstance(result, ConversationResult)
     assert result.response.speech["plain"]["speech"] == "Test response from LLM"
     assert result.conversation_id == mock_chat_log.conversation_id
-    mock_chat_log.async_add_assistant_content_without_tools.assert_called_once()
 
 
 async def test_handle_message_sets_system_prompt(
@@ -115,8 +127,8 @@ async def test_handle_message_sends_correct_messages_to_llm(
     """Test that LLM receives correct LangChain messages from ChatLog."""
     await entity._async_handle_message(user_input, mock_chat_log)
 
-    # Check what was passed to client.invoke
-    call_args = entity.entry.runtime_data.invoke.call_args[0][0]
+    # Check what was passed to client.astream
+    call_args = entity.entry.runtime_data.astream.call_args[0][0]
     assert len(call_args) == 2  # system + human
     assert isinstance(call_args[0], SystemMessage)
     assert isinstance(call_args[1], HumanMessage)
@@ -127,19 +139,17 @@ async def test_handle_message_with_history(
     hass: HomeAssistant, entity, user_input
 ) -> None:
     """Test that ChatLog history is converted to LangChain messages."""
-    chat_log = MagicMock()
-    chat_log.conversation_id = "test-conv-id"
+    chat_log = _make_chat_log()
     chat_log.content = [
         SystemContent(content=""),
         UserContent(content="First message"),
         AssistantContent(agent_id="test", content="First response"),
         UserContent(content="Hello, assistant!"),
     ]
-    chat_log.async_add_assistant_content_without_tools = MagicMock()
 
     await entity._async_handle_message(user_input, chat_log)
 
-    call_args = entity.entry.runtime_data.invoke.call_args[0][0]
+    call_args = entity.entry.runtime_data.astream.call_args[0][0]
     assert len(call_args) == 4  # system + human + ai + human
     assert isinstance(call_args[0], SystemMessage)
     assert isinstance(call_args[1], HumanMessage)
@@ -168,20 +178,18 @@ async def test_handle_message_history_disabled(
     ent.hass = hass
 
     # ChatLog has history, but history is disabled
-    chat_log = MagicMock()
-    chat_log.conversation_id = "test-conv-id"
+    chat_log = _make_chat_log()
     chat_log.content = [
         SystemContent(content=""),
         UserContent(content="Old message"),
         AssistantContent(agent_id="test", content="Old response"),
         UserContent(content="Hello, assistant!"),
     ]
-    chat_log.async_add_assistant_content_without_tools = MagicMock()
 
     await ent._async_handle_message(user_input, chat_log)
 
     # Only system + current user message (not old history)
-    call_args = mock_llm_client.invoke.call_args[0][0]
+    call_args = mock_llm_client.astream.call_args[0][0]
     assert len(call_args) == 2  # system + human (no history)
     assert isinstance(call_args[0], SystemMessage)
     assert isinstance(call_args[1], HumanMessage)
@@ -192,7 +200,12 @@ async def test_handle_message_llm_error(
     hass: HomeAssistant, entity, user_input, mock_chat_log
 ) -> None:
     """Test _async_handle_message handles LLM errors gracefully."""
-    entity.entry.runtime_data.invoke.side_effect = RuntimeError("API Error")
+
+    async def _error_stream(messages):
+        raise RuntimeError("API Error")
+        yield  # noqa: unreachable - makes this an async generator
+
+    entity.entry.runtime_data.astream = MagicMock(side_effect=_error_stream)
 
     result = await entity._async_handle_message(user_input, mock_chat_log)
 
@@ -268,7 +281,7 @@ async def test_handle_message_builtin_recognized(
     ):
         result = await ent._async_handle_message(user_input, mock_chat_log)
 
-    mock_llm_client.invoke.assert_not_called()
+    mock_llm_client.astream.assert_not_called()
     assert result.response is mock_intent_response
 
 
@@ -279,6 +292,11 @@ async def test_supported_languages(
     languages = entity.supported_languages
     assert isinstance(languages, list)
     assert len(languages) > 0
+
+
+async def test_supports_streaming(entity) -> None:
+    """Test that entity declares streaming support."""
+    assert entity._attr_supports_streaming is True
 
 
 def test_chatlog_to_langchain() -> None:
@@ -316,3 +334,43 @@ def test_chatlog_to_langchain_skips_empty_assistant() -> None:
     messages = _chatlog_to_langchain(chat_log)
 
     assert len(messages) == 2  # system + human (empty assistant skipped)
+
+
+async def test_async_langchain_stream() -> None:
+    """Test that _async_langchain_stream converts LangChain chunks to HA deltas."""
+    client = MagicMock()
+
+    async def _fake_astream(messages):
+        yield AIMessageChunk(content="Hello")
+        yield AIMessageChunk(content=" world")
+
+    client.astream = _fake_astream
+
+    deltas = []
+    async for delta in _async_langchain_stream(client, []):
+        deltas.append(delta)
+
+    assert len(deltas) == 2
+    assert deltas[0] == {"role": "assistant", "content": "Hello"}
+    assert deltas[1] == {"content": " world"}
+
+
+async def test_async_langchain_stream_skips_empty_chunks() -> None:
+    """Test that empty chunks are skipped in stream conversion."""
+    client = MagicMock()
+
+    async def _fake_astream(messages):
+        yield AIMessageChunk(content="")
+        yield AIMessageChunk(content="data")
+
+    client.astream = _fake_astream
+
+    deltas = []
+    async for delta in _async_langchain_stream(client, []):
+        deltas.append(delta)
+
+    # First chunk has role but no content — still yielded because it has "role"
+    # Second chunk has content
+    assert len(deltas) == 2
+    assert deltas[0] == {"role": "assistant"}
+    assert deltas[1] == {"content": "data"}

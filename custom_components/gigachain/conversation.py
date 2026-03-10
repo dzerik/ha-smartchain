@@ -1,7 +1,8 @@
 """Conversation entity for GigaChain integration."""
 
 import logging
-from typing import Literal
+from collections.abc import AsyncIterable
+from typing import Any, Literal
 
 from home_assistant_intents import get_languages
 from homeassistant.components.conversation import (
@@ -51,6 +52,7 @@ class GigaChainConversationEntity(ConversationEntity):
 
     _attr_has_entity_name = True
     _attr_name = None
+    _attr_supports_streaming = True
 
     def __init__(self, entry: ConfigEntry) -> None:
         """Initialize the entity."""
@@ -113,11 +115,15 @@ class GigaChainConversationEntity(ConversationEntity):
                 )
                 return default_response
 
-        # Call LLM
+        # Call LLM with streaming
         client = self.entry.runtime_data
 
         try:
-            res = await self.hass.async_add_executor_job(client.invoke, messages)
+            async for _content in chat_log.async_add_delta_content_stream(
+                user_input.agent_id,
+                _async_langchain_stream(client, messages),
+            ):
+                pass
         except Exception as err:
             LOGGER.exception("Unexpected exception %s", type(err))
             response = intent.IntentResponse(language=user_input.language)
@@ -129,18 +135,8 @@ class GigaChainConversationEntity(ConversationEntity):
                 conversation_id=conversation_id, response=response
             )
 
-        content_text = res.content
-        LOGGER.debug("Conversation %s: LLM response: %s", conversation_id, content_text)
-
-        chat_log.async_add_assistant_content_without_tools(
-            AssistantContent(
-                agent_id=user_input.agent_id,
-                content=content_text,
-            )
-        )
-
         response = intent.IntentResponse(language=user_input.language)
-        response.async_set_speech(content_text)
+        response.async_set_speech(chat_log.content[-1].content or "")
         return ConversationResult(
             conversation_id=conversation_id, response=response
         )
@@ -158,3 +154,19 @@ def _chatlog_to_langchain(chat_log: ChatLog) -> list[BaseMessage]:
             if content.content:
                 messages.append(AIMessage(content=content.content))
     return messages
+
+
+async def _async_langchain_stream(
+    client: Any, messages: list[BaseMessage]
+) -> AsyncIterable[dict[str, Any]]:
+    """Convert LangChain astream chunks to HA delta dicts."""
+    first = True
+    async for chunk in client.astream(messages):
+        delta: dict[str, Any] = {}
+        if first:
+            delta["role"] = "assistant"
+            first = False
+        if chunk.content:
+            delta["content"] = chunk.content
+        if delta:
+            yield delta
