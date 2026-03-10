@@ -3,7 +3,7 @@
   "name": "SmartChain",
   "codeowners": ["@dzerik"],
   "config_flow": true,
-  "dependencies": ["ai_task", "conversation"],
+  "dependencies": ["conversation"],
   "documentation": "https://github.com/dzerik/ha-smartchain",
   "homekit": {},
   "integration_type": "service",
