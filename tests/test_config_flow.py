@@ -11,11 +11,16 @@ from httpx import ConnectError
 
 from custom_components.smartchain.const import (
     CONF_API_KEY,
+    CONF_BASE_URL,
     CONF_ENGINE,
     CONF_FOLDER_ID,
     CONF_SKIP_VALIDATION,
+    DEFAULT_OLLAMA_BASE_URL,
     DOMAIN,
+    ID_ANTHROPIC,
+    ID_DEEPSEEK,
     ID_GIGACHAT,
+    ID_OLLAMA,
     ID_OPENAI,
     ID_YANDEX_GPT,
 )
@@ -68,9 +73,7 @@ async def test_step_user_selects_openai(hass: HomeAssistant) -> None:
     assert result["step_id"] == ID_OPENAI
 
 
-async def test_gigachat_full_flow(
-    hass: HomeAssistant, mock_validate_client: AsyncMock
-) -> None:
+async def test_gigachat_full_flow(hass: HomeAssistant, mock_validate_client: AsyncMock) -> None:
     """Test full GigaChat config flow creates entry."""
     result = await hass.config_entries.flow.async_init(
         DOMAIN, context={"source": config_entries.SOURCE_USER}
@@ -88,9 +91,7 @@ async def test_gigachat_full_flow(
     assert result["data"][CONF_API_KEY] == "test-credentials"
 
 
-async def test_yandexgpt_full_flow(
-    hass: HomeAssistant, mock_validate_client: AsyncMock
-) -> None:
+async def test_yandexgpt_full_flow(hass: HomeAssistant, mock_validate_client: AsyncMock) -> None:
     """Test full YandexGPT config flow creates entry."""
     result = await hass.config_entries.flow.async_init(
         DOMAIN, context={"source": config_entries.SOURCE_USER}
@@ -111,9 +112,7 @@ async def test_yandexgpt_full_flow(
     assert result["data"][CONF_ENGINE] == ID_YANDEX_GPT
 
 
-async def test_openai_full_flow(
-    hass: HomeAssistant, mock_validate_client: AsyncMock
-) -> None:
+async def test_openai_full_flow(hass: HomeAssistant, mock_validate_client: AsyncMock) -> None:
     """Test full OpenAI config flow creates entry."""
     result = await hass.config_entries.flow.async_init(
         DOMAIN, context={"source": config_entries.SOURCE_USER}
@@ -210,3 +209,113 @@ async def test_skip_validation(
         )
     assert result["type"] is FlowResultType.CREATE_ENTRY
     mock_validate.assert_called_once()
+
+
+async def test_step_user_selects_ollama(hass: HomeAssistant) -> None:
+    """Test selecting Ollama engine shows base_url form."""
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": config_entries.SOURCE_USER}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONF_ENGINE: ID_OLLAMA}
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == ID_OLLAMA
+
+
+async def test_step_user_selects_deepseek(hass: HomeAssistant) -> None:
+    """Test selecting DeepSeek engine shows API key form."""
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": config_entries.SOURCE_USER}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONF_ENGINE: ID_DEEPSEEK}
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == ID_DEEPSEEK
+
+
+async def test_step_user_selects_anthropic(hass: HomeAssistant) -> None:
+    """Test selecting Anthropic engine shows API key form."""
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": config_entries.SOURCE_USER}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONF_ENGINE: ID_ANTHROPIC}
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == ID_ANTHROPIC
+
+
+async def test_ollama_full_flow(hass: HomeAssistant, mock_validate_client: AsyncMock) -> None:
+    """Test full Ollama config flow creates entry."""
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": config_entries.SOURCE_USER}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONF_ENGINE: ID_OLLAMA}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {CONF_BASE_URL: DEFAULT_OLLAMA_BASE_URL, CONF_SKIP_VALIDATION: False},
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["title"] == "Ollama"
+    assert result["data"][CONF_ENGINE] == ID_OLLAMA
+    assert result["data"][CONF_BASE_URL] == DEFAULT_OLLAMA_BASE_URL
+
+
+async def test_deepseek_full_flow(hass: HomeAssistant, mock_validate_client: AsyncMock) -> None:
+    """Test full DeepSeek config flow creates entry."""
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": config_entries.SOURCE_USER}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONF_ENGINE: ID_DEEPSEEK}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {CONF_API_KEY: "test-deepseek-key", CONF_SKIP_VALIDATION: False},
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["title"] == "DeepSeek"
+    assert result["data"][CONF_ENGINE] == ID_DEEPSEEK
+    assert result["data"][CONF_API_KEY] == "test-deepseek-key"
+
+
+async def test_anthropic_full_flow(hass: HomeAssistant, mock_validate_client: AsyncMock) -> None:
+    """Test full Anthropic config flow creates entry."""
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": config_entries.SOURCE_USER}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONF_ENGINE: ID_ANTHROPIC}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {CONF_API_KEY: "test-anthropic-key", CONF_SKIP_VALIDATION: False},
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["title"] == "Anthropic"
+    assert result["data"][CONF_ENGINE] == ID_ANTHROPIC
+    assert result["data"][CONF_API_KEY] == "test-anthropic-key"
+
+
+async def test_ollama_connect_error(hass: HomeAssistant) -> None:
+    """Test Ollama config flow handles connection error."""
+    with patch(
+        "custom_components.smartchain.config_flow.validate_client",
+        side_effect=ConnectError("Connection refused"),
+    ):
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": config_entries.SOURCE_USER}
+        )
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {CONF_ENGINE: ID_OLLAMA}
+        )
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {CONF_BASE_URL: "http://bad-host:11434", CONF_SKIP_VALIDATION: False},
+        )
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {"base": "cannot_connect"}

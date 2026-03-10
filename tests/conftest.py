@@ -10,9 +10,13 @@ from langchain_core.messages import AIMessage, AIMessageChunk
 
 from custom_components.smartchain.const import (
     CONF_API_KEY,
+    CONF_BASE_URL,
     CONF_ENGINE,
     DOMAIN,
+    ID_ANTHROPIC,
+    ID_DEEPSEEK,
     ID_GIGACHAT,
+    ID_OLLAMA,
     ID_OPENAI,
     ID_YANDEX_GPT,
 )
@@ -31,6 +35,21 @@ MOCK_YANDEXGPT_DATA = {
 MOCK_OPENAI_DATA = {
     CONF_ENGINE: ID_OPENAI,
     CONF_API_KEY: "test-openai-key",
+}
+
+MOCK_OLLAMA_DATA = {
+    CONF_ENGINE: ID_OLLAMA,
+    CONF_BASE_URL: "http://localhost:11434",
+}
+
+MOCK_DEEPSEEK_DATA = {
+    CONF_ENGINE: ID_DEEPSEEK,
+    CONF_API_KEY: "test-deepseek-key",
+}
+
+MOCK_ANTHROPIC_DATA = {
+    CONF_ENGINE: ID_ANTHROPIC,
+    CONF_API_KEY: "test-anthropic-key",
 }
 
 

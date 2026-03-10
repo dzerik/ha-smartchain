@@ -11,7 +11,7 @@ from gigachat.exceptions import ResponseError
 from homeassistant import config_entries
 from homeassistant.config_entries import ConfigFlowResult
 from homeassistant.core import callback
-from homeassistant.helpers import selector
+from homeassistant.helpers import llm, selector
 from homeassistant.helpers.selector import (
     NumberSelector,
     NumberSelectorConfig,
@@ -20,11 +20,11 @@ from homeassistant.helpers.selector import (
 )
 from httpx import ConnectError
 
-from homeassistant.helpers import llm
-
 from .client_util import validate_client
 from .const import (
     CONF_API_KEY,
+    CONF_BASE_URL,
+    CONF_CHAT_HISTORY,
     CONF_CHAT_MODEL,
     CONF_CHAT_MODEL_USER,
     CONF_ENGINE,
@@ -32,27 +32,30 @@ from .const import (
     CONF_FOLDER_ID,
     CONF_LLM_HASS_API,
     CONF_MAX_TOKENS,
+    CONF_PROCESS_BUILTIN_SENTENCES,
     CONF_PROFANITY,
     CONF_PROMPT,
     CONF_SKIP_VALIDATION,
     CONF_TEMPERATURE,
     CONF_VERIFY_SSL,
+    DEFAULT_CHAT_HISTORY,
     DEFAULT_CHAT_MODEL,
-    DEFAULT_VERIFY_SSL,
-    ENGINE_MODELS,
+    DEFAULT_OLLAMA_BASE_URL,
+    DEFAULT_PROCESS_BUILTIN_SENTENCES,
     DEFAULT_PROFANITY,
     DEFAULT_PROMPT,
     DEFAULT_SKIP_VALIDATION,
     DEFAULT_TEMPERATURE,
+    DEFAULT_VERIFY_SSL,
     DOMAIN,
+    ENGINE_MODELS,
+    ID_ANTHROPIC,
+    ID_DEEPSEEK,
     ID_GIGACHAT,
+    ID_OLLAMA,
     ID_OPENAI,
     ID_YANDEX_GPT,
     UNIQUE_ID,
-    CONF_PROCESS_BUILTIN_SENTENCES,
-    DEFAULT_PROCESS_BUILTIN_SENTENCES,
-    CONF_CHAT_HISTORY,
-    DEFAULT_CHAT_HISTORY,
     UNIQUE_ID_GIGACHAT,
 )
 
@@ -78,11 +81,20 @@ STEP_YANDEXGPT_SCHEMA = vol.Schema(
         vol.Optional(CONF_SKIP_VALIDATION, default=DEFAULT_SKIP_VALIDATION): bool,
     }
 )
+STEP_OLLAMA_SCHEMA = vol.Schema(
+    {
+        vol.Required(CONF_BASE_URL, default=DEFAULT_OLLAMA_BASE_URL): str,
+        vol.Optional(CONF_SKIP_VALIDATION, default=DEFAULT_SKIP_VALIDATION): bool,
+    }
+)
 
 ENGINE_SCHEMA = {
     ID_GIGACHAT: STEP_API_KEY_SCHEMA,
     ID_YANDEX_GPT: STEP_YANDEXGPT_SCHEMA,
     ID_OPENAI: STEP_API_KEY_SCHEMA,
+    ID_OLLAMA: STEP_OLLAMA_SCHEMA,
+    ID_DEEPSEEK: STEP_API_KEY_SCHEMA,
+    ID_ANTHROPIC: STEP_API_KEY_SCHEMA,
 }
 
 DEFAULT_OPTIONS = MappingProxyType(
@@ -100,9 +112,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     VERSION = 1
 
-    async def async_step_user(
-        self, user_input: dict[str, Any] | None = None
-    ) -> ConfigFlowResult:
+    async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Handle the initial step."""
         if user_input is None:
             return self.async_show_form(step_id="user", data_schema=STEP_USER_SCHEMA)
@@ -123,18 +133,27 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     ) -> ConfigFlowResult:
         return await self._common_model_async_step(ID_YANDEX_GPT, user_input)
 
-    async def async_step_openai(
+    async def async_step_openai(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        return await self._common_model_async_step(ID_OPENAI, user_input)
+
+    async def async_step_ollama(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        return await self._common_model_async_step(ID_OLLAMA, user_input)
+
+    async def async_step_deepseek(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        return await self._common_model_async_step(ID_OPENAI, user_input)
+        return await self._common_model_async_step(ID_DEEPSEEK, user_input)
+
+    async def async_step_anthropic(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        return await self._common_model_async_step(ID_ANTHROPIC, user_input)
 
     async def _common_model_async_step(
         self, engine: str, user_input: dict[str, Any] | None
     ) -> ConfigFlowResult:
         if user_input is None:
-            return self.async_show_form(
-                step_id=engine, data_schema=ENGINE_SCHEMA[engine]
-            )
+            return self.async_show_form(step_id=engine, data_schema=ENGINE_SCHEMA[engine])
 
         errors: dict[str, str] = {}
         user_input[CONF_ENGINE] = engine
@@ -173,14 +192,10 @@ class OptionsFlow(config_entries.OptionsFlow):
         """Initialize options flow."""
         self.config_entry = config_entry
 
-    async def async_step_init(
-        self, user_input: dict[str, Any] | None = None
-    ) -> ConfigFlowResult:
+    async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Manage the options."""
         unique_id = self.config_entry.unique_id
-        schema = common_config_option_schema(
-            self.hass, unique_id, self.config_entry.options
-        )
+        schema = common_config_option_schema(self.hass, unique_id, self.config_entry.options)
         if user_input is not None:
             model = user_input.get(CONF_CHAT_MODEL_USER)
             if not model or not model.strip():
@@ -212,8 +227,7 @@ def common_config_option_schema(
         options = DEFAULT_OPTIONS
 
     hass_apis: list[selector.SelectOptionDict] = [
-        selector.SelectOptionDict(value=api.id, label=api.name)
-        for api in llm.async_get_apis(hass)
+        selector.SelectOptionDict(value=api.id, label=api.name) for api in llm.async_get_apis(hass)
     ]
 
     schema = vol.Schema(
@@ -245,18 +259,12 @@ def common_config_option_schema(
             ),
             vol.Optional(
                 CONF_PROMPT,
-                description={
-                    "suggested_value": options.get(CONF_PROMPT, DEFAULT_PROMPT)
-                },
+                description={"suggested_value": options.get(CONF_PROMPT, DEFAULT_PROMPT)},
                 default=DEFAULT_PROMPT,
             ): TemplateSelector(),
             vol.Optional(
                 CONF_TEMPERATURE,
-                description={
-                    "suggested_value": options.get(
-                        CONF_TEMPERATURE, DEFAULT_TEMPERATURE
-                    )
-                },
+                description={"suggested_value": options.get(CONF_TEMPERATURE, DEFAULT_TEMPERATURE)},
                 default=DEFAULT_TEMPERATURE,
             ): NumberSelector(NumberSelectorConfig(min=0, max=1, step=0.05)),
             vol.Optional(
@@ -276,9 +284,7 @@ def common_config_option_schema(
             vol.Optional(
                 CONF_CHAT_HISTORY,
                 description={
-                    "suggested_value": options.get(
-                        CONF_CHAT_HISTORY, DEFAULT_CHAT_HISTORY
-                    )
+                    "suggested_value": options.get(CONF_CHAT_HISTORY, DEFAULT_CHAT_HISTORY)
                 },
                 default=DEFAULT_CHAT_HISTORY,
             ): bool,
@@ -289,19 +295,13 @@ def common_config_option_schema(
             {
                 vol.Optional(
                     CONF_PROFANITY,
-                    description={
-                        "suggested_value": options.get(
-                            CONF_PROFANITY, DEFAULT_PROFANITY
-                        )
-                    },
+                    description={"suggested_value": options.get(CONF_PROFANITY, DEFAULT_PROFANITY)},
                     default=DEFAULT_PROFANITY,
                 ): bool,
                 vol.Optional(
                     CONF_VERIFY_SSL,
                     description={
-                        "suggested_value": options.get(
-                            CONF_VERIFY_SSL, DEFAULT_VERIFY_SSL
-                        )
+                        "suggested_value": options.get(CONF_VERIFY_SSL, DEFAULT_VERIFY_SSL)
                     },
                     default=DEFAULT_VERIFY_SSL,
                 ): bool,

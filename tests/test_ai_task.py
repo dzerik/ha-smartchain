@@ -66,10 +66,7 @@ def ai_task_entity(mock_llm_client):
 async def test_ai_task_entity_init(ai_task_entity) -> None:
     """Test AI Task entity initialization."""
     assert ai_task_entity._attr_unique_id == "test_entry_ai_task"
-    assert (
-        ai_task_entity._attr_supported_features
-        == ai_task.AITaskEntityFeature.GENERATE_DATA
-    )
+    assert ai_task_entity._attr_supported_features == ai_task.AITaskEntityFeature.GENERATE_DATA
     assert ai_task_entity._attr_has_entity_name is True
 
 
