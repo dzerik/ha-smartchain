@@ -121,8 +121,8 @@ class SmartChainConversationEntity(ConversationEntity):
             default_response = await default_agent.async_process(user_input)
 
             if default_response.response.intent:
-                speech = (
-                    default_response.response.speech.get("plain", {}).get("speech", "")
+                speech = default_response.response.speech.get("plain", {}).get(
+                    "speech", ""
                 )
                 chat_log.async_add_assistant_content_without_tools(
                     AssistantContent(
@@ -141,9 +141,7 @@ class SmartChainConversationEntity(ConversationEntity):
         bound_client = client.bind_tools(tools) if tools else client
 
         for _iteration in range(MAX_TOOL_ITERATIONS):
-            chat_history_enabled = options.get(
-                CONF_CHAT_HISTORY, DEFAULT_CHAT_HISTORY
-            )
+            chat_history_enabled = options.get(CONF_CHAT_HISTORY, DEFAULT_CHAT_HISTORY)
             if chat_history_enabled:
                 messages = _chatlog_to_langchain(chat_log)
             else:

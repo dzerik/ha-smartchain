@@ -210,7 +210,7 @@ async def test_handle_message_llm_error(
 
     async def _error_stream(messages):
         raise RuntimeError("API Error")
-        yield  # noqa: unreachable - makes this an async generator
+        yield  # noqa: F841
 
     entity.entry.runtime_data.astream = MagicMock(side_effect=_error_stream)
 
@@ -292,9 +292,7 @@ async def test_handle_message_builtin_recognized(
     assert result.response is mock_intent_response
 
 
-async def test_supported_languages(
-    hass: HomeAssistant, entity
-) -> None:
+async def test_supported_languages(hass: HomeAssistant, entity) -> None:
     """Test that supported_languages returns a list."""
     languages = entity.supported_languages
     assert isinstance(languages, list)
@@ -429,9 +427,11 @@ def test_ha_tool_to_dict() -> None:
     class MockTool(llm.Tool):
         name = "HassTurnOn"
         description = "Turn on a device"
-        parameters = vol.Schema({
-            vol.Required("entity_id"): str,
-        })
+        parameters = vol.Schema(
+            {
+                vol.Required("entity_id"): str,
+            }
+        )
 
         async def async_call(self, hass, tool_input, llm_context):
             return {"success": True}
@@ -453,7 +453,11 @@ async def test_async_langchain_stream_with_tool_calls() -> None:
         yield AIMessageChunk(
             content="",
             tool_calls=[
-                {"id": "call_1", "name": "HassTurnOn", "args": {"entity_id": "light.kitchen"}},
+                {
+                    "id": "call_1",
+                    "name": "HassTurnOn",
+                    "args": {"entity_id": "light.kitchen"},
+                },
             ],
         )
 

@@ -7,17 +7,27 @@ from langchain_community.chat_models import ChatYandexGPT
 from langchain_gigachat import GigaChat
 from langchain_openai import ChatOpenAI
 
-from .const import (CONF_API_KEY, CONF_ENGINE, CONF_FOLDER_ID, CONF_PROFANITY,
-                    CONF_SKIP_VALIDATION, CONF_VERIFY_SSL, DEFAULT_PROFANITY,
-                    DEFAULT_VERIFY_SSL, ID_GIGACHAT,
-                    ID_YANDEX_GPT, ID_OPENAI, DEFAULT_MODEL)
+from .const import (
+    CONF_API_KEY,
+    CONF_ENGINE,
+    CONF_FOLDER_ID,
+    CONF_PROFANITY,
+    CONF_SKIP_VALIDATION,
+    CONF_VERIFY_SSL,
+    DEFAULT_PROFANITY,
+    DEFAULT_VERIFY_SSL,
+    ID_GIGACHAT,
+    ID_YANDEX_GPT,
+    ID_OPENAI,
+    DEFAULT_MODEL,
+)
 
 LOGGER = logging.getLogger(__name__)
 
 
 async def validate_client(
-        hass: HomeAssistant,
-        user_input: dict,
+    hass: HomeAssistant,
+    user_input: dict,
 ) -> None:
     """Validate LLM client connection."""
     if user_input.get(CONF_SKIP_VALIDATION):
@@ -47,16 +57,20 @@ async def validate_client(
 
 
 async def get_client(
-        hass: HomeAssistant,
-        engine: str,
-        entry: ConfigEntry,
-        common_args: dict,
+    hass: HomeAssistant,
+    engine: str,
+    entry: ConfigEntry,
+    common_args: dict,
 ):
     """Create LLM client based on engine type."""
     if engine == ID_GIGACHAT:
         common_args["credentials"] = entry.data[CONF_API_KEY]
-        common_args["verify_ssl_certs"] = entry.options.get(CONF_VERIFY_SSL, DEFAULT_VERIFY_SSL)
-        common_args["profanity_check"] = entry.options.get(CONF_PROFANITY, DEFAULT_PROFANITY)
+        common_args["verify_ssl_certs"] = entry.options.get(
+            CONF_VERIFY_SSL, DEFAULT_VERIFY_SSL
+        )
+        common_args["profanity_check"] = entry.options.get(
+            CONF_PROFANITY, DEFAULT_PROFANITY
+        )
         client = GigaChat(**common_args)
     elif engine == ID_YANDEX_GPT:
         common_args["api_key"] = entry.data[CONF_API_KEY]
