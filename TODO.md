@@ -21,7 +21,7 @@
 - [x] v1.4 Multi-agent — Dispatcher + specialized agents (tool-based delegation)
 - [x] v1.5 smartchain.ask service — for Telegram/Slack/automation use
 - [ ] v1.6 STT/TTS — Yandex SpeechKit, full voice pipeline
-- [ ] v1.7 Skill system — loadable skills from YAML
+- [x] v1.7 Skill system — loadable skills from YAML
 - [ ] v1.8 Prompt caching — token savings on repeated requests
 
 ## Technical debt
