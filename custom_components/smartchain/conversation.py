@@ -1,8 +1,10 @@
 """Conversation entity for SmartChain integration."""
 
+import base64
 import json
 import logging
 from collections.abc import AsyncIterable
+from pathlib import Path
 from typing import Any, Literal
 
 import voluptuous_openapi
@@ -16,6 +18,7 @@ from homeassistant.components.conversation import (
 )
 from homeassistant.components.conversation.chat_log import (
     AssistantContent,
+    Attachment,
     SystemContent,
     ToolResultContent,
     UserContent,
@@ -212,6 +215,38 @@ class SmartChainConversationEntity(ConversationEntity):
         return conversation.async_get_result_from_chat_log(user_input, chat_log)
 
 
+def _attachment_to_base64(attachment: Attachment) -> str | None:
+    """Read an attachment file and return base64-encoded data URL."""
+    path = Path(attachment.path)
+    if not path.exists():
+        LOGGER.warning("Attachment file not found: %s", path)
+        return None
+
+    try:
+        image_data = path.read_bytes()
+    except OSError as err:
+        LOGGER.warning("Failed to read attachment %s: %s", path, err)
+        return None
+
+    # Optional: compress large images with PyTurboJPEG
+    mime = attachment.mime_type or "image/jpeg"
+    if mime.startswith("image/") and len(image_data) > 512 * 1024:
+        try:
+            from turbojpeg import TurboJPEG
+
+            jpeg = TurboJPEG()
+            image_data = jpeg.encode(
+                jpeg.decode(image_data),
+                quality=80,
+            )
+            mime = "image/jpeg"
+        except Exception:
+            pass  # Use original image if compression fails
+
+    encoded = base64.b64encode(image_data).decode("utf-8")
+    return f"data:{mime};base64,{encoded}"
+
+
 def _chatlog_to_langchain(chat_log: ChatLog) -> list[BaseMessage]:
     """Convert ChatLog content to LangChain message list."""
     messages: list[BaseMessage] = []
@@ -219,7 +254,19 @@ def _chatlog_to_langchain(chat_log: ChatLog) -> list[BaseMessage]:
         if isinstance(content, SystemContent):
             messages.append(SystemMessage(content=content.content))
         elif isinstance(content, UserContent):
-            messages.append(HumanMessage(content=content.content))
+            if content.attachments:
+                # Multimodal message: text + images
+                parts: list[dict[str, Any]] = []
+                if content.content:
+                    parts.append({"type": "text", "text": content.content})
+                for att in content.attachments:
+                    if att.mime_type and att.mime_type.startswith("image/"):
+                        data_url = _attachment_to_base64(att)
+                        if data_url:
+                            parts.append({"type": "image_url", "image_url": {"url": data_url}})
+                messages.append(HumanMessage(content=parts if parts else content.content))
+            else:
+                messages.append(HumanMessage(content=content.content))
         elif isinstance(content, AssistantContent):
             if content.tool_calls:
                 tool_calls = [
