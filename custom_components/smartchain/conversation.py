@@ -3,6 +3,7 @@
 import base64
 import json
 import logging
+import time
 from collections.abc import AsyncIterable
 from pathlib import Path
 from typing import Any, Literal
@@ -59,6 +60,7 @@ from .history_tool import execute_history_tool, get_history_tool_definition
 from .skills import load_skills, skills_to_prompt
 
 LOGGER = logging.getLogger(__name__)
+PROMPT_CACHE_TTL = 30  # seconds
 
 
 async def async_setup_entry(
@@ -115,6 +117,9 @@ class SmartChainConversationEntity(ConversationEntity):
         self._subentry_id = subentry_id
         self._options = options or {}
         self._skills_prompt: str | None = None
+        self._prompt_cache: str | None = None
+        self._prompt_cache_key: str | None = None
+        self._prompt_cache_time: float = 0.0
 
         if subentry_id:
             self._attr_unique_id = f"{entry.entry_id}_{subentry_id}"
@@ -156,6 +161,25 @@ class SmartChainConversationEntity(ConversationEntity):
         """Return mapping of agent_name -> subentry_id for delegation."""
         return {a["name"]: a["sub_id"] for a in self._sibling_agents}
 
+    def _render_prompt_cached(self, raw_prompt: str) -> str:
+        """Render Jinja2 prompt with TTL cache to avoid repeated template rendering."""
+        now = time.monotonic()
+        if (
+            self._prompt_cache is not None
+            and self._prompt_cache_key == raw_prompt
+            and (now - self._prompt_cache_time) < PROMPT_CACHE_TTL
+        ):
+            return self._prompt_cache
+
+        rendered = template.Template(raw_prompt, self.hass).async_render(
+            {"ha_name": self.hass.config.location_name},
+            parse_result=False,
+        )
+        self._prompt_cache = rendered
+        self._prompt_cache_key = raw_prompt
+        self._prompt_cache_time = now
+        return rendered
+
     def _get_skills_prompt(self) -> str:
         """Return cached skills prompt text."""
         if self._skills_prompt is None:
@@ -190,10 +214,7 @@ class SmartChainConversationEntity(ConversationEntity):
                 return err.as_conversation_result()
         else:
             raw_prompt = user_prompt + DEFAULT_DEVICES_PROMPT
-            prompt = template.Template(raw_prompt, self.hass).async_render(
-                {"ha_name": self.hass.config.location_name},
-                parse_result=False,
-            )
+            prompt = self._render_prompt_cached(raw_prompt)
             chat_log.content[0] = SystemContent(content=prompt)
 
         # Append skills prompt to system message
