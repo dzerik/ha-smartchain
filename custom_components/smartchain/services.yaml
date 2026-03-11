@@ -20,7 +20,10 @@ ask:
 
 analyze_image:
   name: Analyze Camera Image
-  description: Send a camera snapshot to SmartChain LLM for visual analysis. Supports GigaChat 2.0, OpenAI GPT-4o, Anthropic Claude, Ollama (LLaVA/Gemma Vision).
+  description: >
+    Send a camera snapshot to SmartChain LLM for visual analysis.
+    Also fires a smartchain_image_analyzed event and updates sensor.smartchain_last_analysis.
+    Supports GigaChat 2.0, OpenAI GPT-4o, Anthropic Claude, Ollama (LLaVA/Gemma Vision).
   fields:
     message:
       name: Message
@@ -45,3 +48,11 @@ analyze_image:
       selector:
         entity:
           domain: conversation
+    notify_entity:
+      name: Notification Entity
+      description: Send the LLM response as a notification (optional)
+      required: false
+      example: "notify.mobile_app_phone"
+      selector:
+        entity:
+          domain: notify

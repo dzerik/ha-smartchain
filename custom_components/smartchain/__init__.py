@@ -8,6 +8,7 @@ from homeassistant.components.camera import async_get_image
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse
+from homeassistant.util import dt as dt_util
 from langchain_core.messages import HumanMessage
 
 from .client_util import get_client
@@ -75,8 +76,12 @@ SERVICE_ANALYZE_IMAGE_SCHEMA = vol.Schema(
         vol.Required("message"): str,
         vol.Required("camera_entity_id"): str,
         vol.Optional("entity_id"): str,
+        vol.Optional("notify_entity"): str,
     }
 )
+
+SENSOR_LAST_ANALYSIS = f"sensor.{DOMAIN}_last_analysis"
+EVENT_IMAGE_ANALYZED = f"{DOMAIN}_image_analyzed"
 
 
 def _find_client(hass: HomeAssistant, entity_id: str | None = None):
@@ -147,10 +152,53 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
         try:
             result = await client.ainvoke([HumanMessage(content=multimodal_content)])
-            return {"response": result.content}
+            response_text = result.content
         except Exception as err:
             LOGGER.exception("SmartChain analyze_image error: %s", err)
             return {"response": f"Error: {err}"}
+
+        now = dt_util.utcnow().isoformat()
+        event_data = {
+            "response": response_text,
+            "camera_entity_id": camera_entity_id,
+            "message": message,
+            "timestamp": now,
+        }
+
+        # 1. Fire event
+        hass.bus.async_fire(EVENT_IMAGE_ANALYZED, event_data)
+
+        # 2. Update sensor
+        hass.states.async_set(
+            SENSOR_LAST_ANALYSIS,
+            response_text[:255],
+            {
+                "camera_entity_id": camera_entity_id,
+                "message": message,
+                "full_response": response_text,
+                "timestamp": now,
+                "friendly_name": "SmartChain Last Analysis",
+                "icon": "mdi:camera-iris",
+            },
+        )
+
+        # 3. Send notification (optional)
+        notify_entity = call.data.get("notify_entity")
+        if notify_entity:
+            try:
+                await hass.services.async_call(
+                    "notify",
+                    "send_message",
+                    {
+                        "entity_id": notify_entity,
+                        "message": response_text,
+                        "title": f"SmartChain: {camera_entity_id}",
+                    },
+                )
+            except Exception as err:
+                LOGGER.warning("Failed to send notification to %s: %s", notify_entity, err)
+
+        return {"response": response_text}
 
     hass.services.async_register(
         DOMAIN,
