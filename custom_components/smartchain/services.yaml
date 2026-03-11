@@ -61,8 +61,9 @@ generate_automation:
   name: Generate Automation
   description: >
     Describe an automation in natural language and SmartChain will generate
-    valid Home Assistant automation YAML using an LLM. Optionally deploy
-    it directly to Home Assistant.
+    valid Home Assistant automation YAML using an LLM. The prompt is enriched
+    with real HA entities, areas, and devices for accurate entity_id references.
+    Optionally deploy it directly to Home Assistant.
   fields:
     description:
       name: Description
@@ -80,6 +81,17 @@ generate_automation:
       selector:
         entity:
           domain: conversation
+    entity_ids:
+      name: Target Entities
+      description: >
+        Specific HA entities to include in the LLM context. If not provided,
+        all available entities are included (up to a limit). Use this to focus
+        the LLM on specific devices.
+      required: false
+      example: '["light.kitchen", "switch.coffee_machine", "person.john"]'
+      selector:
+        entity:
+          multiple: true
     deploy:
       name: Deploy
       description: Automatically deploy the generated automation to Home Assistant
@@ -93,13 +105,27 @@ deploy_automation:
   name: Deploy Automation
   description: >
     Deploy raw automation YAML directly to Home Assistant.
-    Writes to .storage/automations and triggers reload.
+    Validates the YAML before writing to automations.yaml and triggers reload.
   fields:
     automation_yaml:
       name: Automation YAML
       description: Valid Home Assistant automation YAML to deploy
       required: true
       example: "alias: Test\ntrigger:\n  - platform: time\n    at: '07:00:00'\naction:\n  - service: light.turn_on\n    target:\n      entity_id: light.kitchen"
+      selector:
+        text:
+          multiline: true
+
+validate_automation:
+  name: Validate Automation
+  description: >
+    Validate automation YAML without deploying. Checks structure (required keys),
+    entity_id existence, and service availability.
+  fields:
+    automation_yaml:
+      name: Automation YAML
+      description: The automation YAML to validate
+      required: true
       selector:
         text:
           multiline: true
