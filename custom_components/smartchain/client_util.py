@@ -190,6 +190,7 @@ async def _fetch_ollama_models(hass: HomeAssistant, data: dict) -> list[str]:
         f"{base_url}/api/tags",
         timeout=aiohttp.ClientTimeout(total=10),
     )
+    resp.raise_for_status()
     result = await resp.json()
     return sorted(m["name"] for m in result.get("models", []))
 
@@ -206,6 +207,7 @@ async def _fetch_openai_compatible_models(hass: HomeAssistant, data: dict, url: 
         headers=headers,
         timeout=aiohttp.ClientTimeout(total=10),
     )
+    resp.raise_for_status()
     result = await resp.json()
     return sorted(m["id"] for m in result.get("data", []))
 
@@ -225,6 +227,7 @@ async def _fetch_anthropic_models(hass: HomeAssistant, data: dict) -> list[str]:
         headers=headers,
         timeout=aiohttp.ClientTimeout(total=10),
     )
+    resp.raise_for_status()
     result = await resp.json()
     return sorted(m["id"] for m in result.get("data", []))
 

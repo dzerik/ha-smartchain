@@ -9,21 +9,24 @@
 [![HACS](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://hacs.xyz)
 [![GitHub release](https://img.shields.io/github/v/release/dzerik/ha-smartchain)](https://github.com/dzerik/ha-smartchain/releases)
 
-> **⚠️ Early pre-alpha.** This project is in a very early stage of development. It is almost certainly non-functional or barely functional. Use at your own risk — expect breaking changes, missing features, and bugs. Contributions and bug reports are welcome!
-
 ## Overview
 
-SmartChain is a Home Assistant custom integration that provides an intelligent voice/conversation assistant powered by multiple LLM providers through LangChain:
+SmartChain is a Home Assistant custom integration that provides an intelligent voice/conversation assistant powered by multiple LLM providers through LangChain. Beyond conversation, it includes a built-in AI panel for generating, editing, and deploying automations directly from natural language.
 
-- **GigaChat** (Sber) — Russian-focused LLM
+Supported providers:
+
+- **GigaChat** (Sber) — Russian-focused LLM with vision support
 - **YandexGPT** — Yandex Cloud LLM
 - **OpenAI** — GPT-4.1, GPT-4o, o3, o4-mini
 - **Ollama** — local models (Llama, Qwen, Gemma, T-Pro, DeepSeek, Home-3B)
 - **DeepSeek** — cheapest cloud provider (V3, R1)
 - **Anthropic** — Claude (Sonnet, Haiku, Opus)
 
+![SmartChain AI Panel](img.png)
+
 ### Key Features
 
+**Conversation**
 - **6 LLM providers** — cloud and local, switch without losing configuration
 - **Multiple agents** — different models and prompts per provider (sub-entries)
 - **Streaming responses** — real-time token-by-token output
@@ -33,16 +36,31 @@ SmartChain is a Home Assistant custom integration that provides an intelligent v
 - **MCP servers** — connect external tools via Model Context Protocol
 - **Vision** — camera image analysis via multimodal models
 - **Skill system** — loadable YAML files with additional knowledge
-- **Automation service** — `smartchain.ask` for Telegram, Slack, etc.
-- **AI Task entity** — structured data generation in automations
 - **Prompt caching** — token savings on repeated requests
 - **Chat history** — multi-turn conversations with context
 - **Jinja2 templates** — customizable system prompt with device context
 
+**Services**
+- **`smartchain.ask`** — send a message to LLM from automations (Telegram, Slack, etc.)
+- **`smartchain.analyze_image`** — camera snapshot → multimodal LLM → response
+- **`smartchain.generate_automation`** — natural language → HA automation/script/scene/blueprint YAML
+- **`smartchain.deploy_automation`** — deploy generated YAML to HA configuration files
+- **`smartchain.list_yaml`** — list existing automations, scripts, scenes, or blueprints
+- **`smartchain.get_yaml`** — retrieve the YAML source of any existing HA item
+- **AI Task entity** — structured data generation for automations
+
+**SmartChain AI Panel**
+- Sidebar panel with Generate and Analyze tabs
+- Generate automations, scripts, scenes, and blueprints from text descriptions
+- Edit and improve existing YAML with AI assistance
+- Entity picker and agent selector built in
+- YAML validation (structure, entity IDs, services) before deploy
+- Browse and load existing HA items into the editor
+
 ## Installation
 
 ### Requirements
-- Home Assistant 2025.3+ (for AI Task, otherwise 2024.12+)
+- Home Assistant 2024.12.0+
 - [HACS](https://hacs.xyz/) installed
 
 ### Install via HACS
@@ -75,6 +93,11 @@ SmartChain is a Home Assistant custom integration that provides an intelligent v
 ### 4. Activate Assistant
 **Settings > Voice Assistants > Add** — select your SmartChain entity as the conversation agent.
 
+### 5. Open SmartChain AI Panel
+Click **SmartChain AI** in the Home Assistant sidebar to access the automation generation panel.
+
+![SmartChain AI Panel - Analyze Camera](img_1.png)
+
 ## Documentation
 
 Full user guide with all features:
@@ -87,7 +110,12 @@ Topics:
 - MCP servers
 - Vision (camera image analysis)
 - Skill system (YAML)
+- SmartChain AI Panel (automation generation, camera analysis)
 - `smartchain.ask` service (Telegram, Slack)
+- `smartchain.analyze_image` service
+- `smartchain.generate_automation` service
+- Deploy and validate generated YAML
+- Edit and improve existing automations
 - AI Task for automations
 - System prompt customization
 - Parameter and model reference

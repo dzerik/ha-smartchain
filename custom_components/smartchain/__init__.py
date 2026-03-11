@@ -1,5 +1,6 @@
 """The SmartChain integration."""
 
+import asyncio
 import base64
 import logging
 import re
@@ -130,7 +131,7 @@ SERVICE_GET_YAML = "get_yaml"
 SERVICE_GET_YAML_SCHEMA = vol.Schema(
     {
         vol.Required("type"): vol.In(VALID_GEN_TYPES),
-        vol.Required("id"): str,
+        vol.Required("id"): vol.All(str, vol.Match(r"^[a-zA-Z0-9_./\- ]+$")),
     }
 )
 
@@ -455,6 +456,8 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
             yaml_text = "\n".join(lines).strip()
         return yaml_text
 
+    _deploy_lock = asyncio.Lock()
+
     async def _deploy_automation_to_ha(yaml_text: str, gen_type: str = "automation") -> dict:
         """Deploy YAML to HA (automations.yaml, scripts.yaml, scenes.yaml, or blueprints/)."""
         config = yaml.safe_load(yaml_text)
@@ -499,7 +502,8 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
                     sort_keys=False,
                 )
 
-        await hass.async_add_executor_job(_write)
+        async with _deploy_lock:
+            await hass.async_add_executor_job(_write)
 
         # Reload — register service if not available (test env)
         if hass.services.has_service(domain, "reload"):
@@ -526,7 +530,8 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
                 f.write(yaml_text)
             return str(bp_path)
 
-        bp_path = await hass.async_add_executor_job(_write)
+        async with _deploy_lock:
+            bp_path = await hass.async_add_executor_job(_write)
         return {"deployed": True, "alias": alias, "blueprint_path": bp_path}
 
     def _list_yaml_items(gen_type: str | None = None) -> list[dict]:
@@ -580,7 +585,12 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     def _get_yaml_item(gen_type: str, item_id: str) -> str | None:
         """Get YAML content for a specific item by type and id."""
         if gen_type == "blueprint":
-            bp_path = Path(hass.config.path("blueprints", "automation")) / item_id
+            bp_base = Path(hass.config.path("blueprints", "automation"))
+            bp_path = (bp_base / item_id).resolve()
+            # Prevent path traversal — resolved path must be under bp_base
+            if not str(bp_path).startswith(str(bp_base.resolve())):
+                LOGGER.warning("Path traversal attempt blocked: %s", item_id)
+                return None
             if not bp_path.is_file():
                 return None
             with open(bp_path, encoding="utf-8") as f:
@@ -651,6 +661,11 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
         if deploy:
             try:
+                validation = _validate_automation_config(hass, yaml_text, gen_type)
+                if not validation["valid"]:
+                    response["error"] = "Validation failed: " + "; ".join(validation["errors"])
+                    response["validation"] = validation
+                    return response
                 deploy_result = await _deploy_automation_to_ha(yaml_text, gen_type)
                 response.update(deploy_result)
             except Exception as err:
