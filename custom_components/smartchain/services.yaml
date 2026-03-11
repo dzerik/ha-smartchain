@@ -56,3 +56,27 @@ analyze_image:
       selector:
         entity:
           domain: notify
+
+generate_automation:
+  name: Generate Automation
+  description: >
+    Describe an automation in natural language and SmartChain will generate
+    valid Home Assistant automation YAML using an LLM. The generated YAML
+    is returned in the response and can be copied to automations.yaml.
+  fields:
+    description:
+      name: Description
+      description: Natural language description of the desired automation
+      required: true
+      example: "Turn on the coffee machine at 7:00 AM on weekdays if I'm home"
+      selector:
+        text:
+          multiline: true
+    entity_id:
+      name: Agent Entity
+      description: The conversation agent entity to use (optional, uses first available if not specified)
+      required: false
+      example: "conversation.smartchain_gigachat"
+      selector:
+        entity:
+          domain: conversation

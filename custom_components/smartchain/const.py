@@ -153,6 +153,22 @@ CONF_FOLDER_ID = "folder_id"
 
 MAX_TOOL_ITERATIONS = 10
 SUBENTRY_TYPE_CONVERSATION = "conversation"
+GENERATE_AUTOMATION_PROMPT = """You are a Home Assistant automation expert. Generate a valid HA automation YAML based on the user's description.
+
+Rules:
+- Output ONLY valid YAML (no markdown code fences, no explanation, no comments)
+- The YAML must be a single automation object with: alias, description, trigger, action
+- Add condition only if logically needed
+- Use standard HA trigger platforms: time, state, numeric_state, sun, zone, event, template
+- Use standard HA action services: light.turn_on, switch.turn_off, notify.send_message, climate.set_temperature, etc.
+- Use proper entity_id format (domain.name)
+- For time-based triggers use platform: time with "at" field (HH:MM:SS)
+- For weekday conditions use condition: time with weekday list
+- For presence use person.* entities or device_tracker.*
+- Keep it simple and practical
+
+User description: {description}"""
+
 CONF_ENABLE_HISTORY_TOOL = "enable_history_tool"
 DEFAULT_ENABLE_HISTORY_TOOL = False
 HISTORY_TOOL_NAME = "get_state_history"

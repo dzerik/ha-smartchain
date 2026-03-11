@@ -1,6 +1,6 @@
 # SmartChain — Конкурентный анализ и точки роста
 
-Дата: 2026-03-11 | Версия: 2.0.0
+Дата: 2026-03-11 | Версия: 2.2.0
 
 ## Оглавление
 
@@ -59,14 +59,16 @@
 - **Timeline** — хранит историю событий камер
 - **Распознавание** — люди, номерные знаки, объекты
 
-#### SmartChain (наш, v2.0.0)
+#### SmartChain (наш, v2.2.0)
 - 6 LLM провайдеров через LangChain (GigaChat, YandexGPT, OpenAI, Ollama, DeepSeek, Anthropic)
 - Assist API + tool calling + streaming
 - AI Task entity, sub-entries
 - Vision: multimodal attachments + `analyze_image` сервис для камер
+- `generate_automation` — генерация автоматизаций HA через LLM на естественном языке
+- Blueprint: Camera Security Guard (motion → analyze → filter → notify)
 - Skill-система, история состояний, multi-agent delegation
 - Голосовой пайплайн: GigaAM (STT) + Silero (TTS)
-- 114 тестов
+- 123 теста
 
 ---
 
@@ -84,7 +86,7 @@
 | Vision (attachments) | + (OpenAI, Gemini) | - | - | - | **+** | **+** |
 | Vision (camera service) | - | - | - | - | **+** | **+** |
 | MCP | + | - | - | - | - | - |
-| Генерация автоматизаций | - | + | - | - | - | - |
+| Генерация автоматизаций | - | + | - | - | - | **+** |
 | Continuous camera monitoring | - | - | - | - | **+** | - |
 | Frigate event analysis | - | - | - | - | **+** | - |
 | Timeline (история камер) | - | - | - | - | **+** | - |
@@ -101,8 +103,7 @@
 
 ### Где отстаём
 - **MCP** — есть у всех official, нет у нас
-- **Continuous camera monitoring** — LLM Vision делает это лучше
-- **Генерация автоматизаций** — Extended OpenAI умеет
+- **Continuous camera monitoring** — LLM Vision делает это лучше (timeline, Frigate events)
 - **Proactive intelligence** — нет ни у кого, но это будущее
 
 ---
@@ -213,13 +214,14 @@ LLM как постоянный фоновый процесс с полным к
 
 ## 6. Стратегическое позиционирование
 
-### УТП (Unique Selling Proposition) v2.0
+### УТП (Unique Selling Proposition) v2.2
 
 SmartChain — **единственная** HA интеграция, которая:
 1. Объединяет **6 LLM провайдеров** (включая российские) в одном компоненте
 2. Поддерживает **полный vision pipeline** (камера → LLM → действие) через сервис
-3. Имеет **русскоязычный голосовой пайплайн** (GigaAM STT + Silero TTS)
-4. Работает через **LangChain** — легко добавлять новых провайдеров и возможности
+3. **Генерирует автоматизации HA** на естественном языке через любого LLM-провайдера
+4. Имеет **русскоязычный голосовой пайплайн** (GigaAM STT + Silero TTS)
+5. Работает через **LangChain** — легко добавлять новых провайдеров и возможности
 
 ### Сильные стороны
 - Мультипровайдерность (6 in 1)

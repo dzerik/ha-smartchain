@@ -20,6 +20,7 @@ from .const import (
     CONF_TEMPERATURE,
     DEFAULT_TEMPERATURE,
     DOMAIN,
+    GENERATE_AUTOMATION_PROMPT,
     ID_GIGACHAT,
     SUBENTRY_TYPE_CONVERSATION,
 )
@@ -77,6 +78,14 @@ SERVICE_ANALYZE_IMAGE_SCHEMA = vol.Schema(
         vol.Required("camera_entity_id"): str,
         vol.Optional("entity_id"): str,
         vol.Optional("notify_entity"): str,
+    }
+)
+
+SERVICE_GENERATE_AUTOMATION = "generate_automation"
+SERVICE_GENERATE_AUTOMATION_SCHEMA = vol.Schema(
+    {
+        vol.Required("description"): str,
+        vol.Optional("entity_id"): str,
     }
 )
 
@@ -207,6 +216,30 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
         return {"response": response_text}
 
+    async def _handle_generate_automation(call: ServiceCall) -> ServiceResponse:
+        """Handle smartchain.generate_automation service call."""
+        description = call.data["description"]
+        entity_id = call.data.get("entity_id")
+
+        client = _find_client(hass, entity_id)
+        if not client:
+            return {"automation_yaml": "", "error": "No SmartChain agent available."}
+
+        prompt = GENERATE_AUTOMATION_PROMPT.format(description=description)
+
+        try:
+            result = await client.ainvoke([HumanMessage(content=prompt)])
+            yaml_text = result.content.strip()
+            # Strip markdown code fences if LLM wraps output
+            if yaml_text.startswith("```"):
+                lines = yaml_text.split("\n")
+                lines = [line for line in lines if not line.startswith("```")]
+                yaml_text = "\n".join(lines).strip()
+            return {"automation_yaml": yaml_text}
+        except Exception as err:
+            LOGGER.exception("SmartChain generate_automation error: %s", err)
+            return {"automation_yaml": "", "error": str(err)}
+
     hass.services.async_register(
         DOMAIN,
         SERVICE_ASK,
@@ -219,6 +252,13 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         SERVICE_ANALYZE_IMAGE,
         _handle_analyze_image,
         schema=SERVICE_ANALYZE_IMAGE_SCHEMA,
+        supports_response=SupportsResponse.ONLY,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_GENERATE_AUTOMATION,
+        _handle_generate_automation,
+        schema=SERVICE_GENERATE_AUTOMATION_SCHEMA,
         supports_response=SupportsResponse.ONLY,
     )
     return True
