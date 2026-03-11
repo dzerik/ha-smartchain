@@ -36,17 +36,21 @@ from langchain_core.messages import (
 
 from .const import (
     CONF_CHAT_HISTORY,
+    CONF_ENABLE_HISTORY_TOOL,
     CONF_LLM_HASS_API,
     CONF_PROCESS_BUILTIN_SENTENCES,
     CONF_PROMPT,
     DEFAULT_CHAT_HISTORY,
     DEFAULT_DEVICES_PROMPT,
+    DEFAULT_ENABLE_HISTORY_TOOL,
     DEFAULT_PROCESS_BUILTIN_SENTENCES,
     DEFAULT_PROMPT,
     DOMAIN,
+    HISTORY_TOOL_NAME,
     MAX_TOOL_ITERATIONS,
     SUBENTRY_TYPE_CONVERSATION,
 )
+from .history_tool import execute_history_tool, get_history_tool_definition
 
 LOGGER = logging.getLogger(__name__)
 
@@ -177,9 +181,15 @@ class SmartChainConversationEntity(ConversationEntity):
                 return default_response
 
         client = self._client
-        tools = (
+        tools: list[dict[str, Any]] = (
             [_ha_tool_to_dict(tool) for tool in chat_log.llm_api.tools] if chat_log.llm_api else []
         )
+
+        # Add history tool if enabled
+        history_enabled = options.get(CONF_ENABLE_HISTORY_TOOL, DEFAULT_ENABLE_HISTORY_TOOL)
+        if history_enabled:
+            tools.append(get_history_tool_definition())
+
         bound_client = client.bind_tools(tools) if tools else client
 
         for _iteration in range(MAX_TOOL_ITERATIONS):
@@ -208,6 +218,10 @@ class SmartChainConversationEntity(ConversationEntity):
                 return ConversationResult(
                     conversation_id=chat_log.conversation_id, response=response
                 )
+
+            # Handle custom history tool calls (marked as external)
+            if history_enabled:
+                await _handle_history_tool_calls(self.hass, chat_log, user_input.agent_id)
 
             if not chat_log.unresponded_tool_results:
                 break
@@ -296,6 +310,36 @@ def _chatlog_to_langchain(chat_log: ChatLog) -> list[BaseMessage]:
     return messages
 
 
+async def _handle_history_tool_calls(hass, chat_log: ChatLog, agent_id: str) -> None:
+    """Execute pending history tool calls and add results to chat_log."""
+    for content in chat_log.content:
+        if not isinstance(content, AssistantContent) or not content.tool_calls:
+            continue
+        for tc in content.tool_calls:
+            if tc.tool_name != HISTORY_TOOL_NAME or not tc.external:
+                continue
+            # Check if result already exists
+            has_result = any(
+                isinstance(c, ToolResultContent) and c.tool_call_id == tc.id
+                for c in chat_log.content
+            )
+            if has_result:
+                continue
+            result = await execute_history_tool(
+                hass,
+                tc.tool_args.get("entity_id", ""),
+                tc.tool_args.get("hours", 1.0),
+            )
+            chat_log.async_add_assistant_content_without_tools(
+                ToolResultContent(
+                    agent_id=agent_id,
+                    tool_call_id=tc.id,
+                    tool_name=HISTORY_TOOL_NAME,
+                    tool_result=result,
+                )
+            )
+
+
 async def _async_langchain_stream(
     client: Any, messages: list[BaseMessage]
 ) -> AsyncIterable[dict[str, Any]]:
@@ -315,6 +359,7 @@ async def _async_langchain_stream(
                     tool_name=tc["name"],
                     tool_args=tc["args"],
                     id=tc["id"],
+                    external=(tc["name"] == HISTORY_TOOL_NAME),
                 )
                 for tc in chunk.tool_calls
             ]

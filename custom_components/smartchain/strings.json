@@ -77,7 +77,8 @@
           "profanity": "Profanity",
           "verify_ssl": "Verify SSL Certificates",
           "process_builtin_sentences": "Process HA Builtin Sentences",
-          "chat_history": "Chat History"
+          "chat_history": "Chat History",
+          "enable_history_tool": "State History Tool (LLM can query past device states)"
         }
       }
     }
@@ -101,7 +102,8 @@
             "profanity": "Profanity",
             "verify_ssl": "Verify SSL Certificates",
             "process_builtin_sentences": "Process HA Builtin Sentences",
-            "chat_history": "Chat History"
+            "chat_history": "Chat History",
+            "enable_history_tool": "State History Tool (LLM can query past device states)"
           }
         },
         "reconfigure": {
@@ -116,7 +118,8 @@
             "profanity": "Profanity",
             "verify_ssl": "Verify SSL Certificates",
             "process_builtin_sentences": "Process HA Builtin Sentences",
-            "chat_history": "Chat History"
+            "chat_history": "Chat History",
+            "enable_history_tool": "State History Tool (LLM can query past device states)"
           }
         }
       },
