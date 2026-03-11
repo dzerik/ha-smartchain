@@ -157,3 +157,44 @@ validate_automation:
             - script
             - scene
             - blueprint
+
+list_yaml:
+  name: List YAML Items
+  description: >
+    List existing automations, scripts, scenes, and blueprints from YAML files.
+    Returns id, alias, and type for each item.
+  fields:
+    type:
+      name: Type
+      description: Filter by type (omit to list all types)
+      required: false
+      selector:
+        select:
+          options:
+            - automation
+            - script
+            - scene
+            - blueprint
+
+get_yaml:
+  name: Get YAML Item
+  description: >
+    Get the YAML content of a specific automation, script, scene, or blueprint by its id.
+  fields:
+    type:
+      name: Type
+      description: Type of the YAML item
+      required: true
+      selector:
+        select:
+          options:
+            - automation
+            - script
+            - scene
+            - blueprint
+    id:
+      name: Item ID
+      description: The ID of the item to retrieve
+      required: true
+      selector:
+        text:

@@ -1,6 +1,7 @@
 import { callService, extractResponse, escapeHtml, getAgents, getAllEntities, populateSelect } from "../services.js";
 import "./entity-picker.js";
 import "./yaml-editor.js";
+import "./yaml-picker.js";
 import "./validation-panel.js";
 
 const TYPE_CONFIG = {
@@ -94,16 +95,32 @@ export class ScGenerateTab extends HTMLElement {
         <label class="sc-label">Target Entities (optional)</label>
         <sc-entity-picker></sc-entity-picker>
 
-        <div class="sc-row" style="margin-top:12px;">
+        <div class="sc-row" style="margin-top:12px;gap:8px;">
           <button id="gt-btn-mode" class="sc-btn sc-btn-outline" style="font-size:13px;">
-            Import existing YAML to improve
+            Edit existing YAML
           </button>
         </div>
 
         <div id="gt-source-wrap" class="sc-hidden">
-          <label class="sc-label">Source YAML (to improve/edit)</label>
-          <textarea id="gt-source-yaml" class="sc-textarea" style="min-height:120px;font-family:var(--code-font-family,'Roboto Mono',monospace);font-size:13px;"
-            placeholder="Paste existing automation/script/scene YAML here..."></textarea>
+          <div class="sc-row" style="margin-bottom:8px;gap:8px;">
+            <button id="gt-src-pick" class="sc-btn sc-btn-outline sc-btn-sm sc-src-active">
+              Choose from HA
+            </button>
+            <button id="gt-src-paste" class="sc-btn sc-btn-outline sc-btn-sm">
+              Paste YAML
+            </button>
+          </div>
+          <div id="gt-picker-wrap">
+            <sc-yaml-picker></sc-yaml-picker>
+          </div>
+          <div id="gt-paste-wrap" class="sc-hidden">
+            <textarea id="gt-source-yaml" class="sc-textarea" style="min-height:120px;font-family:var(--code-font-family,'Roboto Mono',monospace);font-size:13px;"
+              placeholder="Paste existing automation/script/scene YAML here..."></textarea>
+          </div>
+          <div id="gt-source-loaded" class="sc-hidden" style="padding:8px 12px;background:var(--primary-background-color);border-radius:6px;margin-top:8px;font-size:13px;">
+            Loaded: <strong id="gt-source-alias"></strong>
+            <button id="gt-source-clear" class="sc-btn sc-btn-outline" style="font-size:11px;margin-left:8px;padding:2px 8px;">Clear</button>
+          </div>
         </div>
 
         <label class="sc-label" id="gt-desc-label">Description</label>
@@ -153,13 +170,57 @@ export class ScGenerateTab extends HTMLElement {
         modeBtn.textContent = "Switch to Generate new";
         descLabel.textContent = "What to change / improve";
         genBtn.textContent = "Improve";
+        // Load picker
+        const picker = this.querySelector("sc-yaml-picker");
+        if (picker) {
+          picker.hass = this._hass;
+          picker.show();
+        }
       } else {
         wrap.classList.add("sc-hidden");
         this.querySelector("#gt-source-yaml").value = "";
-        modeBtn.textContent = "Import existing YAML to improve";
+        this.querySelector("#gt-source-loaded").classList.add("sc-hidden");
+        modeBtn.textContent = "Edit existing YAML";
         descLabel.textContent = "Description";
         genBtn.textContent = "Generate";
       }
+    });
+
+    // Source tabs: Choose from HA / Paste YAML
+    this.querySelector("#gt-src-pick").addEventListener("click", () => {
+      this.querySelector("#gt-picker-wrap").classList.remove("sc-hidden");
+      this.querySelector("#gt-paste-wrap").classList.add("sc-hidden");
+      this.querySelector("#gt-src-pick").classList.add("sc-src-active");
+      this.querySelector("#gt-src-paste").classList.remove("sc-src-active");
+    });
+    this.querySelector("#gt-src-paste").addEventListener("click", () => {
+      this.querySelector("#gt-picker-wrap").classList.add("sc-hidden");
+      this.querySelector("#gt-paste-wrap").classList.remove("sc-hidden");
+      this.querySelector("#gt-src-paste").classList.add("sc-src-active");
+      this.querySelector("#gt-src-pick").classList.remove("sc-src-active");
+    });
+
+    // Picker load event
+    this.querySelector("sc-yaml-picker").addEventListener("load", (e) => {
+      const { yaml, type, alias } = e.detail;
+      this.querySelector("#gt-source-yaml").value = yaml;
+      // Show loaded indicator
+      this.querySelector("#gt-source-alias").textContent = `${alias} (${type})`;
+      this.querySelector("#gt-source-loaded").classList.remove("sc-hidden");
+      // Auto-set type
+      this.querySelector("#gt-type").value = type;
+      this._currentType = type;
+      const cfg = TYPE_CONFIG[type];
+      if (cfg) {
+        this.querySelector("#gt-description").placeholder = cfg.placeholder;
+        this.querySelector("#gt-btn-deploy").textContent = cfg.deployLabel;
+      }
+    });
+
+    // Clear loaded source
+    this.querySelector("#gt-source-clear").addEventListener("click", () => {
+      this.querySelector("#gt-source-yaml").value = "";
+      this.querySelector("#gt-source-loaded").classList.add("sc-hidden");
     });
 
     // Buttons
