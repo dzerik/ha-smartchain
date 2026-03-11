@@ -44,6 +44,7 @@ export class ScGenerateTab extends HTMLElement {
     this._deployed = false;
     this._generatedYaml = "";
     this._currentType = "automation";
+    this._improveMode = false;
   }
 
   set hass(val) {
@@ -93,7 +94,19 @@ export class ScGenerateTab extends HTMLElement {
         <label class="sc-label">Target Entities (optional)</label>
         <sc-entity-picker></sc-entity-picker>
 
-        <label class="sc-label">Description</label>
+        <div class="sc-row" style="margin-top:12px;">
+          <button id="gt-btn-mode" class="sc-btn sc-btn-outline" style="font-size:13px;">
+            Import existing YAML to improve
+          </button>
+        </div>
+
+        <div id="gt-source-wrap" class="sc-hidden">
+          <label class="sc-label">Source YAML (to improve/edit)</label>
+          <textarea id="gt-source-yaml" class="sc-textarea" style="min-height:120px;font-family:var(--code-font-family,'Roboto Mono',monospace);font-size:13px;"
+            placeholder="Paste existing automation/script/scene YAML here..."></textarea>
+        </div>
+
+        <label class="sc-label" id="gt-desc-label">Description</label>
         <textarea id="gt-description" class="sc-textarea"
           placeholder="${TYPE_CONFIG.automation.placeholder}"></textarea>
         <div class="sc-btn-row">
@@ -128,6 +141,27 @@ export class ScGenerateTab extends HTMLElement {
       if (editor) editor.label = cfg.yamlLabel;
     });
 
+    // Import mode toggle
+    this.querySelector("#gt-btn-mode").addEventListener("click", () => {
+      this._improveMode = !this._improveMode;
+      const wrap = this.querySelector("#gt-source-wrap");
+      const modeBtn = this.querySelector("#gt-btn-mode");
+      const descLabel = this.querySelector("#gt-desc-label");
+      const genBtn = this.querySelector("#gt-btn-generate");
+      if (this._improveMode) {
+        wrap.classList.remove("sc-hidden");
+        modeBtn.textContent = "Switch to Generate new";
+        descLabel.textContent = "What to change / improve";
+        genBtn.textContent = "Improve";
+      } else {
+        wrap.classList.add("sc-hidden");
+        this.querySelector("#gt-source-yaml").value = "";
+        modeBtn.textContent = "Import existing YAML to improve";
+        descLabel.textContent = "Description";
+        genBtn.textContent = "Generate";
+      }
+    });
+
     // Buttons
     this.querySelector("#gt-btn-generate").addEventListener("click", () => this._handleGenerate());
     this.querySelector("#gt-btn-regenerate").addEventListener("click", () => this._handleGenerate());
@@ -141,8 +175,9 @@ export class ScGenerateTab extends HTMLElement {
     if (!desc) return;
 
     const btn = this.querySelector("#gt-btn-generate");
+    const isImprove = this._improveMode;
     btn.disabled = true;
-    btn.innerHTML = '<span class="sc-spinner"></span>Generating...';
+    btn.innerHTML = `<span class="sc-spinner"></span>${isImprove ? "Improving..." : "Generating..."}`;
     this.querySelector("#gt-result").classList.add("sc-hidden");
     this.querySelector("#gt-status").innerHTML = "";
     this.querySelector("sc-validation-panel").clear();
@@ -151,6 +186,7 @@ export class ScGenerateTab extends HTMLElement {
     const agentId = this.querySelector("#gt-agent").value || undefined;
     const picker = this.querySelector("sc-entity-picker");
     const entityIds = picker?.selected?.length ? picker.selected : undefined;
+    const sourceYaml = isImprove ? this.querySelector("#gt-source-yaml")?.value?.trim() : undefined;
 
     try {
       const svcData = {
@@ -159,6 +195,7 @@ export class ScGenerateTab extends HTMLElement {
       };
       if (agentId) svcData.entity_id = agentId;
       if (entityIds) svcData.entity_ids = entityIds;
+      if (sourceYaml) svcData.source_yaml = sourceYaml;
 
       const resp = await callService(this._hass, "smartchain", "generate_automation", svcData);
       const data = extractResponse(resp, "smartchain.generate_automation");
@@ -184,7 +221,7 @@ export class ScGenerateTab extends HTMLElement {
       this._showStatus("Error: " + (err.message || err), true);
     } finally {
       btn.disabled = false;
-      btn.textContent = "Generate";
+      btn.textContent = isImprove ? "Improve" : "Generate";
     }
   }
 
