@@ -11,7 +11,7 @@
 
 ## Overview
 
-SmartChain is a Home Assistant custom integration that provides a voice/conversation assistant powered by multiple LLM providers through LangChain:
+SmartChain is a Home Assistant custom integration that provides an intelligent voice/conversation assistant powered by multiple LLM providers through LangChain:
 
 - **GigaChat** (Sber) — Russian-focused LLM
 - **YandexGPT** — Yandex Cloud LLM
@@ -23,32 +23,37 @@ SmartChain is a Home Assistant custom integration that provides a voice/conversa
 ### Key Features
 
 - **6 LLM providers** — cloud and local, switch without losing configuration
-- **Sub-entries** — multiple agents with different models/prompts per provider
+- **Multiple agents** — different models and prompts per provider (sub-entries)
 - **Streaming responses** — real-time token-by-token output
-- **Assist API (tool calling)** — control HA devices via LLM (lights, switches, locks, etc.)
-- **AI Task entity** — use LLM in automations via `ai_task.generate_data`
+- **Device control** — Assist API (tool calling): lights, switches, locks, climate
+- **Multi-agent** — task delegation between agents
+- **State history** — LLM analyzes past events and trends
+- **MCP servers** — connect external tools via Model Context Protocol
+- **Vision** — camera image analysis via multimodal models
+- **Skill system** — loadable YAML files with additional knowledge
+- **Automation service** — `smartchain.ask` for Telegram, Slack, etc.
+- **AI Task entity** — structured data generation in automations
+- **Prompt caching** — token savings on repeated requests
 - **Chat history** — multi-turn conversations with context
-- **Builtin HA sentence processing** — fallback to native HA commands
-- **Customizable system prompt** — Jinja2 templates with device/area context
+- **Jinja2 templates** — customizable system prompt with device context
 
 ## Installation
 
 ### Requirements
-- Home Assistant 2025.3+ (for AI Task support, otherwise 2024.12+)
+- Home Assistant 2025.3+ (for AI Task, otherwise 2024.12+)
 - [HACS](https://hacs.xyz/) installed
 
 ### Install via HACS
-1. Add this repository as a [custom HACS repository](https://hacs.xyz/docs/faq/custom_repositories)
+1. Add this repository as a [custom HACS repository](https://hacs.xyz/docs/faq/custom_repositories): `https://github.com/dzerik/ha-smartchain`
 2. Search for "SmartChain" in HACS
 3. Install and restart Home Assistant
 
-## Configuration
+## Quick Start
 
 ### 1. Add Integration
-Go to **Settings > Devices & Services > Add Integration > SmartChain**
+**Settings > Devices & Services > Add Integration > SmartChain**
 
-### 2. Select LLM Provider
-Choose your provider and provide credentials:
+### 2. Select Provider and Enter Credentials
 
 | Provider | What you need |
 |----------|--------------|
@@ -60,17 +65,30 @@ Choose your provider and provide credentials:
 | Anthropic | API key from [console.anthropic.com](https://console.anthropic.com) |
 
 ### 3. Configure Options
-- **Model** — select or type custom model name
+- **Model** — select from list or type custom model name
 - **Assist API** — enable device control via LLM tool calling
-- **System Prompt** — customize the assistant's behavior (Jinja2 template)
-- **Temperature** — control response creativity (0.0-1.0)
-- **Max Tokens** — limit response length
-- **Chat History** — enable/disable multi-turn memory
-- **Builtin Sentences** — use HA's native command processor as fallback
+- **System Prompt** — customize the assistant's behavior
+- **State History Tool** — enable past event analysis
 
-## Usage
+### 4. Activate Assistant
+**Settings > Voice Assistants > Add** — select your SmartChain entity as the conversation agent.
 
-Create a Voice Assistant in HA settings and select your SmartChain entity as the conversation agent.
+## Documentation
+
+Full user guide with all features:
+**[docs/USER_GUIDE.md](docs/USER_GUIDE.md)**
+
+Topics:
+- Multiple agents and multi-agent delegation
+- Device control (Assist API)
+- State history tool
+- MCP servers
+- Vision (camera image analysis)
+- Skill system (YAML)
+- `smartchain.ask` service (Telegram, Slack)
+- AI Task for automations
+- System prompt customization
+- Parameter and model reference
 
 ## License
 
