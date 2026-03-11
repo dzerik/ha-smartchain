@@ -12,7 +12,6 @@ from homeassistant.components.frontend import async_register_built_in_panel
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse
-from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 from langchain_core.messages import HumanMessage
 
@@ -101,9 +100,6 @@ SERVICE_DEPLOY_AUTOMATION_SCHEMA = vol.Schema(
         vol.Required("automation_yaml"): str,
     }
 )
-
-AUTOMATIONS_STORAGE_KEY = "automations"
-AUTOMATIONS_STORAGE_VERSION = 1
 
 SENSOR_LAST_ANALYSIS = f"sensor.{DOMAIN}_last_analysis"
 EVENT_IMAGE_ANALYZED = f"{DOMAIN}_image_analyzed"
@@ -245,18 +241,40 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         return yaml_text
 
     async def _deploy_automation_to_ha(yaml_text: str) -> dict:
-        """Deploy automation YAML to HA via .storage/automations."""
+        """Deploy automation YAML to HA via automations.yaml."""
         config = yaml.safe_load(yaml_text)
         if not isinstance(config, dict):
             return {"error": "Generated YAML is not a valid automation object."}
 
         config["id"] = uuid.uuid4().hex
 
-        store = Store(hass, AUTOMATIONS_STORAGE_VERSION, AUTOMATIONS_STORAGE_KEY)
-        data = await store.async_load() or {"items": []}
-        data["items"].append(config)
-        await store.async_save(data)
+        automations_path = hass.config.path("automations.yaml")
 
+        def _write_automation():
+            # Read existing automations
+            existing = []
+            try:
+                with open(automations_path, encoding="utf-8") as f:
+                    content = yaml.safe_load(f)
+                    if isinstance(content, list):
+                        existing = content
+            except FileNotFoundError:
+                pass
+
+            # Append new automation
+            existing.append(config)
+
+            # Write back
+            with open(automations_path, "w", encoding="utf-8") as f:
+                yaml.dump(
+                    existing,
+                    f,
+                    default_flow_style=False,
+                    allow_unicode=True,
+                    sort_keys=False,
+                )
+
+        await hass.async_add_executor_job(_write_automation)
         await hass.services.async_call("automation", "reload", blocking=True)
 
         alias = config.get("alias", "Unnamed")
