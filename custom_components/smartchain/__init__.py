@@ -3,10 +3,12 @@
 import base64
 import logging
 import uuid
+from pathlib import Path
 
 import voluptuous as vol
 import yaml
 from homeassistant.components.camera import async_get_image
+from homeassistant.components.frontend import async_register_built_in_panel
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse
@@ -90,6 +92,13 @@ SERVICE_GENERATE_AUTOMATION_SCHEMA = vol.Schema(
         vol.Required("description"): str,
         vol.Optional("entity_id"): str,
         vol.Optional("deploy", default=False): bool,
+    }
+)
+
+SERVICE_DEPLOY_AUTOMATION = "deploy_automation"
+SERVICE_DEPLOY_AUTOMATION_SCHEMA = vol.Schema(
+    {
+        vol.Required("automation_yaml"): str,
     }
 )
 
@@ -281,6 +290,31 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
         return response
 
+    # Register sidebar panel (graceful — skip if frontend not available)
+    try:
+        panel_dir = Path(__file__).parent / "panel"
+        from homeassistant.components.http import StaticPathConfig
+
+        panel_path = str(panel_dir / "smartchain-panel.js")
+        await hass.http.async_register_static_paths(
+            [StaticPathConfig("/smartchain/panel.js", panel_path, False)]
+        )
+        async_register_built_in_panel(
+            hass,
+            component_name="custom",
+            sidebar_title="SmartChain AI",
+            sidebar_icon="mdi:robot",
+            frontend_url_path="smartchain",
+            config={
+                "_panel_custom": {
+                    "name": "smartchain-panel",
+                    "module_url": "/smartchain/panel.js",
+                }
+            },
+        )
+    except Exception:
+        LOGGER.debug("Could not register SmartChain panel (frontend not available)")
+
     # Store helpers for use by Options Flow wizard
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN]["generate_yaml"] = _generate_automation_yaml
@@ -306,6 +340,24 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         SERVICE_GENERATE_AUTOMATION,
         _handle_generate_automation,
         schema=SERVICE_GENERATE_AUTOMATION_SCHEMA,
+        supports_response=SupportsResponse.ONLY,
+    )
+
+    async def _handle_deploy_automation(call: ServiceCall) -> ServiceResponse:
+        """Handle smartchain.deploy_automation — deploy raw YAML to HA."""
+        yaml_text = call.data["automation_yaml"]
+        try:
+            result = await _deploy_automation_to_ha(yaml_text)
+            return result
+        except Exception as err:
+            LOGGER.exception("SmartChain deploy_automation error: %s", err)
+            return {"error": str(err)}
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_DEPLOY_AUTOMATION,
+        _handle_deploy_automation,
+        schema=SERVICE_DEPLOY_AUTOMATION_SCHEMA,
         supports_response=SupportsResponse.ONLY,
     )
     return True
