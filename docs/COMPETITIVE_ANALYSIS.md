@@ -1,6 +1,6 @@
 # SmartChain — Конкурентный анализ и точки роста
 
-Дата: 2026-03-10 | Версия: 0.9.0
+Дата: 2026-03-11 | Версия: 2.0.0
 
 ## Оглавление
 
@@ -8,7 +8,7 @@
 2. [Что есть у конкурентов, чего нет у нас](#2-что-есть-у-конкурентов-чего-нет-у-нас)
 3. [Российские и китайские модели](#3-российские-и-китайские-модели--кого-можно-подключить)
 4. [Легковесные локальные модели](#4-легковесные-локальные-модели)
-5. [Точки роста и пути развития](#5-точки-роста-и-пути-развития)
+5. [Точки роста: от конкуренции к лидерству](#5-точки-роста-от-конкуренции-к-лидерству)
 6. [Стратегическое позиционирование](#6-стратегическое-позиционирование)
 7. [Источники](#7-источники)
 
@@ -38,87 +38,72 @@
 ### Custom-интеграции (HACS)
 
 #### Extended OpenAI Conversation (~1.5k stars)
-- GitHub: https://github.com/jekalmin/extended_openai_conversation
 - **Function calling** — вызов сервисов HA через OpenAI API
 - **Создание автоматизаций** через естественный язык
 - **Чтение истории состояний** — LLM знает, что было раньше
-- **REST API** — запросы к внешним API
-- **Веб-скрейпинг** — получение данных с веб-страниц
 - **Skill-система** — загружаемые навыки из директории
-- **Multi-agent** — Dispatcher Agent маршрутизирует запросы между специализированными агентами
-- **Attach Username** — персонализация по имени пользователя
-- Поддержка native functions: `execute_service`, `add_automation`, `get_history`
+- **Multi-agent** — Dispatcher Agent маршрутизирует запросы
 
 #### YandexGPT (black-roland, 38 stars)
-- GitHub: https://github.com/black-roland/homeassistant-yandexgpt
-- **Управление устройствами** — включение/выключение света, регулировка температуры, запуск скриптов
 - **YandexART** — генерация изображений
 - **Telegram-бот** — использование как backend для Telegram
 - **Yandex SpeechKit** — companion-интеграция для STT/TTS
-- Последний релиз: v1.5.5 (декабрь 2025)
-- Лицензия: MPL-2.0
-
-#### Cloud.ru Foundation Models (black-roland, новый)
-- GitHub: https://github.com/black-roland/homeassistant-cloud-ru-ai
-- **Открытые модели**: GPT-OSS-120b, Qwen3, Llama, DeepSeek R1 Distill, GLM-4.5, T-Pro
-- **Управление устройствами** — полный контроль через чат
-- Основан на официальной интеграции OpenAI HA
-- Лицензия: Apache 2.0
 
 #### Home-LLM (acon96, ~3k stars)
-- GitHub: https://github.com/acon96/home-llm
 - **Полностью локальный** — никаких облачных сервисов
-- **Fine-tuned модели** — Home-3B-v3 (97% точность function calling), Home-1B-v3
-- **Tool calling** — переписан для поддержки agentic tool use loop
-- **AI Task entity** — генерация данных для автоматизаций
-- **Multi-language** — EN, DE, FR, ES, PL
+- **Fine-tuned модели** — Home-3B-v3 (97% точность function calling)
 - **CPU-friendly** — работает на Raspberry Pi
-- Backends: Ollama, llama.cpp, OpenAI-compatible API
 
 #### LLM Vision (~1.5k stars)
-- GitHub: https://github.com/valentinfrlch/ha-llmvision
 - **Мультимодальный** — анализ изображений, видео, live камер, Frigate events
 - **Timeline** — хранит историю событий камер
 - **Распознавание** — люди, номерные знаки, объекты
-- **Голосовые запросы** — "Была ли активность во дворе вчера?"
-- Провайдеры: OpenAI, Anthropic, Gemini, Ollama, OpenRouter, и др.
 
-#### SmartChain (наш, 15 stars)
-- GigaChat + YandexGPT + OpenAI через LangChain
-- Streaming ответов
-- ChatLog для истории
-- Builtin sentence processor
-- Системный промпт с Jinja2
+#### SmartChain (наш, v2.0.0)
+- 6 LLM провайдеров через LangChain (GigaChat, YandexGPT, OpenAI, Ollama, DeepSeek, Anthropic)
+- Assist API + tool calling + streaming
+- AI Task entity, sub-entries
+- Vision: multimodal attachments + `analyze_image` сервис для камер
+- Skill-система, история состояний, multi-agent delegation
+- Голосовой пайплайн: GigaAM (STT) + Silero (TTS)
+- 114 тестов
 
 ---
 
 ## 2. Что есть у конкурентов, чего нет у нас
 
-### Критические отставания
+### Текущий разрыв (v2.0)
 
-| Фича | У кого есть | Описание |
-|---|---|---|
-| Управление устройствами (Assist API) | Все official, Extended OpenAI, YandexGPT, Cloud.ru | LLM может включать свет, менять температуру, запускать сценарии |
-| AI Task entity | Все official, Home-LLM | Генерация данных для автоматизаций через `ai_task.generate_data` |
-| MCP (Model Context Protocol) | Все official | Расширение возможностей агента внешними инструментами |
-| Function calling / вызов сервисов | Extended OpenAI, все official | LLM вызывает произвольные сервисы HA |
-| Vision / мультимодальность | OpenAI, Gemini, LLM Vision | Анализ камер и изображений |
-| Генерация изображений | YandexGPT (YandexART) | Создание изображений по описанию |
-| Создание автоматизаций через AI | Extended OpenAI | Генерация автоматизаций HA из естественного языка |
-| Доступ к истории состояний | Extended OpenAI | LLM анализирует тренды и прошлые события |
+| Фича | Official HA | Extended OpenAI | YandexGPT | Home-LLM | LLM Vision | SmartChain |
+|-------|:-----------:|:---------------:|:---------:|:--------:|:----------:|:----------:|
+| Assist API / Device Control | + | + | + | + | - | **+** |
+| AI Task entity | + | - | - | + | - | **+** |
+| Streaming | + | + | - | + | - | **+** |
+| Sub-entries | + | - | - | - | - | **+** |
+| Ollama / локальные | + | - | - | + | + | **+** |
+| Vision (attachments) | + (OpenAI, Gemini) | - | - | - | **+** | **+** |
+| Vision (camera service) | - | - | - | - | **+** | **+** |
+| MCP | + | - | - | - | - | - |
+| Генерация автоматизаций | - | + | - | - | - | - |
+| Continuous camera monitoring | - | - | - | - | **+** | - |
+| Frigate event analysis | - | - | - | - | **+** | - |
+| Timeline (история камер) | - | - | - | - | **+** | - |
+| RAG / vector search | - | - | - | - | - | - |
+| Proactive actions (Event Reactor) | - | - | - | - | - | - |
+| Energy optimization | - | - | - | - | - | - |
 
-### Менее критичные
+### Где мы впереди
+- **6 провайдеров** в одной интеграции (больше всех)
+- **Российские LLM** (GigaChat + YandexGPT) — уникально
+- **LangChain экосистема** — легко добавлять новых провайдеров
+- **Skill-система** + **multi-agent delegation**
+- **Голосовой пайплайн** на русском (GigaAM + Silero)
 
-| Фича | У кого есть |
-|---|---|
-| Multi-agent (Dispatcher + специализированные) | Extended OpenAI |
-| Skill-система (загружаемые навыки) | Extended OpenAI |
-| Telegram-бот | YandexGPT |
-| STT/TTS от того же провайдера | YandexGPT + SpeechKit |
-| Prompt caching | llama.cpp custom-conversation |
-| Sub-entries (несколько агентов) | Все official (HA 2025.8+) |
-| Conversational follow-ups | Все official |
-| Per-device LLM assignment | Все official |
+### Где отстаём
+- **MCP** — есть у всех official, нет у нас
+- **Continuous camera monitoring** — LLM Vision делает это лучше
+- **Генерация автоматизаций** — Extended OpenAI умеет
+- **Proactive intelligence** — нет ни у кого, но это будущее
 
 ---
 
@@ -126,220 +111,162 @@
 
 ### Российские модели с API
 
-#### GigaChat 2.0 (Сбер) — уже подключён
+#### GigaChat 2.0 (Сбер) — подключён
 - Линейка: Lite / Pro / MAX
 - Контекст: до 128K токенов
-- Мультимодальность: да (GigaChat 2.0)
+- Мультимодальность: да (GigaChat 2.0) — **работает с analyze_image**
 - Генерация изображений: да (Kandinsky)
-- Цена: ~650 руб/1M токенов (MAX), 1M бесплатных токенов/месяц для разработчиков
-- LangChain: `langchain-gigachat` (подключён)
-- Function calling: поддерживается
+- 1M бесплатных токенов/месяц для разработчиков
 
-#### YandexGPT 4 / Alice AI LLM (Яндекс) — уже подключён
-- Линейка: Lite / Pro
-- Контекст: до 32K токенов (до 60 страниц)
-- Цена: ~1220 руб/1M токенов (Pro)
-- LangChain: `langchain_community.chat_models.ChatYandexGPT` (подключён)
-- Доп. сервисы: YandexART (генерация изображений), SpeechKit (STT/TTS)
-- Примечание: в октябре 2025 переименован в Alice AI LLM
+#### YandexGPT 4 / Alice AI LLM (Яндекс) — подключён
+- Контекст: до 32K токенов
+- YandexART (генерация изображений), SpeechKit (STT/TTS)
 
-#### T-Pro 2.0 (Т-Банк / Т-Технологии) — НЕ подключён
-- Параметры: 32B
-- Лицензия: Apache 2.0 (полностью открытая)
-- Гибридный reasoning (быстрые ответы + многошаговое рассуждение)
-- На 30% экономичнее Qwen3 и DeepSeek R1-Distil на русском
-- Лидер бенчмарков MERA, ruMMLU, ruArena Hard для русского
-- Основана на Qwen3 32B с улучшенным кириллическим токенизатором
-- Доступ: HuggingFace, self-hosted через Ollama/vLLM
-- **Рекомендация: подключить через Ollama backend**
+#### T-Pro 2.0 (Т-Банк) — через Ollama
+- 32B параметров, Apache 2.0
+- Лидер MERA, ruMMLU для русского
+- На 30% экономичнее Qwen3 на русском
 
-#### T-Lite (Т-Банк) — НЕ подключён
-- Параметры: 7B
-- Лицензия: Apache 2.0
-- Компактная модель для устройств со средней производительностью
-- Доступ: HuggingFace, Ollama
-- **Рекомендация: подключить через Ollama как легковесную опцию**
+#### Cotype Pro 2.5 (MTS AI) — enterprise API
+- Лидер MERA среди российских LLM
+- Агентные навыки: в 10 раз эффективнее предыдущей версии
 
-#### Cotype Pro 2.5 (MTS AI / MWS AI) — НЕ подключён
-- Лидер среди российских LLM в бенчмарке MERA
-- Агентные навыки: в 10 раз эффективнее Cotype Pro 2
-- Превосходит Qwen3-32B на 22% по точности на русском
-- Доступ: enterprise API (MWS Cloud)
-- **Рекомендация: рассмотреть при наличии API**
+### Китайские модели
 
-#### Cotype Nano (MTS AI) — НЕ подключён
-- Открытая модель, работает на мобильных устройствах и ноутбуках
-- Лучшие результаты в своём классе на Ru Arena Hard
-- **Рекомендация: подключить через Ollama**
+#### DeepSeek V3 / R1 — подключён
+- Самый дешёвый cloud-провайдер ($0.14/1M input tokens)
+- V3: general-purpose; R1: reasoning
 
-### Китайские модели (доступны из России)
-
-#### DeepSeek V3 / R1 — НЕ подключён
-- V3: general-purpose, tool calling, structured output
-- R1: reasoning, chain-of-thought
-- LangChain: `langchain-deepseek` (`ChatDeepSeek`)
-- Цена: самая низкая на рынке (~$0.14/1M input tokens)
-- Доступ из РФ: API (возможны проблемы с блокировкой IP Роскомнадзором), self-hosted через Ollama
-- **Рекомендация: подключить как самый дешёвый cloud-провайдер**
-
-#### Qwen 3 (Alibaba) — НЕ подключён
-- Модели от 0.6B до 235B параметров
-- Самая скачиваемая серия моделей на HuggingFace (2025-2026)
-- Reasoning mode, tool calling
-- LangChain: `ChatOllama` или Cloud.ru
-- **Рекомендация: подключить через Ollama backend**
-
-#### GLM-4.5 (Zhipu AI) — НЕ подключён
-- Доступ: Cloud.ru Foundation Models
-- **Рекомендация: подключить через Cloud.ru или Ollama**
-
-#### Baichuan, Yi, MiniCPM — НЕ подключены
-- Open-source, self-hosted через Ollama
-- **Рекомендация: автоматически доступны при поддержке Ollama**
+#### Qwen 3 (Alibaba) — через Ollama
+- От 0.6B до 235B параметров
+- Самая скачиваемая серия на HuggingFace
 
 ---
 
 ## 4. Легковесные локальные модели
 
-Для пользователей без мощного GPU или с Raspberry Pi:
+| Модель | Параметры | RAM | Язык | Vision | Особенности |
+|---|---|---|---|---|---|
+| Home-3B-v3 | 3B | ~2GB | EN | нет | 97% точность HA function calling |
+| T-Lite | 7B | ~4GB | RU | нет | Лучшая для русского в 7B классе |
+| T-Pro 2.0 | 32B | ~18GB | RU | нет | Лидер русских бенчмарков |
+| Qwen3 | 0.6B-4B | 0.5-3GB | RU/EN/ZH | нет | Reasoning, tool calling |
+| **LLaVA** | **7B** | **~4GB** | **EN** | **да** | **Vision — анализ камер** |
+| **Gemma 3** | **4B** | **~3GB** | **EN** | **да** | **Vision + чат** |
+| Phi-4-mini | 3.8B | ~2GB | EN | нет | Microsoft, компактная |
+| DeepSeek R1 Distill | 1.5B-14B | 1-8GB | EN/ZH | нет | Reasoning |
 
-| Модель | Параметры | RAM | Язык | Особенности |
-|---|---|---|---|---|
-| Home-3B-v3 | 3B | ~2GB | EN/DE/FR/ES | 97% точность function calling HA |
-| Home-1B-v3 | 1B | ~1GB | EN | Raspberry Pi compatible |
-| T-Lite | 7B | ~4GB | RU | лучшая для русского в классе 7B |
-| T-Pro 2.0 | 32B | ~18GB | RU | лидер русскоязычных бенчмарков |
-| Qwen3 | 0.6B-4B | 0.5-3GB | RU/EN/ZH | reasoning, tool calling |
-| Phi-4-mini | 3.8B | ~2GB | EN | Microsoft, компактная |
-| Gemma 3 | 1B-4B | 1-3GB | EN | Google, vision support |
-| DeepSeek R1 Distill | 1.5B-14B | 1-8GB | EN/ZH | reasoning |
-| Cotype Nano | small | ~2GB | RU | MTS AI, открытая |
-| MiniCPM | 1.2B-8B | 1-4GB | ZH/EN | OpenBMB, компактная |
-
-Все локальные модели доступны через **Ollama** — единый backend для self-hosted LLM.
+Все доступны через **Ollama** — единый backend для self-hosted LLM.
 
 ---
 
-## 5. Точки роста и пути развития
+## 5. Точки роста: от конкуренции к лидерству
 
-### Приоритет: Высокий (конкурентный паритет)
+### Tier S — Высокий WOW, реализуемо сейчас
 
-#### 5.1 Управление устройствами через Assist API
-- **Что:** Использовать `chat_log.async_provide_llm_data()` для доступа к HA tools
-- **Зачем:** Главная фича, которую имеют ВСЕ конкуренты. Без неё SmartChain — только чат-бот, не smart home agent
-- **Как:** HA LLM API предоставляет intents для управления exposed entities. Нужно передать tools в LLM и обработать tool calls
-- **Сложность:** Средняя. GigaChat и DeepSeek поддерживают function calling. Паттерн задокументирован в HA developer docs
+#### Camera Security Guard
+Frigate/камера детектит движение → `analyze_image` → LLM анализирует → умное уведомление.
+- Фильтрация: кот vs незнакомец
+- Полностью локально через Ollama + LLaVA
+- Blueprint автоматизации для пользователей
+- **Конкурент:** LLM Vision уже это умеет. Наше преимущество — интеграция с Assist API (и уведомление, и действие)
 
-#### 5.2 AI Task entity
-- **Что:** Добавить `AITaskEntity` с методом `_async_generate_data()`
-- **Зачем:** Позволит использовать SmartChain в автоматизациях, скриптах, шаблонах через `ai_task.generate_data`
-- **Как:** Новый entity наряду с ConversationEntity, может разделять общую логику обработки chat_log
-- **Сложность:** Низкая-средняя
+#### LLM-generated Automations
+"Включай кофемашину в 7:00 по будням, если я дома" → LLM генерирует YAML → деплой через HA API.
+- **Конкурент:** Extended OpenAI. Наше преимущество — работает с любым из 6 провайдеров
 
-#### 5.3 Новые провайдеры LLM
-- **DeepSeek** (`pip install langchain-deepseek`) — `ChatDeepSeek`, самый дешёвый, tool calling
-- **Ollama** (`pip install langchain-ollama`) — `ChatOllama`, все локальные модели (T-Pro, Qwen, Llama, DeepSeek)
-- **Anthropic** (`pip install langchain-anthropic`) — `ChatAnthropic`, extended thinking
-- **Зачем:** Расширение аудитории, поддержка локальных моделей, снижение стоимости
-- **Сложность:** Низкая — архитектура через LangChain уже позволяет добавлять провайдеров в `client_util.py`
+#### Voice Journal / Home Diary
+"Что было, пока меня не было?" → агрегированный отчёт на основе событий, камер, сенсоров.
+- Нет ни у кого. Простая реализация через history tool + промпт.
 
-### Приоритет: Средний (дифференциация)
+### Tier A — Уникальные фичи, нет у конкурентов
 
-#### 5.4 Function calling / вызов сервисов HA
-- **Что:** LLM вызывает произвольные сервисы HA (свет, климат, сценарии)
-- **Зачем:** Extended OpenAI Conversation — самая популярная custom-интеграция именно из-за этой фичи
-- **Как:** Определить tool specs для `execute_service`, `get_history`, передавать в LLM, обрабатывать tool calls в цикле
-- **Сложность:** Средняя-высокая
+#### RAG over Home History
+ChromaDB/FAISS + embeddings → семантический поиск по годам событий.
+"Когда последний раз протекал кран?" — не за 24 часа, а за всю историю.
 
-#### 5.5 Vision / мультимодальность
-- **Что:** Анализ изображений с камер через LLM
-- **Зачем:** GigaChat 2.0 поддерживает мультимодальность. Можно анализировать камеры без LLM Vision
-- **Как:** Передавать изображения как attachments в LLM запрос
-- **Сложность:** Средняя
+#### Event Reactor (Проактивный дом)
+LLM подписан на события HA, сам решает что делать. Нет ни у кого.
+Это принципиально другой подход: не "пользователь → LLM → действие", а "событие → LLM → решение → действие/уведомление".
 
-#### 5.6 Генерация изображений
-- **Что:** GigaChat (Kandinsky) и YandexART для создания изображений
-- **Зачем:** Уникальная фича для российского рынка. У конкурента YandexGPT уже есть
-- **Как:** Отдельный сервис или entity для генерации
-- **Сложность:** Средняя
+#### Anomaly Detection
+Фоновый анализ паттернов: "Стиралка обычно работает 1 час, сегодня 3 — зависла?"
+Notification fatigue reducer: LLM фильтрует шум уведомлений.
 
-#### 5.7 Sub-entries (несколько агентов)
-- **Что:** Позволить создавать несколько conversation agents с разными моделями/промптами через одну интеграцию
-- **Зачем:** Паттерн из HA 2025.8+. Один агент для чата, другой для device control, третий для генерации
-- **Сложность:** Средняя
+#### Energy Advisor
+Energy dashboard + тарифы + погода → оптимизация потребления.
+Для солнечных панелей: когда продавать/запасать энергию.
 
-#### 5.8 MCP (Model Context Protocol)
-- **Что:** Интеграция с MCP серверами для расширения возможностей агента
-- **Зачем:** Все official-интеграции поддерживают. Даёт доступ к новостям, todo-спискам, внешним данным
-- **Сложность:** Средняя-высокая
+### Tier B — Долгосрочные moonshots
 
-### Приоритет: Низкий (nice to have)
+#### Ambient Intelligence Daemon
+LLM как постоянный фоновый процесс с полным контекстом дома.
+Не conversation agent, а "дух дома" — наблюдает, учится, предлагает.
 
-#### 5.9 Доступ к истории состояний
-- LLM анализирует тренды и прошлые события ("Какая была температура вчера?")
+#### Digital Twin
+Цифровая модель дома. Симуляция сценариев: "Если отключат отопление?"
 
-#### 5.10 Telegram-бот
-- Использовать SmartChain как backend для Telegram (как у YandexGPT)
-
-#### 5.11 STT/TTS интеграция
-- Связка с Yandex SpeechKit или GigaChat TTS для полного voice pipeline на русском
-
-#### 5.12 Prompt caching
-- Кэширование промптов для ускорения повторных запросов (как в llama.cpp)
-
-#### 5.13 Multi-agent
-- Dispatcher agent маршрутизирует запросы между специализированными агентами
-
-#### 5.14 Skill-система
-- Загружаемые "навыки" для разных доменов (погода, расписание, рецепты)
-
-#### 5.15 Conversational follow-ups
-- LLM задаёт уточняющие вопросы, HA слушает ответ
+#### Predictive Maintenance
+Тренды сенсоров → предсказание поломок → напоминания в календаре.
 
 ---
 
 ## 6. Стратегическое позиционирование
 
-### Текущее УТП (Unique Selling Proposition)
+### УТП (Unique Selling Proposition) v2.0
 
-SmartChain — **единственная** HA интеграция, объединяющая GigaChat + YandexGPT + OpenAI в одном компоненте через LangChain. Это позволяет:
-- Переключаться между провайдерами без переустановки
-- Использовать единый интерфейс для разных LLM
-- Легко добавлять новые модели через LangChain экосистему
+SmartChain — **единственная** HA интеграция, которая:
+1. Объединяет **6 LLM провайдеров** (включая российские) в одном компоненте
+2. Поддерживает **полный vision pipeline** (камера → LLM → действие) через сервис
+3. Имеет **русскоязычный голосовой пайплайн** (GigaAM STT + Silero TTS)
+4. Работает через **LangChain** — легко добавлять новых провайдеров и возможности
 
-### Слабые стороны
+### Сильные стороны
+- Мультипровайдерность (6 in 1)
+- Российские LLM (GigaChat + YandexGPT) без VPN
+- Полный голосовой пайплайн на русском
+- Vision сервис для камер
+- LangChain экосистема (RAG, agents, tools)
 
-- Нет управления устройствами — главный разрыв с конкурентами
-- Нет AI Task — не может использоваться в автоматизациях
-- Нет локальных моделей (Ollama) — зависимость от cloud API
-- Небольшое сообщество (15 stars vs 3k у Home-LLM)
-
-### Рекомендуемая дорожная карта
+### Стратегические направления
 
 ```mermaid
-gantt
-    title SmartChain Roadmap
-    dateFormat  YYYY-MM
-    section Высокий приоритет
-    Assist API + Device Control    :2026-03, 2026-04
-    AI Task entity                 :2026-04, 2026-05
-    DeepSeek + Ollama провайдеры   :2026-04, 2026-05
-    section Средний приоритет
-    Function calling               :2026-05, 2026-06
-    Vision / мультимодальность     :2026-06, 2026-07
-    Sub-entries                    :2026-06, 2026-07
-    Генерация изображений          :2026-07, 2026-08
-    section Низкий приоритет
-    Multi-agent                    :2026-08, 2026-09
-    Telegram-бот                   :2026-09, 2026-10
+mindmap
+  root((SmartChain 2.0+))
+    Vision & Security
+      Camera Security Guard
+      Frigate integration
+      Continuous monitoring
+      Face recognition
+    Proactive Intelligence
+      Event Reactor
+      Anomaly Detection
+      Energy Advisor
+      Predictive Maintenance
+    Natural Language Control
+      LLM Automations
+      Scene Composer
+      NL Cron
+      Voice Journal
+    Knowledge & Memory
+      RAG over History
+      Digital Twin
+      Adaptive Prompts
+      Cross-home
+    Voice Pipeline
+      GigaAM STT
+      Silero TTS
+      Multi-modal input
+      Emotional context
 ```
 
 ### Целевая аудитория
 
-1. **Российские пользователи HA** — GigaChat + YandexGPT без VPN
-2. **Privacy-conscious** — Ollama + T-Pro/Qwen для полностью локального решения
-3. **Мультипровайдерные** — один компонент вместо нескольких интеграций
-4. **Разработчики** — LangChain экосистема для кастомизации
+1. **Российские пользователи HA** — GigaChat + YandexGPT + русский STT/TTS
+2. **Security-focused** — анализ камер без облака (Ollama + LLaVA)
+3. **Privacy-conscious** — полностью локальное решение
+4. **Power users** — LangChain экосистема для кастомизации
+5. **Energy-conscious** — оптимизация потребления через AI
 
 ---
 
@@ -354,9 +281,6 @@ gantt
 - https://www.home-assistant.io/integrations/ollama/
 - https://www.home-assistant.io/integrations/open_router/
 - https://www.home-assistant.io/integrations/ai_task/
-- https://www.home-assistant.io/blog/2025/08/06/release-20258/
-- https://developers.home-assistant.io/docs/core/entity/ai-task/
-- https://developers.home-assistant.io/docs/core/entity/conversation
 
 ### Custom-интеграции
 - https://github.com/jekalmin/extended_openai_conversation
@@ -369,14 +293,8 @@ gantt
 - https://vc.ru/ai/2733649-rossiyskie-neuroseti-2026-modeli-i-servisy-dlya-biznesa
 - https://habr.com/ru/companies/tbank/articles/928956/
 - https://mts.ai/tech/mts-ai-releases-cotype-pro-2-second-generation-business-focused-llm/
-- https://www.tbank.ru/about/news/11122024-the-t-technologies-group-has-introduced-the-worlds-most-efficient-open-large-language-models-in-russian/
 
-### Китайские LLM
-- https://intuitionlabs.ai/articles/chinese-open-source-llms-2025
-- https://changelog.langchain.com/announcements/deepseek-integration-in-langchain
-- https://www.index.dev/blog/chinese-ai-models-deepseek
-
-### LangChain интеграции
-- https://docs.langchain.com/oss/python/integrations/providers/yandex
-- https://docs.langchain.com/oss/python/integrations/chat/deepseek
-- https://ollama.com/fixt/home-3b-v3
+### Speech
+- https://github.com/salute-developers/GigaAM (STT)
+- https://github.com/Navatusein/Silero-TTS-Service (TTS)
+- https://github.com/yusinv/wyoming-gigaam (Wyoming wrapper)

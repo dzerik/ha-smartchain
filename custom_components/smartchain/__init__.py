@@ -1,8 +1,10 @@
 """The SmartChain integration."""
 
+import base64
 import logging
 
 import voluptuous as vol
+from homeassistant.components.camera import async_get_image
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse
@@ -67,6 +69,33 @@ SERVICE_ASK_SCHEMA = vol.Schema(
     }
 )
 
+SERVICE_ANALYZE_IMAGE = "analyze_image"
+SERVICE_ANALYZE_IMAGE_SCHEMA = vol.Schema(
+    {
+        vol.Required("message"): str,
+        vol.Required("camera_entity_id"): str,
+        vol.Optional("entity_id"): str,
+    }
+)
+
+
+def _find_client(hass: HomeAssistant, entity_id: str | None = None):
+    """Find the first available SmartChain LLM client."""
+    for entry in hass.config_entries.async_entries(DOMAIN):
+        if entry.runtime_data is None:
+            continue
+        if isinstance(entry.runtime_data, dict):
+            for sub_id, c in entry.runtime_data.items():
+                if entity_id:
+                    uid = f"{entry.entry_id}_{sub_id}"
+                    if entity_id.endswith(uid):
+                        return c
+                else:
+                    return c
+        else:
+            return entry.runtime_data
+    return None
+
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     """Set up SmartChain domain (register services)."""
@@ -76,27 +105,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         message = call.data["message"]
         entity_id = call.data.get("entity_id")
 
-        # Find the first available SmartChain client
-        client = None
-        for entry in hass.config_entries.async_entries(DOMAIN):
-            if entry.runtime_data is None:
-                continue
-            if isinstance(entry.runtime_data, dict):
-                # Subentry mode: use first client or match entity_id
-                for sub_id, c in entry.runtime_data.items():
-                    if entity_id:
-                        uid = f"{entry.entry_id}_{sub_id}"
-                        if entity_id.endswith(uid):
-                            client = c
-                            break
-                    else:
-                        client = c
-                        break
-            else:
-                client = entry.runtime_data
-            if client:
-                break
-
+        client = _find_client(hass, entity_id)
         if not client:
             return {"response": "No SmartChain agent available."}
 
@@ -107,11 +116,54 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
             LOGGER.exception("SmartChain ask service error: %s", err)
             return {"response": f"Error: {err}"}
 
+    async def _handle_analyze_image(call: ServiceCall) -> ServiceResponse:
+        """Handle smartchain.analyze_image service call."""
+        message = call.data["message"]
+        camera_entity_id = call.data["camera_entity_id"]
+        entity_id = call.data.get("entity_id")
+
+        # Get snapshot from camera
+        try:
+            image = await async_get_image(hass, camera_entity_id, timeout=10)
+        except Exception as err:
+            LOGGER.error("Failed to get image from %s: %s", camera_entity_id, err)
+            return {"response": f"Error getting camera image: {err}"}
+
+        # Encode image to base64
+        encoded = base64.b64encode(image.content).decode("utf-8")
+        mime_type = image.content_type or "image/jpeg"
+        data_url = f"data:{mime_type};base64,{encoded}"
+
+        # Find the SmartChain client
+        client = _find_client(hass, entity_id)
+        if not client:
+            return {"response": "No SmartChain agent available."}
+
+        # Build multimodal message
+        multimodal_content = [
+            {"type": "text", "text": message},
+            {"type": "image_url", "image_url": {"url": data_url}},
+        ]
+
+        try:
+            result = await client.ainvoke([HumanMessage(content=multimodal_content)])
+            return {"response": result.content}
+        except Exception as err:
+            LOGGER.exception("SmartChain analyze_image error: %s", err)
+            return {"response": f"Error: {err}"}
+
     hass.services.async_register(
         DOMAIN,
         SERVICE_ASK,
         _handle_ask,
         schema=SERVICE_ASK_SCHEMA,
+        supports_response=SupportsResponse.ONLY,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_ANALYZE_IMAGE,
+        _handle_analyze_image,
+        schema=SERVICE_ANALYZE_IMAGE_SCHEMA,
         supports_response=SupportsResponse.ONLY,
     )
     return True
@@ -136,10 +188,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     else:
         # Legacy mode: single client from entry.options
         common_args = _resolve_client_args(dict(entry.options))
-        LOGGER.warning(
-            "SmartChain setup: engine=%s, options=%s, resolved_model=%s",
+        LOGGER.debug(
+            "SmartChain setup: engine=%s, resolved_model=%s",
             engine,
-            dict(entry.options),
             common_args.get("model"),
         )
         client = await get_client(hass, engine, entry, common_args)

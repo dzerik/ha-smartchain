@@ -86,7 +86,7 @@ SmartChain is a Home Assistant custom integration providing a multi-provider LLM
 | DeepSeek | `ChatOpenAI` | api_key + deepseek base_url | `langchain-openai` |
 | Anthropic | `ChatAnthropic` | api_key | `langchain-anthropic` |
 
-### Tests (103 total)
+### Tests (114 total)
 - `tests/test_config_flow.py` — 25 config flow + options flow tests
 - `tests/test_init.py` — 19 conversation entity tests
 - `tests/test_setup.py` — 7 setup/unload tests (all providers)
@@ -95,7 +95,7 @@ SmartChain is a Home Assistant custom integration providing a multi-provider LLM
 - `tests/test_vision.py` — 6 vision/multimodal tests
 - `tests/test_history_tool.py` — 8 state history tool tests
 - `tests/test_delegate_tool.py` — 7 agent delegation tests
-- `tests/test_service.py` — 4 smartchain.ask service tests
+- `tests/test_service.py` — 8 service tests (ask + analyze_image)
 - `tests/test_skills.py` — 7 YAML skill system tests
 - `tests/test_prompt_cache.py` — 4 prompt caching tests
 - Run: `uv run --prerelease=allow pytest tests/ -v`
@@ -126,4 +126,4 @@ SmartChain is a Home Assistant custom integration providing a multi-provider LLM
 ### Version Policy
 - Version in `pyproject.toml` AND `custom_components/smartchain/manifest.json` — ALWAYS keep in sync
 - Follow semver: PATCH for fixes, MINOR for features, MAJOR for breaking changes
-- Current: 1.8.0
+- Current: 2.0.0
