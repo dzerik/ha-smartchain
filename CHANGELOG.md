@@ -5,6 +5,26 @@ All notable changes to this project are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 project follows [Semantic Versioning](https://semver.org/).
 
+## [2.9.0] - 2026-03-12
+
+### Added
+- **IDE-like panel** — complete redesign of SmartChain AI panel into a two-column IDE layout
+- Left sidebar: file-explorer with type filters (All/Automations/Scripts/Scenes/Blueprints), search, item list with blueprint badges
+- Right panel: full-screen YAML code editor with line numbers, tab-key indent, always-edit mode
+- **AI assistant bar** — bottom input for describing changes, Enter to submit, agent/type selectors, entity picker toggle
+- **Diff viewer** — inline LCS-based diff with context lines, add/delete highlighting, stats (+N/-N)
+- **Toolbar** — Validate, Deploy, Diff toggle, Copy buttons with inline validation status
+- Mode tabs: Editor (IDE) and Camera (existing camera analysis)
+- Status bar showing line count, type, and item ID
+
+### Changed
+- Panel completely rewritten from tab-based generate/camera to IDE layout with 7 ES module components
+- New components: `sidebar-explorer.js`, `code-editor.js`, `diff-viewer.js`, `ai-bar.js`, `toolbar.js`
+- Existing `generate-tab.js`, `yaml-editor.js`, `yaml-picker.js` replaced by new components
+- Camera tab preserved as second mode
+- Auto-diff display after AI generates/improves YAML
+- Total: 128 tests passing
+
 ## [2.8.1] - 2026-03-12
 
 ### Security
