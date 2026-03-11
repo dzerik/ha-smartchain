@@ -32,6 +32,7 @@ from .const import (
     CONF_CHAT_HISTORY,
     CONF_CHAT_MODEL,
     CONF_CHAT_MODEL_USER,
+    CONF_ENABLE_HISTORY_TOOL,
     CONF_ENGINE,
     CONF_ENGINE_OPTIONS,
     CONF_FOLDER_ID,
@@ -45,6 +46,7 @@ from .const import (
     CONF_VERIFY_SSL,
     DEFAULT_CHAT_HISTORY,
     DEFAULT_CHAT_MODEL,
+    DEFAULT_ENABLE_HISTORY_TOOL,
     DEFAULT_OLLAMA_BASE_URL,
     DEFAULT_PROCESS_BUILTIN_SENTENCES,
     DEFAULT_PROFANITY,
@@ -376,6 +378,15 @@ def _subentry_schema(
                     "suggested_value": options.get(CONF_CHAT_HISTORY, DEFAULT_CHAT_HISTORY)
                 },
                 default=DEFAULT_CHAT_HISTORY,
+            ): bool,
+            vol.Optional(
+                CONF_ENABLE_HISTORY_TOOL,
+                description={
+                    "suggested_value": options.get(
+                        CONF_ENABLE_HISTORY_TOOL, DEFAULT_ENABLE_HISTORY_TOOL
+                    )
+                },
+                default=DEFAULT_ENABLE_HISTORY_TOOL,
             ): bool,
         }
     )
