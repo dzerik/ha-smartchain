@@ -27,6 +27,7 @@ def mock_session():
     """Create a mock aiohttp session."""
     session = MagicMock()
     response = AsyncMock()
+    response.raise_for_status = MagicMock()
     session.get = AsyncMock(return_value=response)
     return session, response
 
