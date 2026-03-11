@@ -5,6 +5,23 @@ All notable changes to this project are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 project follows [Semantic Versioning](https://semver.org/).
 
+## [1.8.0] - 2026-03-11
+
+### Added
+- **v1.8 Prompt caching** — TTL-based cache (30s) for Jinja2-rendered system prompts. Avoids repeated expensive template rendering for device lists
+- **v1.7 Skill system** — load custom skills from YAML files (`config/smartchain/skills/*.yaml`). Skills define name, description, and prompt — appended to system prompt as additional context
+- **v1.5 smartchain.ask service** — simple service for automations (Telegram, Slack, etc). Accepts message + optional entity_id, returns LLM response. With services.yaml definition
+- **v1.4 Multi-agent delegation** — `ask_agent` tool allows agents to delegate tasks to sibling agents in the same config entry. Tool-based routing without LangGraph dependency
+- **v1.3 State history tool** — `get_state_history` tool lets LLM query past device states via HA recorder. Configurable via `enable_history_tool` option. Capped at 24h, last 20 changes
+- **v1.2 MCP support** — works through HA native MCP integration + Assist API multi-select. No custom code needed
+- **v1.0 Vision** — camera image analysis via multimodal LLM messages. `_attachment_to_base64()` reads images, optional PyTurboJPEG compression for large images
+
+### Changed
+- Custom tool calls (history, delegate) marked as `external=True` in stream, handled after `async_add_delta_content_stream`
+- `_async_langchain_stream` sets `external` flag for custom tool names
+- `async_setup()` added to register `smartchain.ask` service at domain level
+- Total: 103 tests passing
+
 ## [0.9.0] - 2026-03-10
 
 ### Added

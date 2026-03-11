@@ -56,19 +56,25 @@ SmartChain is a Home Assistant custom integration providing a multi-provider LLM
 ## Architecture
 
 ### Core Files
-- `custom_components/smartchain/__init__.py` — entry setup, client creation, dynamic AI_TASK detection
-- `custom_components/smartchain/conversation.py` — `SmartChainConversationEntity` (streaming, tool calling)
+- `custom_components/smartchain/__init__.py` — entry setup, client creation, `smartchain.ask` service, dynamic AI_TASK detection
+- `custom_components/smartchain/conversation.py` — `SmartChainConversationEntity` (streaming, tool calling, vision, skills, prompt cache)
 - `custom_components/smartchain/ai_task.py` — `SmartChainAITaskEntity` (data generation for automations)
-- `custom_components/smartchain/config_flow.py` — Config Flow (6 providers) + Options Flow
+- `custom_components/smartchain/config_flow.py` — Config Flow (6 providers) + Options Flow + ConversationSubentryFlow
 - `custom_components/smartchain/client_util.py` — LLM client factory (`get_client`, `validate_client`)
 - `custom_components/smartchain/const.py` — all constants, prompts, model lists
+- `custom_components/smartchain/history_tool.py` — state history tool for LLM
+- `custom_components/smartchain/delegate_tool.py` — agent delegation tool for multi-agent
+- `custom_components/smartchain/skills.py` — YAML skill loader
+- `custom_components/smartchain/services.yaml` — `smartchain.ask` service definition
 
 ### Key Patterns
 - **Streaming**: `client.astream()` -> `_async_langchain_stream()` -> `chat_log.async_add_delta_content_stream()`
 - **Tool calling**: HA `llm.Tool` -> `_ha_tool_to_dict()` -> `client.bind_tools()` -> loop until no `unresponded_tool_results`
-- **ChatLog conversion**: `_chatlog_to_langchain()` converts HA ChatLog content to LangChain message list
-- **System prompt**: With Assist API — `async_provide_llm_data()`, without — manual Jinja2 template + `DEFAULT_DEVICES_PROMPT`
+- **Custom tools**: history + delegate tools marked `external=True` in ToolInput, handled after stream via `_handle_*_tool_calls()`
+- **ChatLog conversion**: `_chatlog_to_langchain()` converts HA ChatLog content to LangChain message list (including multimodal/vision)
+- **System prompt**: With Assist API — `async_provide_llm_data()`, without — cached Jinja2 template + `DEFAULT_DEVICES_PROMPT` + skills
 - **Provider client creation**: lazy imports for optional providers (Ollama, Anthropic)
+- **Multi-agent**: `ask_agent` tool auto-added when multiple subentries exist, delegates to sibling agents
 
 ### Provider Implementation
 | Provider | LangChain Class | Auth | Package |
@@ -80,11 +86,18 @@ SmartChain is a Home Assistant custom integration providing a multi-provider LLM
 | DeepSeek | `ChatOpenAI` | api_key + deepseek base_url | `langchain-openai` |
 | Anthropic | `ChatAnthropic` | api_key | `langchain-anthropic` |
 
-### Tests (51 total)
-- `tests/test_config_flow.py` — 18 config flow tests (all 6 providers)
+### Tests (103 total)
+- `tests/test_config_flow.py` — 25 config flow + options flow tests
 - `tests/test_init.py` — 19 conversation entity tests
 - `tests/test_setup.py` — 7 setup/unload tests (all providers)
 - `tests/test_ai_task.py` — 7 AI task tests
+- `tests/test_subentries.py` — 8 subentry flow + setup tests
+- `tests/test_vision.py` — 6 vision/multimodal tests
+- `tests/test_history_tool.py` — 8 state history tool tests
+- `tests/test_delegate_tool.py` — 7 agent delegation tests
+- `tests/test_service.py` — 4 smartchain.ask service tests
+- `tests/test_skills.py` — 7 YAML skill system tests
+- `tests/test_prompt_cache.py` — 4 prompt caching tests
 - Run: `uv run --prerelease=allow pytest tests/ -v`
 - Lint: `uv run --prerelease=allow ruff check . && ruff format --check .`
 
@@ -113,4 +126,4 @@ SmartChain is a Home Assistant custom integration providing a multi-provider LLM
 ### Version Policy
 - Version in `pyproject.toml` AND `custom_components/smartchain/manifest.json` — ALWAYS keep in sync
 - Follow semver: PATCH for fixes, MINOR for features, MAJOR for breaking changes
-- Current: 0.8.1
+- Current: 1.8.0
