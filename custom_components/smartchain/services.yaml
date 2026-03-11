@@ -1,0 +1,19 @@
+ask:
+  name: Ask SmartChain
+  description: Send a message to SmartChain LLM and get a response. Use in automations with Telegram, Slack, etc.
+  fields:
+    message:
+      name: Message
+      description: The text message to send to the LLM
+      required: true
+      example: "What's the temperature in the kitchen?"
+      selector:
+        text:
+    entity_id:
+      name: Agent Entity
+      description: The conversation agent entity to use (optional, uses first available if not specified)
+      required: false
+      example: "conversation.smartchain_gigachat"
+      selector:
+        entity:
+          domain: conversation
