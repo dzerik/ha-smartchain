@@ -340,7 +340,7 @@ def _subentry_schema(
                 description={
                     "suggested_value": options.get(CONF_CHAT_MODEL),
                 },
-                default="none",
+                default="",
             ): selector.SelectSelector(
                 selector.SelectSelectorConfig(
                     mode=SelectSelectorMode("dropdown"),

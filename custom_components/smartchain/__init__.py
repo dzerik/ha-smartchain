@@ -43,7 +43,7 @@ def _resolve_client_args(options: dict) -> dict:
     model = options.get(CONF_CHAT_MODEL_USER)
     if not model or not model.strip():
         model = options.get(CONF_CHAT_MODEL)
-    if not model or not model.strip():
+    if not model or not model.strip() or model == "none":
         model = None
     temperature = options.get(CONF_TEMPERATURE, DEFAULT_TEMPERATURE)
     max_tokens = options.get(CONF_MAX_TOKENS)
