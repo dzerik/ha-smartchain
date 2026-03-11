@@ -17,3 +17,31 @@ ask:
       selector:
         entity:
           domain: conversation
+
+analyze_image:
+  name: Analyze Camera Image
+  description: Send a camera snapshot to SmartChain LLM for visual analysis. Supports GigaChat 2.0, OpenAI GPT-4o, Anthropic Claude, Ollama (LLaVA/Gemma Vision).
+  fields:
+    message:
+      name: Message
+      description: The question or instruction for the LLM about the image
+      required: true
+      example: "What do you see on this camera? Is there anyone at the door?"
+      selector:
+        text:
+    camera_entity_id:
+      name: Camera Entity
+      description: The camera entity to capture a snapshot from
+      required: true
+      example: "camera.front_door"
+      selector:
+        entity:
+          domain: camera
+    entity_id:
+      name: Agent Entity
+      description: The conversation agent entity to use (optional, uses first available if not specified)
+      required: false
+      example: "conversation.smartchain_gigachat"
+      selector:
+        entity:
+          domain: conversation
