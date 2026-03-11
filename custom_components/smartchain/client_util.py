@@ -133,3 +133,99 @@ async def get_client(
         common_args["openai_api_key"] = entry.data[CONF_API_KEY]
         client = ChatOpenAI(**common_args)
     return client
+
+
+async def async_fetch_models(
+    hass: HomeAssistant,
+    engine: str,
+    data: dict,
+) -> list[str]:
+    """Fetch available models from provider API.
+
+    Returns a list of model names with empty string first (for 'custom' option).
+    Falls back to static ENGINE_MODELS on any error.
+    """
+    from .const import ENGINE_MODELS, UNIQUE_ID
+
+    try:
+        if engine == ID_OLLAMA:
+            models = await _fetch_ollama_models(hass, data)
+        elif engine == ID_OPENAI:
+            models = await _fetch_openai_compatible_models(
+                hass, data, "https://api.openai.com/v1/models"
+            )
+        elif engine == ID_DEEPSEEK:
+            models = await _fetch_openai_compatible_models(
+                hass, data, f"{DEFAULT_DEEPSEEK_BASE_URL}/models"
+            )
+        elif engine == ID_ANTHROPIC:
+            models = await _fetch_anthropic_models(hass, data)
+        elif engine == ID_GIGACHAT:
+            models = await _fetch_gigachat_models(hass, data)
+        else:
+            # YandexGPT — no standard list API, use static
+            return ENGINE_MODELS.get(UNIQUE_ID.get(engine, ""), [""])
+
+        if models:
+            return [""] + models
+        raise ValueError("Empty model list")
+    except Exception:
+        LOGGER.debug("Failed to fetch models for %s, using static list", engine)
+        return ENGINE_MODELS.get(UNIQUE_ID.get(engine, ""), [""])
+
+
+async def _fetch_ollama_models(hass: HomeAssistant, data: dict) -> list[str]:
+    """Fetch models from Ollama API."""
+    import aiohttp
+    from homeassistant.helpers.aiohttp_client import async_get_clientsession
+
+    session = async_get_clientsession(hass)
+    base_url = data.get(CONF_BASE_URL, DEFAULT_OLLAMA_BASE_URL)
+    resp = await session.get(
+        f"{base_url}/api/tags",
+        timeout=aiohttp.ClientTimeout(total=10),
+    )
+    result = await resp.json()
+    return sorted(m["name"] for m in result.get("models", []))
+
+
+async def _fetch_openai_compatible_models(hass: HomeAssistant, data: dict, url: str) -> list[str]:
+    """Fetch models from OpenAI-compatible API (OpenAI, DeepSeek)."""
+    import aiohttp
+    from homeassistant.helpers.aiohttp_client import async_get_clientsession
+
+    session = async_get_clientsession(hass)
+    headers = {"Authorization": f"Bearer {data[CONF_API_KEY]}"}
+    resp = await session.get(
+        url,
+        headers=headers,
+        timeout=aiohttp.ClientTimeout(total=10),
+    )
+    result = await resp.json()
+    return sorted(m["id"] for m in result.get("data", []))
+
+
+async def _fetch_anthropic_models(hass: HomeAssistant, data: dict) -> list[str]:
+    """Fetch models from Anthropic API."""
+    import aiohttp
+    from homeassistant.helpers.aiohttp_client import async_get_clientsession
+
+    session = async_get_clientsession(hass)
+    headers = {
+        "x-api-key": data[CONF_API_KEY],
+        "anthropic-version": "2023-06-01",
+    }
+    resp = await session.get(
+        "https://api.anthropic.com/v1/models",
+        headers=headers,
+        timeout=aiohttp.ClientTimeout(total=10),
+    )
+    result = await resp.json()
+    return sorted(m["id"] for m in result.get("data", []))
+
+
+async def _fetch_gigachat_models(hass: HomeAssistant, data: dict) -> list[str]:
+    """Fetch models from GigaChat API via SDK."""
+    client = GigaChat(credentials=data[CONF_API_KEY], verify_ssl_certs=False)
+    result = await hass.async_add_executor_job(client.get_models)
+    return sorted(m.id_ for m in result.data)
