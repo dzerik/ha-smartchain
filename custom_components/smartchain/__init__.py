@@ -119,6 +119,27 @@ SERVICE_VALIDATE_AUTOMATION_SCHEMA = vol.Schema(
     }
 )
 
+SERVICE_LIST_YAML = "list_yaml"
+SERVICE_LIST_YAML_SCHEMA = vol.Schema(
+    {
+        vol.Optional("type"): vol.In(VALID_GEN_TYPES),
+    }
+)
+
+SERVICE_GET_YAML = "get_yaml"
+SERVICE_GET_YAML_SCHEMA = vol.Schema(
+    {
+        vol.Required("type"): vol.In(VALID_GEN_TYPES),
+        vol.Required("id"): str,
+    }
+)
+
+YAML_FILE_MAP = {
+    "automation": "automations.yaml",
+    "script": "scripts.yaml",
+    "scene": "scenes.yaml",
+}
+
 SENSOR_LAST_ANALYSIS = f"sensor.{DOMAIN}_last_analysis"
 EVENT_IMAGE_ANALYZED = f"{DOMAIN}_image_analyzed"
 
@@ -508,6 +529,97 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         bp_path = await hass.async_add_executor_job(_write)
         return {"deployed": True, "alias": alias, "blueprint_path": bp_path}
 
+    def _list_yaml_items(gen_type: str | None = None) -> list[dict]:
+        """List all YAML items (automations, scripts, scenes, blueprints)."""
+        items: list[dict] = []
+        types = [gen_type] if gen_type else list(YAML_FILE_MAP.keys()) + ["blueprint"]
+
+        for t in types:
+            if t == "blueprint":
+                bp_dir = Path(hass.config.path("blueprints", "automation"))
+                if bp_dir.is_dir():
+                    for bp_file in sorted(bp_dir.rglob("*.yaml")):
+                        try:
+                            with open(bp_file, encoding="utf-8") as f:
+                                data = yaml.safe_load(f)
+                            bp_meta = data.get("blueprint", {}) if isinstance(data, dict) else {}
+                            rel = str(bp_file.relative_to(bp_dir))
+                            items.append(
+                                {
+                                    "id": rel,
+                                    "alias": bp_meta.get("name", bp_file.stem),
+                                    "type": "blueprint",
+                                }
+                            )
+                        except Exception:
+                            pass
+            elif t in YAML_FILE_MAP:
+                path = hass.config.path(YAML_FILE_MAP[t])
+                try:
+                    with open(path, encoding="utf-8") as f:
+                        data = yaml.safe_load(f)
+                    if isinstance(data, list):
+                        for item in data:
+                            if isinstance(item, dict) and item.get("id"):
+                                entry = {
+                                    "id": item["id"],
+                                    "alias": item.get("alias") or item.get("name", "Unnamed"),
+                                    "type": t,
+                                }
+                                # Mark blueprint-based automations
+                                if "use_blueprint" in item:
+                                    bp = item["use_blueprint"]
+                                    entry["blueprint_based"] = True
+                                    if isinstance(bp, dict):
+                                        entry["blueprint_path"] = bp.get("path", "")
+                                items.append(entry)
+                except FileNotFoundError:
+                    pass
+        return items
+
+    def _get_yaml_item(gen_type: str, item_id: str) -> str | None:
+        """Get YAML content for a specific item by type and id."""
+        if gen_type == "blueprint":
+            bp_path = Path(hass.config.path("blueprints", "automation")) / item_id
+            if not bp_path.is_file():
+                return None
+            with open(bp_path, encoding="utf-8") as f:
+                return f.read()
+
+        if gen_type not in YAML_FILE_MAP:
+            return None
+        path = hass.config.path(YAML_FILE_MAP[gen_type])
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = yaml.safe_load(f)
+        except FileNotFoundError:
+            return None
+        if isinstance(data, list):
+            for item in data:
+                if isinstance(item, dict) and item.get("id") == item_id:
+                    return yaml.dump(
+                        item,
+                        default_flow_style=False,
+                        allow_unicode=True,
+                        sort_keys=False,
+                    )
+        return None
+
+    async def _handle_list_yaml(call: ServiceCall) -> ServiceResponse:
+        """Handle smartchain.list_yaml service call."""
+        gen_type = call.data.get("type")
+        items = await hass.async_add_executor_job(_list_yaml_items, gen_type)
+        return {"items": items}
+
+    async def _handle_get_yaml(call: ServiceCall) -> ServiceResponse:
+        """Handle smartchain.get_yaml service call."""
+        gen_type = call.data["type"]
+        item_id = call.data["id"]
+        yaml_text = await hass.async_add_executor_job(_get_yaml_item, gen_type, item_id)
+        if yaml_text is None:
+            return {"error": f"Item '{item_id}' not found", "yaml": ""}
+        return {"yaml": yaml_text, "type": gen_type, "id": item_id}
+
     async def _handle_validate_automation(call: ServiceCall) -> ServiceResponse:
         """Handle smartchain.validate_automation service call."""
         yaml_text = call.data["automation_yaml"]
@@ -632,6 +744,20 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         SERVICE_VALIDATE_AUTOMATION,
         _handle_validate_automation,
         schema=SERVICE_VALIDATE_AUTOMATION_SCHEMA,
+        supports_response=SupportsResponse.ONLY,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_LIST_YAML,
+        _handle_list_yaml,
+        schema=SERVICE_LIST_YAML_SCHEMA,
+        supports_response=SupportsResponse.ONLY,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_GET_YAML,
+        _handle_get_yaml,
+        schema=SERVICE_GET_YAML_SCHEMA,
         supports_response=SupportsResponse.ONLY,
     )
     return True

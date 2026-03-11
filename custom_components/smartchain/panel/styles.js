@@ -162,4 +162,9 @@ export const SC_STYLES = `
     border-radius: 4px;
   }
   .sc-toggle-btn:hover { background: var(--primary-background-color, #f5f5f5); }
+  .sc-btn-sm { padding: 6px 14px; font-size: 12px; }
+  .sc-src-active {
+    background: var(--primary-color, #03a9f4) !important;
+    color: #fff !important;
+  }
 `;
