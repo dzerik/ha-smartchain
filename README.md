@@ -9,6 +9,8 @@
 [![HACS](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://hacs.xyz)
 [![GitHub release](https://img.shields.io/github/v/release/dzerik/ha-smartchain)](https://github.com/dzerik/ha-smartchain/releases)
 
+> **⚠️ Early pre-alpha.** This project is in a very early stage of development. It is almost certainly non-functional or barely functional. Use at your own risk — expect breaking changes, missing features, and bugs. Contributions and bug reports are welcome!
+
 ## Overview
 
 SmartChain is a Home Assistant custom integration that provides an intelligent voice/conversation assistant powered by multiple LLM providers through LangChain:
