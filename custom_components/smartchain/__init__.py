@@ -28,7 +28,7 @@ from .const import (
     CONF_TEMPERATURE,
     DEFAULT_TEMPERATURE,
     DOMAIN,
-    GENERATE_AUTOMATION_PROMPT,
+    GENERATE_PROMPTS,
     ID_GIGACHAT,
     SUBENTRY_TYPE_CONVERSATION,
 )
@@ -89,6 +89,8 @@ SERVICE_ANALYZE_IMAGE_SCHEMA = vol.Schema(
     }
 )
 
+VALID_GEN_TYPES = ["automation", "script", "scene", "blueprint"]
+
 SERVICE_GENERATE_AUTOMATION = "generate_automation"
 SERVICE_GENERATE_AUTOMATION_SCHEMA = vol.Schema(
     {
@@ -96,6 +98,7 @@ SERVICE_GENERATE_AUTOMATION_SCHEMA = vol.Schema(
         vol.Optional("entity_id"): str,
         vol.Optional("deploy", default=False): bool,
         vol.Optional("entity_ids"): [str],
+        vol.Optional("type", default="automation"): vol.In(VALID_GEN_TYPES),
     }
 )
 
@@ -103,6 +106,7 @@ SERVICE_DEPLOY_AUTOMATION = "deploy_automation"
 SERVICE_DEPLOY_AUTOMATION_SCHEMA = vol.Schema(
     {
         vol.Required("automation_yaml"): str,
+        vol.Optional("type", default="automation"): vol.In(VALID_GEN_TYPES),
     }
 )
 
@@ -110,6 +114,7 @@ SERVICE_VALIDATE_AUTOMATION = "validate_automation"
 SERVICE_VALIDATE_AUTOMATION_SCHEMA = vol.Schema(
     {
         vol.Required("automation_yaml"): str,
+        vol.Optional("type", default="automation"): vol.In(VALID_GEN_TYPES),
     }
 )
 
@@ -238,8 +243,10 @@ def _collect_ha_context(
     return "\n".join(lines)
 
 
-def _validate_automation_config(hass: HomeAssistant, yaml_text: str) -> dict:
-    """Validate automation YAML structure and entity references."""
+def _validate_automation_config(
+    hass: HomeAssistant, yaml_text: str, gen_type: str = "automation"
+) -> dict:
+    """Validate YAML structure and entity references for any generation type."""
     errors: list[str] = []
     warnings: list[str] = []
 
@@ -247,21 +254,56 @@ def _validate_automation_config(hass: HomeAssistant, yaml_text: str) -> dict:
     try:
         config = yaml.safe_load(yaml_text)
     except yaml.YAMLError as exc:
-        return {"valid": False, "errors": [f"Invalid YAML syntax: {exc}"]}
+        return {"valid": False, "errors": [f"Invalid YAML syntax: {exc}"], "warnings": []}
 
     if not isinstance(config, dict):
-        return {"valid": False, "errors": ["YAML must be a mapping (dict), not a list or scalar."]}
+        return {
+            "valid": False,
+            "errors": ["YAML must be a mapping (dict), not a list or scalar."],
+            "warnings": [],
+        }
 
-    # Check required keys (HA supports both singular and plural forms)
-    has_trigger = "trigger" in config or "triggers" in config
-    has_action = "action" in config or "actions" in config
+    # Type-specific structure checks
+    if gen_type == "automation":
+        has_trigger = "trigger" in config or "triggers" in config
+        has_action = "action" in config or "actions" in config
+        if not has_trigger:
+            errors.append("Missing required key: 'trigger' or 'triggers'")
+        if not has_action:
+            errors.append("Missing required key: 'action' or 'actions'")
+        if "alias" not in config:
+            warnings.append("Missing 'alias' — automation will be unnamed")
 
-    if not has_trigger:
-        errors.append("Missing required key: 'trigger' or 'triggers'")
-    if not has_action:
-        errors.append("Missing required key: 'action' or 'actions'")
-    if "alias" not in config:
-        warnings.append("Missing 'alias' — automation will be unnamed")
+    elif gen_type == "script":
+        has_sequence = "sequence" in config
+        if not has_sequence:
+            errors.append("Missing required key: 'sequence'")
+        if "alias" not in config:
+            warnings.append("Missing 'alias' — script will be unnamed")
+
+    elif gen_type == "scene":
+        has_entities = "entities" in config
+        if not has_entities:
+            errors.append("Missing required key: 'entities'")
+        if "name" not in config:
+            warnings.append("Missing 'name' — scene will be unnamed")
+
+    elif gen_type == "blueprint":
+        if "blueprint" not in config:
+            errors.append("Missing required key: 'blueprint'")
+        else:
+            bp = config["blueprint"]
+            if not isinstance(bp, dict):
+                errors.append("'blueprint' must be a mapping")
+            else:
+                if "name" not in bp:
+                    warnings.append("Missing 'blueprint.name'")
+                if "domain" not in bp:
+                    errors.append("Missing required key: 'blueprint.domain'")
+                if "input" not in bp:
+                    warnings.append(
+                        "Missing 'blueprint.input' — no configurable inputs"
+                    )
 
     # Collect all entity_id references from the config
     referenced_entities = set()
@@ -422,10 +464,12 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         client,
         description: str,
         entity_ids: list[str] | None = None,
+        gen_type: str = "automation",
     ) -> str:
-        """Generate automation YAML from natural language description."""
+        """Generate YAML from natural language description."""
         ha_context = _collect_ha_context(hass, entity_ids or None)
-        prompt = GENERATE_AUTOMATION_PROMPT.format(
+        prompt_template = GENERATE_PROMPTS.get(gen_type, GENERATE_PROMPTS["automation"])
+        prompt = prompt_template.format(
             description=description,
             ha_context=ha_context,
         )
@@ -438,50 +482,86 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
             yaml_text = "\n".join(lines).strip()
         return yaml_text
 
-    async def _deploy_automation_to_ha(yaml_text: str) -> dict:
-        """Deploy automation YAML to HA via automations.yaml."""
+    async def _deploy_automation_to_ha(
+        yaml_text: str, gen_type: str = "automation"
+    ) -> dict:
+        """Deploy YAML to HA (automations.yaml, scripts.yaml, scenes.yaml, or blueprints/)."""
         config = yaml.safe_load(yaml_text)
         if not isinstance(config, dict):
-            return {"error": "Generated YAML is not a valid automation object."}
+            return {"error": "Generated YAML is not a valid object."}
+
+        if gen_type == "blueprint":
+            return await _deploy_blueprint(config, yaml_text)
 
         config["id"] = uuid.uuid4().hex
 
-        automations_path = hass.config.path("automations.yaml")
+        file_map = {
+            "automation": "automations.yaml",
+            "script": "scripts.yaml",
+            "scene": "scenes.yaml",
+        }
+        reload_domain = {
+            "automation": "automation",
+            "script": "script",
+            "scene": "scene",
+        }
 
-        def _write_automation():
-            # Read existing automations
+        target_file = hass.config.path(file_map.get(gen_type, "automations.yaml"))
+        domain = reload_domain.get(gen_type, "automation")
+
+        def _write():
             existing = []
             try:
-                with open(automations_path, encoding="utf-8") as f:
+                with open(target_file, encoding="utf-8") as f:
                     content = yaml.safe_load(f)
                     if isinstance(content, list):
                         existing = content
             except FileNotFoundError:
                 pass
-
-            # Append new automation
             existing.append(config)
-
-            # Write back
-            with open(automations_path, "w", encoding="utf-8") as f:
+            with open(target_file, "w", encoding="utf-8") as f:
                 yaml.dump(
-                    existing,
-                    f,
+                    existing, f,
                     default_flow_style=False,
                     allow_unicode=True,
                     sort_keys=False,
                 )
 
-        await hass.async_add_executor_job(_write_automation)
-        await hass.services.async_call("automation", "reload", blocking=True)
+        await hass.async_add_executor_job(_write)
 
-        alias = config.get("alias", "Unnamed")
+        # Reload — register service if not available (test env)
+        if hass.services.has_service(domain, "reload"):
+            await hass.services.async_call(domain, "reload", blocking=True)
+
+        alias = config.get("alias") or config.get("name") or "Unnamed"
         return {"deployed": True, "automation_id": config["id"], "alias": alias}
+
+    async def _deploy_blueprint(config: dict, yaml_text: str) -> dict:
+        """Deploy a blueprint YAML file to blueprints/automation/smartchain/."""
+        bp_meta = config.get("blueprint", {})
+        alias = bp_meta.get("name", "unnamed_blueprint")
+        # Slug-ify the name
+        slug = re.sub(r"[^a-z0-9_]", "_", alias.lower().strip()).strip("_")
+        if not slug:
+            slug = uuid.uuid4().hex[:8]
+
+        bp_dir = Path(hass.config.path("blueprints", "automation", "smartchain"))
+
+        def _write():
+            bp_dir.mkdir(parents=True, exist_ok=True)
+            bp_path = bp_dir / f"{slug}.yaml"
+            with open(bp_path, "w", encoding="utf-8") as f:
+                f.write(yaml_text)
+            return str(bp_path)
+
+        bp_path = await hass.async_add_executor_job(_write)
+        return {"deployed": True, "alias": alias, "blueprint_path": bp_path}
 
     async def _handle_validate_automation(call: ServiceCall) -> ServiceResponse:
         """Handle smartchain.validate_automation service call."""
         yaml_text = call.data["automation_yaml"]
-        return _validate_automation_config(hass, yaml_text)
+        gen_type = call.data.get("type", "automation")
+        return _validate_automation_config(hass, yaml_text, gen_type)
 
     async def _handle_generate_automation(call: ServiceCall) -> ServiceResponse:
         """Handle smartchain.generate_automation service call."""
@@ -489,6 +569,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         entity_id = call.data.get("entity_id")
         deploy = call.data.get("deploy", False)
         selected_entity_ids = call.data.get("entity_ids")
+        gen_type = call.data.get("type", "automation")
 
         client = _find_client(hass, entity_id)
         if not client:
@@ -496,7 +577,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
         try:
             yaml_text = await _generate_automation_yaml(
-                client, description, selected_entity_ids
+                client, description, selected_entity_ids, gen_type
             )
         except Exception as err:
             LOGGER.exception("SmartChain generate_automation error: %s", err)
@@ -506,7 +587,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
         if deploy:
             try:
-                deploy_result = await _deploy_automation_to_ha(yaml_text)
+                deploy_result = await _deploy_automation_to_ha(yaml_text, gen_type)
                 response.update(deploy_result)
             except Exception as err:
                 LOGGER.exception("SmartChain deploy_automation error: %s", err)
@@ -519,9 +600,8 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         panel_dir = Path(__file__).parent / "panel"
         from homeassistant.components.http import StaticPathConfig
 
-        panel_path = str(panel_dir / "smartchain-panel.js")
         await hass.http.async_register_static_paths(
-            [StaticPathConfig("/smartchain/panel.js", panel_path, False)]
+            [StaticPathConfig("/smartchain", str(panel_dir), False)]
         )
         async_register_built_in_panel(
             hass,
@@ -532,7 +612,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
             config={
                 "_panel_custom": {
                     "name": "smartchain-panel",
-                    "module_url": "/smartchain/panel.js",
+                    "module_url": "/smartchain/smartchain-panel.js",
                 }
             },
         )
@@ -570,9 +650,10 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     async def _handle_deploy_automation(call: ServiceCall) -> ServiceResponse:
         """Handle smartchain.deploy_automation — deploy raw YAML to HA."""
         yaml_text = call.data["automation_yaml"]
+        gen_type = call.data.get("type", "automation")
 
         # Validate before deploying
-        validation = _validate_automation_config(hass, yaml_text)
+        validation = _validate_automation_config(hass, yaml_text, gen_type)
         if not validation["valid"]:
             return {
                 "error": "Validation failed: " + "; ".join(validation["errors"]),
@@ -580,7 +661,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
             }
 
         try:
-            result = await _deploy_automation_to_ha(yaml_text)
+            result = await _deploy_automation_to_ha(yaml_text, gen_type)
             result["validation"] = validation
             return result
         except Exception as err:
