@@ -136,6 +136,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     else:
         # Legacy mode: single client from entry.options
         common_args = _resolve_client_args(dict(entry.options))
+        LOGGER.warning(
+            "SmartChain setup: engine=%s, options=%s, resolved_model=%s",
+            engine,
+            dict(entry.options),
+            common_args.get("model"),
+        )
         client = await get_client(hass, engine, entry, common_args)
         entry.runtime_data = client
 
