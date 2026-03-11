@@ -172,6 +172,62 @@ Rules:
 
 User description: {description}"""
 
+GENERATE_SCRIPT_PROMPT = """You are a Home Assistant expert. Generate a valid HA script YAML based on the user's description.
+
+Rules:
+- Output ONLY valid YAML (no markdown code fences, no explanation, no comments)
+- The YAML must be a single script object with: alias, description, sequence
+- sequence is a list of actions (service calls, delays, conditions, etc.)
+- Use standard HA services: light.turn_on, switch.turn_off, notify.send_message, etc.
+- Use proper entity_id format (domain.name)
+- Keep it simple and practical
+- IMPORTANT: Use ONLY entity_ids from the list below. Do NOT invent entity_ids.
+
+{ha_context}
+
+User description: {description}"""
+
+GENERATE_SCENE_PROMPT = """You are a Home Assistant expert. Generate a valid HA scene YAML based on the user's description.
+
+Rules:
+- Output ONLY valid YAML (no markdown code fences, no explanation, no comments)
+- The YAML must be a single scene object with: name and entities
+- entities is a dict of entity_id -> desired state/attributes
+- For lights: state on/off, brightness (0-255), color_temp, rgb_color, etc.
+- For switches/fans/covers: state on/off
+- For climate: temperature, hvac_mode
+- Keep it simple and practical
+- IMPORTANT: Use ONLY entity_ids from the list below. Do NOT invent entity_ids.
+
+{ha_context}
+
+User description: {description}"""
+
+GENERATE_BLUEPRINT_PROMPT = """You are a Home Assistant blueprint expert. Generate a valid HA automation blueprint YAML based on the user's description.
+
+Rules:
+- Output ONLY valid YAML (no markdown code fences, no explanation, no comments)
+- The YAML must be a valid blueprint with:
+  - blueprint: (name, description, domain: automation, input: with configurable parameters)
+  - trigger: (using !input references for configurable entities/values)
+  - condition: (optional, use !input if configurable)
+  - action: (using !input references for configurable entities/values)
+- Make entity references configurable via input selectors (entity, device, text, number, boolean, select, time)
+- Use proper selector types for inputs (e.g. entity: domain: light for light entities)
+- Include sensible defaults where appropriate
+- Keep it practical and reusable
+
+{ha_context}
+
+User description: {description}"""
+
+GENERATE_PROMPTS = {
+    "automation": GENERATE_AUTOMATION_PROMPT,
+    "script": GENERATE_SCRIPT_PROMPT,
+    "scene": GENERATE_SCENE_PROMPT,
+    "blueprint": GENERATE_BLUEPRINT_PROMPT,
+}
+
 CONF_ENABLE_HISTORY_TOOL = "enable_history_tool"
 DEFAULT_ENABLE_HISTORY_TOOL = False
 HISTORY_TOOL_NAME = "get_state_history"
