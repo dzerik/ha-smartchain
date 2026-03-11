@@ -94,11 +94,15 @@ async def get_client(
 ):
     """Create LLM client based on engine type."""
     if engine == ID_GIGACHAT:
+        if not common_args.get("model"):
+            common_args.pop("model", None)
         common_args["credentials"] = entry.data[CONF_API_KEY]
         common_args["verify_ssl_certs"] = entry.options.get(CONF_VERIFY_SSL, DEFAULT_VERIFY_SSL)
         common_args["profanity_check"] = entry.options.get(CONF_PROFANITY, DEFAULT_PROFANITY)
         client = GigaChat(**common_args)
     elif engine == ID_YANDEX_GPT:
+        if not common_args.get("model"):
+            common_args.pop("model", None)
         common_args["api_key"] = entry.data[CONF_API_KEY]
         common_args["folder_id"] = entry.data[CONF_FOLDER_ID]
         common_args["max_retries"] = 2
