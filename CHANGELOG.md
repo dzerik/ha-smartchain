@@ -5,6 +5,18 @@ All notable changes to this project are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 project follows [Semantic Versioning](https://semver.org/).
 
+## [1.9.0] - 2026-03-11
+
+### Added
+- **v1.9 Dynamic model lists** — model dropdowns in config/options flow are now populated dynamically from provider APIs (Ollama, OpenAI, DeepSeek, Anthropic, GigaChat). YandexGPT uses static list. Falls back to static lists on network errors
+- `async_fetch_models()` in `client_util.py` — fetches available models via HTTP (aiohttp) or SDK
+- 7 new tests for model fetching (all providers + fallback)
+
+### Changed
+- `_subentry_schema()` accepts optional `models` parameter
+- `OptionsFlow`, `ConversationSubentryFlow` fetch models before building schema
+- Total: 110 tests passing
+
 ## [1.8.0] - 2026-03-11
 
 ### Added

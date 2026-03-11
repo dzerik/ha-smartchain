@@ -25,7 +25,7 @@ from homeassistant.helpers.selector import (
 )
 from httpx import ConnectError
 
-from .client_util import validate_client
+from .client_util import async_fetch_models, validate_client
 from .const import (
     CONF_API_KEY,
     CONF_BASE_URL,
@@ -208,7 +208,9 @@ class ConversationSubentryFlow(ConfigSubentryFlow):
         """Handle adding a new conversation agent."""
         entry = self._get_entry()
         unique_id = entry.unique_id
-        schema = _subentry_schema(self.hass, unique_id, {})
+        engine = entry.data.get(CONF_ENGINE, ID_GIGACHAT)
+        models = await async_fetch_models(self.hass, engine, entry.data)
+        schema = _subentry_schema(self.hass, unique_id, {}, models=models)
 
         if user_input is not None:
             return self._validate_and_create(user_input, unique_id, schema)
@@ -222,7 +224,9 @@ class ConversationSubentryFlow(ConfigSubentryFlow):
         entry = self._get_entry()
         subentry = self._get_reconfigure_subentry()
         unique_id = entry.unique_id
-        schema = _subentry_schema(self.hass, unique_id, subentry.data)
+        engine = entry.data.get(CONF_ENGINE, ID_GIGACHAT)
+        models = await async_fetch_models(self.hass, engine, entry.data)
+        schema = _subentry_schema(self.hass, unique_id, subentry.data, models=models)
 
         if user_input is not None:
             return self._validate_and_update(user_input, entry, subentry, unique_id, schema)
@@ -286,7 +290,9 @@ class OptionsFlow(config_entries.OptionsFlow):
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Manage the options."""
         unique_id = self.config_entry.unique_id
-        schema = _subentry_schema(self.hass, unique_id, self.config_entry.options)
+        engine = self.config_entry.data.get(CONF_ENGINE, ID_GIGACHAT)
+        models = await async_fetch_models(self.hass, engine, self.config_entry.data)
+        schema = _subentry_schema(self.hass, unique_id, self.config_entry.options, models=models)
         if user_input is not None:
             model = user_input.get(CONF_CHAT_MODEL_USER)
             if not model or not model.strip():
@@ -311,11 +317,17 @@ class OptionsFlow(config_entries.OptionsFlow):
 
 
 def _subentry_schema(
-    hass, unique_id: str, options: MappingProxyType[str, Any] | dict[str, Any]
+    hass,
+    unique_id: str,
+    options: MappingProxyType[str, Any] | dict[str, Any],
+    models: list[str] | None = None,
 ) -> vol.Schema:
     """Return a schema for SmartChain agent options (used by both OptionsFlow and SubentryFlow)."""
     if not options:
         options = DEFAULT_OPTIONS
+
+    if models is None:
+        models = ENGINE_MODELS[unique_id]
 
     hass_apis: list[selector.SelectOptionDict] = [
         selector.SelectOptionDict(value=api.id, label=api.name) for api in llm.async_get_apis(hass)
@@ -332,7 +344,7 @@ def _subentry_schema(
             ): selector.SelectSelector(
                 selector.SelectSelectorConfig(
                     mode=SelectSelectorMode("dropdown"),
-                    options=ENGINE_MODELS[unique_id],
+                    options=models,
                 ),
             ),
             vol.Optional(
