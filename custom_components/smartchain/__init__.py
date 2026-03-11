@@ -85,18 +85,25 @@ EVENT_IMAGE_ANALYZED = f"{DOMAIN}_image_analyzed"
 
 
 def _find_client(hass: HomeAssistant, entity_id: str | None = None):
-    """Find the first available SmartChain LLM client."""
+    """Find a SmartChain LLM client, optionally matching entity_id."""
+    # First pass: try to match entity_id if provided
+    if entity_id:
+        for entry in hass.config_entries.async_entries(DOMAIN):
+            if entry.runtime_data is None:
+                continue
+            if isinstance(entry.runtime_data, dict):
+                for sub_id, c in entry.runtime_data.items():
+                    uid = f"{entry.entry_id}_{sub_id}"
+                    if entity_id.endswith(uid):
+                        return c
+
+    # Fallback: return first available client
     for entry in hass.config_entries.async_entries(DOMAIN):
         if entry.runtime_data is None:
             continue
         if isinstance(entry.runtime_data, dict):
-            for sub_id, c in entry.runtime_data.items():
-                if entity_id:
-                    uid = f"{entry.entry_id}_{sub_id}"
-                    if entity_id.endswith(uid):
-                        return c
-                else:
-                    return c
+            for _sub_id, c in entry.runtime_data.items():
+                return c
         else:
             return entry.runtime_data
     return None
