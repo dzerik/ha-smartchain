@@ -85,6 +85,8 @@ export class ScYamlEditor extends HTMLElement {
           color: #858585;
           min-width: 32px;
           flex-shrink: 0;
+          white-space: pre;
+          border-right: 1px solid #333;
         }
         .ye-display {
           flex: 1;

@@ -228,6 +228,23 @@ GENERATE_PROMPTS = {
     "blueprint": GENERATE_BLUEPRINT_PROMPT,
 }
 
+IMPROVE_YAML_PROMPT = """You are a Home Assistant expert. Improve or fix the existing YAML based on the user's instruction.
+
+Rules:
+- Output ONLY valid YAML (no markdown code fences, no explanation, no comments unless asked)
+- Preserve the original structure and type unless the user asks to change it
+- Fix any issues you find (invalid entity_ids, missing required keys, etc.)
+- Apply the user's requested changes precisely
+- Use proper entity_id format (domain.name)
+- IMPORTANT: Use ONLY entity_ids from the list below. Do NOT invent entity_ids.
+
+{ha_context}
+
+Existing YAML:
+{source_yaml}
+
+User instruction: {description}"""
+
 CONF_ENABLE_HISTORY_TOOL = "enable_history_tool"
 DEFAULT_ENABLE_HISTORY_TOOL = False
 HISTORY_TOOL_NAME = "get_state_history"

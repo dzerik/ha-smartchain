@@ -90,6 +90,15 @@ generate_automation:
       selector:
         entity:
           multiple: true
+    source_yaml:
+      name: Source YAML
+      description: >
+        Existing YAML to improve/edit. When provided, the LLM will modify
+        the existing YAML based on the description instead of generating new.
+      required: false
+      selector:
+        text:
+          multiline: true
     deploy:
       name: Deploy
       description: Automatically deploy the generated YAML to Home Assistant

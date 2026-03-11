@@ -13,9 +13,7 @@ from homeassistant.components.frontend import async_register_built_in_panel
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse
-from homeassistant.helpers import area_registry as ar
-from homeassistant.helpers import device_registry as dr
-from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.template import Template
 from homeassistant.util import dt as dt_util
 from langchain_core.messages import HumanMessage
 
@@ -26,10 +24,12 @@ from .const import (
     CONF_ENGINE,
     CONF_MAX_TOKENS,
     CONF_TEMPERATURE,
+    DEFAULT_DEVICES_PROMPT,
     DEFAULT_TEMPERATURE,
     DOMAIN,
     GENERATE_PROMPTS,
     ID_GIGACHAT,
+    IMPROVE_YAML_PROMPT,
     SUBENTRY_TYPE_CONVERSATION,
 )
 
@@ -99,6 +99,7 @@ SERVICE_GENERATE_AUTOMATION_SCHEMA = vol.Schema(
         vol.Optional("deploy", default=False): bool,
         vol.Optional("entity_ids"): [str],
         vol.Optional("type", default="automation"): vol.In(VALID_GEN_TYPES),
+        vol.Optional("source_yaml"): str,
     }
 )
 
@@ -151,96 +152,37 @@ def _collect_ha_context(
     hass: HomeAssistant,
     selected_entity_ids: list[str] | None = None,
 ) -> str:
-    """Collect HA context (areas, entities) for the automation prompt."""
-    area_reg = ar.async_get(hass)
-    entity_reg = er.async_get(hass)
-    device_reg = dr.async_get(hass)
+    """Collect HA context for the generation prompt.
 
-    # Build area name lookup
-    area_names: dict[str, str] = {}
-    for area in area_reg.async_list_areas():
-        area_names[area.id] = area.name
+    Without selected_entity_ids: renders DEFAULT_DEVICES_PROMPT via HA Jinja2
+    template engine (same mechanism as conversation agent system prompt).
+    With selected_entity_ids: compact list of only the selected entities.
+    """
+    if not selected_entity_ids:
+        # Use standard HA Jinja2 template — same as conversation agent
+        try:
+            tpl = Template(DEFAULT_DEVICES_PROMPT, hass)
+            return tpl.async_render()
+        except Exception:
+            LOGGER.debug("Failed to render devices template, falling back")
+            return "No entity context available."
 
-    # Build device -> area mapping
-    device_areas: dict[str, str] = {}
-    for device in device_reg.devices.values():
-        if device.area_id and device.area_id in area_names:
-            device_areas[device.id] = area_names[device.area_id]
-
-    # Collect entities grouped by domain
-    by_domain: dict[str, list[str]] = {}
-    all_states = hass.states.async_all()
-
-    for state in all_states:
-        eid = state.entity_id
-        # If specific entities selected, filter to those only
-        if selected_entity_ids and eid not in selected_entity_ids:
+    # Selected entities — compact format
+    lines = ["Selected Home Assistant entities:"]
+    for eid in selected_entity_ids:
+        state = hass.states.get(eid)
+        if not state or state.state in ("unavailable", "unknown"):
             continue
-        if state.state in ("unavailable", "unknown"):
-            continue
-
-        domain = eid.split(".")[0]
         friendly = state.attributes.get("friendly_name", "")
-        entry = entity_reg.async_get(eid)
-
-        # Determine area
-        area = ""
-        if entry:
-            if entry.area_id and entry.area_id in area_names:
-                area = area_names[entry.area_id]
-            elif entry.device_id and entry.device_id in device_areas:
-                area = device_areas[entry.device_id]
-
+        unit = state.attributes.get("unit_of_measurement", "")
         line = f"  - {eid}"
         if friendly:
             line += f" ({friendly})"
-        if area:
-            line += f" [area: {area}]"
         line += f" = {state.state}"
-        unit = state.attributes.get("unit_of_measurement")
         if unit:
             line += f" {unit}"
-
-        by_domain.setdefault(domain, []).append(line)
-
-    if not by_domain:
-        return "No entities available."
-
-    # Build context string, limit to relevant domains
-    relevant_domains = [
-        "light", "switch", "climate", "cover", "fan", "media_player",
-        "lock", "alarm_control_panel", "vacuum", "scene", "script",
-        "automation", "person", "device_tracker", "zone",
-        "binary_sensor", "sensor", "input_boolean", "input_number",
-        "input_select", "input_text", "notify", "camera", "weather",
-    ]
-
-    lines = ["Available Home Assistant entities:"]
-    entity_count = 0
-    max_entities = 300
-
-    for domain in relevant_domains:
-        if domain not in by_domain:
-            continue
-        entities = by_domain[domain]
-        if entity_count + len(entities) > max_entities and not selected_entity_ids:
-            entities = entities[: max_entities - entity_count]
-        if not entities:
-            continue
-        lines.append(f"\n{domain}:")
-        lines.extend(entities)
-        entity_count += len(entities)
-        if entity_count >= max_entities and not selected_entity_ids:
-            lines.append(f"\n... ({len(all_states) - entity_count} more entities omitted)")
-            break
-
-    # Add areas
-    if area_names:
-        lines.append("\nAreas/Rooms:")
-        for name in sorted(area_names.values()):
-            lines.append(f"  - {name}")
-
-    return "\n".join(lines)
+        lines.append(line)
+    return "\n".join(lines) if len(lines) > 1 else "No entities available."
 
 
 def _validate_automation_config(
@@ -301,9 +243,7 @@ def _validate_automation_config(
                 if "domain" not in bp:
                     errors.append("Missing required key: 'blueprint.domain'")
                 if "input" not in bp:
-                    warnings.append(
-                        "Missing 'blueprint.input' — no configurable inputs"
-                    )
+                    warnings.append("Missing 'blueprint.input' — no configurable inputs")
 
     # Collect all entity_id references from the config
     referenced_entities = set()
@@ -465,14 +405,26 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         description: str,
         entity_ids: list[str] | None = None,
         gen_type: str = "automation",
+        source_yaml: str | None = None,
     ) -> str:
-        """Generate YAML from natural language description."""
+        """Generate or improve YAML from natural language description."""
         ha_context = _collect_ha_context(hass, entity_ids or None)
-        prompt_template = GENERATE_PROMPTS.get(gen_type, GENERATE_PROMPTS["automation"])
-        prompt = prompt_template.format(
-            description=description,
-            ha_context=ha_context,
-        )
+
+        if source_yaml:
+            # Improve existing YAML mode
+            prompt = IMPROVE_YAML_PROMPT.format(
+                description=description,
+                ha_context=ha_context,
+                source_yaml=source_yaml,
+            )
+        else:
+            # Generate new YAML mode
+            prompt_template = GENERATE_PROMPTS.get(gen_type, GENERATE_PROMPTS["automation"])
+            prompt = prompt_template.format(
+                description=description,
+                ha_context=ha_context,
+            )
+
         result = await client.ainvoke([HumanMessage(content=prompt)])
         yaml_text = result.content.strip()
         # Strip markdown code fences if LLM wraps output
@@ -482,9 +434,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
             yaml_text = "\n".join(lines).strip()
         return yaml_text
 
-    async def _deploy_automation_to_ha(
-        yaml_text: str, gen_type: str = "automation"
-    ) -> dict:
+    async def _deploy_automation_to_ha(yaml_text: str, gen_type: str = "automation") -> dict:
         """Deploy YAML to HA (automations.yaml, scripts.yaml, scenes.yaml, or blueprints/)."""
         config = yaml.safe_load(yaml_text)
         if not isinstance(config, dict):
@@ -521,7 +471,8 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
             existing.append(config)
             with open(target_file, "w", encoding="utf-8") as f:
                 yaml.dump(
-                    existing, f,
+                    existing,
+                    f,
                     default_flow_style=False,
                     allow_unicode=True,
                     sort_keys=False,
@@ -570,6 +521,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         deploy = call.data.get("deploy", False)
         selected_entity_ids = call.data.get("entity_ids")
         gen_type = call.data.get("type", "automation")
+        source_yaml = call.data.get("source_yaml")
 
         client = _find_client(hass, entity_id)
         if not client:
@@ -577,7 +529,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
         try:
             yaml_text = await _generate_automation_yaml(
-                client, description, selected_entity_ids, gen_type
+                client, description, selected_entity_ids, gen_type, source_yaml
             )
         except Exception as err:
             LOGGER.exception("SmartChain generate_automation error: %s", err)
