@@ -2,6 +2,7 @@
 
 import base64
 import logging
+import re
 import uuid
 from pathlib import Path
 
@@ -12,6 +13,9 @@ from homeassistant.components.frontend import async_register_built_in_panel
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse
+from homeassistant.helpers import area_registry as ar
+from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
 from homeassistant.util import dt as dt_util
 from langchain_core.messages import HumanMessage
 
@@ -91,11 +95,19 @@ SERVICE_GENERATE_AUTOMATION_SCHEMA = vol.Schema(
         vol.Required("description"): str,
         vol.Optional("entity_id"): str,
         vol.Optional("deploy", default=False): bool,
+        vol.Optional("entity_ids"): [str],
     }
 )
 
 SERVICE_DEPLOY_AUTOMATION = "deploy_automation"
 SERVICE_DEPLOY_AUTOMATION_SCHEMA = vol.Schema(
+    {
+        vol.Required("automation_yaml"): str,
+    }
+)
+
+SERVICE_VALIDATE_AUTOMATION = "validate_automation"
+SERVICE_VALIDATE_AUTOMATION_SCHEMA = vol.Schema(
     {
         vol.Required("automation_yaml"): str,
     }
@@ -128,6 +140,184 @@ def _find_client(hass: HomeAssistant, entity_id: str | None = None):
         else:
             return entry.runtime_data
     return None
+
+
+def _collect_ha_context(
+    hass: HomeAssistant,
+    selected_entity_ids: list[str] | None = None,
+) -> str:
+    """Collect HA context (areas, entities) for the automation prompt."""
+    area_reg = ar.async_get(hass)
+    entity_reg = er.async_get(hass)
+    device_reg = dr.async_get(hass)
+
+    # Build area name lookup
+    area_names: dict[str, str] = {}
+    for area in area_reg.async_list_areas():
+        area_names[area.id] = area.name
+
+    # Build device -> area mapping
+    device_areas: dict[str, str] = {}
+    for device in device_reg.devices.values():
+        if device.area_id and device.area_id in area_names:
+            device_areas[device.id] = area_names[device.area_id]
+
+    # Collect entities grouped by domain
+    by_domain: dict[str, list[str]] = {}
+    all_states = hass.states.async_all()
+
+    for state in all_states:
+        eid = state.entity_id
+        # If specific entities selected, filter to those only
+        if selected_entity_ids and eid not in selected_entity_ids:
+            continue
+        if state.state in ("unavailable", "unknown"):
+            continue
+
+        domain = eid.split(".")[0]
+        friendly = state.attributes.get("friendly_name", "")
+        entry = entity_reg.async_get(eid)
+
+        # Determine area
+        area = ""
+        if entry:
+            if entry.area_id and entry.area_id in area_names:
+                area = area_names[entry.area_id]
+            elif entry.device_id and entry.device_id in device_areas:
+                area = device_areas[entry.device_id]
+
+        line = f"  - {eid}"
+        if friendly:
+            line += f" ({friendly})"
+        if area:
+            line += f" [area: {area}]"
+        line += f" = {state.state}"
+        unit = state.attributes.get("unit_of_measurement")
+        if unit:
+            line += f" {unit}"
+
+        by_domain.setdefault(domain, []).append(line)
+
+    if not by_domain:
+        return "No entities available."
+
+    # Build context string, limit to relevant domains
+    relevant_domains = [
+        "light", "switch", "climate", "cover", "fan", "media_player",
+        "lock", "alarm_control_panel", "vacuum", "scene", "script",
+        "automation", "person", "device_tracker", "zone",
+        "binary_sensor", "sensor", "input_boolean", "input_number",
+        "input_select", "input_text", "notify", "camera", "weather",
+    ]
+
+    lines = ["Available Home Assistant entities:"]
+    entity_count = 0
+    max_entities = 300
+
+    for domain in relevant_domains:
+        if domain not in by_domain:
+            continue
+        entities = by_domain[domain]
+        if entity_count + len(entities) > max_entities and not selected_entity_ids:
+            entities = entities[: max_entities - entity_count]
+        if not entities:
+            continue
+        lines.append(f"\n{domain}:")
+        lines.extend(entities)
+        entity_count += len(entities)
+        if entity_count >= max_entities and not selected_entity_ids:
+            lines.append(f"\n... ({len(all_states) - entity_count} more entities omitted)")
+            break
+
+    # Add areas
+    if area_names:
+        lines.append("\nAreas/Rooms:")
+        for name in sorted(area_names.values()):
+            lines.append(f"  - {name}")
+
+    return "\n".join(lines)
+
+
+def _validate_automation_config(hass: HomeAssistant, yaml_text: str) -> dict:
+    """Validate automation YAML structure and entity references."""
+    errors: list[str] = []
+    warnings: list[str] = []
+
+    # Parse YAML
+    try:
+        config = yaml.safe_load(yaml_text)
+    except yaml.YAMLError as exc:
+        return {"valid": False, "errors": [f"Invalid YAML syntax: {exc}"]}
+
+    if not isinstance(config, dict):
+        return {"valid": False, "errors": ["YAML must be a mapping (dict), not a list or scalar."]}
+
+    # Check required keys (HA supports both singular and plural forms)
+    has_trigger = "trigger" in config or "triggers" in config
+    has_action = "action" in config or "actions" in config
+
+    if not has_trigger:
+        errors.append("Missing required key: 'trigger' or 'triggers'")
+    if not has_action:
+        errors.append("Missing required key: 'action' or 'actions'")
+    if "alias" not in config:
+        warnings.append("Missing 'alias' — automation will be unnamed")
+
+    # Collect all entity_id references from the config
+    referenced_entities = set()
+    _extract_entity_ids(config, referenced_entities)
+
+    # Check if referenced entities exist
+    existing_entities = {s.entity_id for s in hass.states.async_all()}
+    for eid in sorted(referenced_entities):
+        if eid not in existing_entities:
+            # Check if it's a valid-looking entity_id (domain.object_id)
+            if re.match(r"^[a-z_]+\.[a-z0-9_]+$", eid):
+                errors.append(f"Entity '{eid}' does not exist in Home Assistant")
+
+    # Check service calls
+    _validate_services(config, hass, errors)
+
+    return {
+        "valid": len(errors) == 0,
+        "errors": errors,
+        "warnings": warnings,
+    }
+
+
+def _extract_entity_ids(obj: object, result: set[str]) -> None:
+    """Recursively extract entity_id values from a config dict."""
+    if isinstance(obj, dict):
+        for key, val in obj.items():
+            if key == "entity_id":
+                if isinstance(val, str):
+                    result.add(val)
+                elif isinstance(val, list):
+                    for item in val:
+                        if isinstance(item, str):
+                            result.add(item)
+            elif key == "target" and isinstance(val, dict):
+                _extract_entity_ids(val, result)
+            else:
+                _extract_entity_ids(val, result)
+    elif isinstance(obj, list):
+        for item in obj:
+            _extract_entity_ids(item, result)
+
+
+def _validate_services(obj: object, hass: HomeAssistant, errors: list[str]) -> None:
+    """Check that service calls reference valid domains."""
+    if isinstance(obj, dict):
+        svc = obj.get("service") or obj.get("action")
+        if isinstance(svc, str) and "." in svc:
+            domain = svc.split(".")[0]
+            if not hass.services.has_service(domain, svc.split(".", 1)[1]):
+                errors.append(f"Service '{svc}' is not registered in Home Assistant")
+        for val in obj.values():
+            _validate_services(val, hass, errors)
+    elif isinstance(obj, list):
+        for item in obj:
+            _validate_services(item, hass, errors)
 
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
@@ -228,9 +418,17 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
         return {"response": response_text}
 
-    async def _generate_automation_yaml(client, description: str) -> str:
+    async def _generate_automation_yaml(
+        client,
+        description: str,
+        entity_ids: list[str] | None = None,
+    ) -> str:
         """Generate automation YAML from natural language description."""
-        prompt = GENERATE_AUTOMATION_PROMPT.format(description=description)
+        ha_context = _collect_ha_context(hass, entity_ids or None)
+        prompt = GENERATE_AUTOMATION_PROMPT.format(
+            description=description,
+            ha_context=ha_context,
+        )
         result = await client.ainvoke([HumanMessage(content=prompt)])
         yaml_text = result.content.strip()
         # Strip markdown code fences if LLM wraps output
@@ -280,18 +478,26 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         alias = config.get("alias", "Unnamed")
         return {"deployed": True, "automation_id": config["id"], "alias": alias}
 
+    async def _handle_validate_automation(call: ServiceCall) -> ServiceResponse:
+        """Handle smartchain.validate_automation service call."""
+        yaml_text = call.data["automation_yaml"]
+        return _validate_automation_config(hass, yaml_text)
+
     async def _handle_generate_automation(call: ServiceCall) -> ServiceResponse:
         """Handle smartchain.generate_automation service call."""
         description = call.data["description"]
         entity_id = call.data.get("entity_id")
         deploy = call.data.get("deploy", False)
+        selected_entity_ids = call.data.get("entity_ids")
 
         client = _find_client(hass, entity_id)
         if not client:
             return {"automation_yaml": "", "error": "No SmartChain agent available."}
 
         try:
-            yaml_text = await _generate_automation_yaml(client, description)
+            yaml_text = await _generate_automation_yaml(
+                client, description, selected_entity_ids
+            )
         except Exception as err:
             LOGGER.exception("SmartChain generate_automation error: %s", err)
             return {"automation_yaml": "", "error": str(err)}
@@ -364,8 +570,18 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     async def _handle_deploy_automation(call: ServiceCall) -> ServiceResponse:
         """Handle smartchain.deploy_automation — deploy raw YAML to HA."""
         yaml_text = call.data["automation_yaml"]
+
+        # Validate before deploying
+        validation = _validate_automation_config(hass, yaml_text)
+        if not validation["valid"]:
+            return {
+                "error": "Validation failed: " + "; ".join(validation["errors"]),
+                "validation": validation,
+            }
+
         try:
             result = await _deploy_automation_to_ha(yaml_text)
+            result["validation"] = validation
             return result
         except Exception as err:
             LOGGER.exception("SmartChain deploy_automation error: %s", err)
@@ -376,6 +592,13 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         SERVICE_DEPLOY_AUTOMATION,
         _handle_deploy_automation,
         schema=SERVICE_DEPLOY_AUTOMATION_SCHEMA,
+        supports_response=SupportsResponse.ONLY,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_VALIDATE_AUTOMATION,
+        _handle_validate_automation,
+        schema=SERVICE_VALIDATE_AUTOMATION_SCHEMA,
         supports_response=SupportsResponse.ONLY,
     )
     return True

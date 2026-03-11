@@ -452,8 +452,10 @@ action:
     mock_client.ainvoke.return_value = AIMessage(content=yaml_output)
     _setup_entry_with_client(hass, mock_client)
 
-    # Mock automation.reload service
+    # Mock services and entities so validation passes
     hass.services.async_register("automation", "reload", AsyncMock())
+    hass.services.async_register("switch", "turn_on", AsyncMock())
+    hass.states.async_set("switch.coffee_machine", "off")
 
     result = await hass.services.async_call(
         DOMAIN,
@@ -479,8 +481,10 @@ async def test_deploy_automation_creates_in_ha(hass: HomeAssistant):
     """Test deploy_automation writes to storage and reloads."""
     await async_setup(hass, {})
 
-    # Mock automation.reload service
+    # Mock services and entities so validation passes
     hass.services.async_register("automation", "reload", AsyncMock())
+    hass.services.async_register("light", "turn_on", AsyncMock())
+    hass.states.async_set("light.kitchen", "off")
 
     yaml_text = """alias: Test Deploy
 trigger:
@@ -502,6 +506,7 @@ action:
     assert result["deployed"] is True
     assert result["alias"] == "Test Deploy"
     assert "automation_id" in result
+    assert result["validation"]["valid"] is True
 
 
 async def test_deploy_automation_invalid_yaml(hass: HomeAssistant):

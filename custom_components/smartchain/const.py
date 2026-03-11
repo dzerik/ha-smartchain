@@ -166,6 +166,9 @@ Rules:
 - For weekday conditions use condition: time with weekday list
 - For presence use person.* entities or device_tracker.*
 - Keep it simple and practical
+- IMPORTANT: Use ONLY entity_ids from the list below. Do NOT invent entity_ids.
+
+{ha_context}
 
 User description: {description}"""
 
