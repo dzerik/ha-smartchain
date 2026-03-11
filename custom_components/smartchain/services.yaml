@@ -88,3 +88,18 @@ generate_automation:
       example: true
       selector:
         boolean:
+
+deploy_automation:
+  name: Deploy Automation
+  description: >
+    Deploy raw automation YAML directly to Home Assistant.
+    Writes to .storage/automations and triggers reload.
+  fields:
+    automation_yaml:
+      name: Automation YAML
+      description: Valid Home Assistant automation YAML to deploy
+      required: true
+      example: "alias: Test\ntrigger:\n  - platform: time\n    at: '07:00:00'\naction:\n  - service: light.turn_on\n    target:\n      entity_id: light.kitchen"
+      selector:
+        text:
+          multiline: true

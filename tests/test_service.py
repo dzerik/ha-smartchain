@@ -469,6 +469,56 @@ action:
     assert "automation_id" in result
 
 
+async def test_deploy_automation_service_registered(hass: HomeAssistant):
+    """Test that smartchain.deploy_automation service is registered after setup."""
+    assert await async_setup(hass, {})
+    assert hass.services.has_service(DOMAIN, "deploy_automation")
+
+
+async def test_deploy_automation_creates_in_ha(hass: HomeAssistant):
+    """Test deploy_automation writes to storage and reloads."""
+    await async_setup(hass, {})
+
+    # Mock automation.reload service
+    hass.services.async_register("automation", "reload", AsyncMock())
+
+    yaml_text = """alias: Test Deploy
+trigger:
+  - platform: time
+    at: "08:00:00"
+action:
+  - service: light.turn_on
+    target:
+      entity_id: light.kitchen"""
+
+    result = await hass.services.async_call(
+        DOMAIN,
+        "deploy_automation",
+        {"automation_yaml": yaml_text},
+        blocking=True,
+        return_response=True,
+    )
+
+    assert result["deployed"] is True
+    assert result["alias"] == "Test Deploy"
+    assert "automation_id" in result
+
+
+async def test_deploy_automation_invalid_yaml(hass: HomeAssistant):
+    """Test deploy_automation handles invalid YAML."""
+    await async_setup(hass, {})
+
+    result = await hass.services.async_call(
+        DOMAIN,
+        "deploy_automation",
+        {"automation_yaml": "not: [valid: yaml: {{"},
+        blocking=True,
+        return_response=True,
+    )
+
+    assert "error" in result
+
+
 async def test_generate_automation_deploy_false(hass: HomeAssistant):
     """Test generate_automation with deploy=false does not create automation."""
     await async_setup(hass, {})

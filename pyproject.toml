@@ -1,6 +1,6 @@
 [project]
 name = "ha-smartchain"
-version = "2.3.0"
+version = "2.4.0"
 description = "SmartChain — multi-provider LLM conversation agent for Home Assistant"
 readme = "README.md"
 license = "MIT"
