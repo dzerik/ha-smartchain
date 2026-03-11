@@ -45,10 +45,15 @@ from .const import (
     DEFAULT_ENABLE_HISTORY_TOOL,
     DEFAULT_PROCESS_BUILTIN_SENTENCES,
     DEFAULT_PROMPT,
+    DELEGATE_TOOL_NAME,
     DOMAIN,
     HISTORY_TOOL_NAME,
     MAX_TOOL_ITERATIONS,
     SUBENTRY_TYPE_CONVERSATION,
+)
+from .delegate_tool import (
+    execute_delegate_tool,
+    get_delegate_tool_definition,
 )
 from .history_tool import execute_history_tool, get_history_tool_definition
 
@@ -131,6 +136,25 @@ class SmartChainConversationEntity(ConversationEntity):
         return self.entry.runtime_data
 
     @property
+    def _sibling_agents(self) -> list[dict[str, str]]:
+        """Return list of other agents in the same config entry (for delegation)."""
+        if not self._subentry_id or not self.entry.subentries:
+            return []
+        agents = []
+        for sub_id, subentry in self.entry.subentries.items():
+            if sub_id == self._subentry_id:
+                continue
+            if subentry.subentry_type != SUBENTRY_TYPE_CONVERSATION:
+                continue
+            agents.append({"name": subentry.title, "sub_id": sub_id})
+        return agents
+
+    @property
+    def _agent_map(self) -> dict[str, str]:
+        """Return mapping of agent_name -> subentry_id for delegation."""
+        return {a["name"]: a["sub_id"] for a in self._sibling_agents}
+
+    @property
     def supported_languages(self) -> list[str] | Literal["*"]:
         """Return a list of supported languages."""
         return get_languages()
@@ -190,6 +214,11 @@ class SmartChainConversationEntity(ConversationEntity):
         if history_enabled:
             tools.append(get_history_tool_definition())
 
+        # Add delegate tool if there are sibling agents
+        sibling_agents = self._sibling_agents
+        if sibling_agents:
+            tools.append(get_delegate_tool_definition(sibling_agents))
+
         bound_client = client.bind_tools(tools) if tools else client
 
         for _iteration in range(MAX_TOOL_ITERATIONS):
@@ -219,9 +248,15 @@ class SmartChainConversationEntity(ConversationEntity):
                     conversation_id=chat_log.conversation_id, response=response
                 )
 
-            # Handle custom history tool calls (marked as external)
+            # Handle custom tool calls (marked as external)
             if history_enabled:
                 await _handle_history_tool_calls(self.hass, chat_log, user_input.agent_id)
+            if sibling_agents:
+                rd = self.entry.runtime_data
+                clients = rd if isinstance(rd, dict) else {}
+                await _handle_delegate_tool_calls(
+                    clients, self._agent_map, chat_log, user_input.agent_id
+                )
 
             if not chat_log.unresponded_tool_results:
                 break
@@ -340,6 +375,41 @@ async def _handle_history_tool_calls(hass, chat_log: ChatLog, agent_id: str) -> 
             )
 
 
+async def _handle_delegate_tool_calls(
+    clients: dict[str, object],
+    agent_map: dict[str, str],
+    chat_log: ChatLog,
+    agent_id: str,
+) -> None:
+    """Execute pending delegate tool calls and add results to chat_log."""
+    for content in chat_log.content:
+        if not isinstance(content, AssistantContent) or not content.tool_calls:
+            continue
+        for tc in content.tool_calls:
+            if tc.tool_name != DELEGATE_TOOL_NAME or not tc.external:
+                continue
+            has_result = any(
+                isinstance(c, ToolResultContent) and c.tool_call_id == tc.id
+                for c in chat_log.content
+            )
+            if has_result:
+                continue
+            result = await execute_delegate_tool(
+                clients,
+                agent_map,
+                tc.tool_args.get("agent_name", ""),
+                tc.tool_args.get("message", ""),
+            )
+            chat_log.async_add_assistant_content_without_tools(
+                ToolResultContent(
+                    agent_id=agent_id,
+                    tool_call_id=tc.id,
+                    tool_name=DELEGATE_TOOL_NAME,
+                    tool_result=result,
+                )
+            )
+
+
 async def _async_langchain_stream(
     client: Any, messages: list[BaseMessage]
 ) -> AsyncIterable[dict[str, Any]]:
@@ -359,7 +429,7 @@ async def _async_langchain_stream(
                     tool_name=tc["name"],
                     tool_args=tc["args"],
                     id=tc["id"],
-                    external=(tc["name"] == HISTORY_TOOL_NAME),
+                    external=(tc["name"] in (HISTORY_TOOL_NAME, DELEGATE_TOOL_NAME)),
                 )
                 for tc in chunk.tool_calls
             ]

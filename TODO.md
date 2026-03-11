@@ -11,14 +11,14 @@
 
 ## Phase 2 — Differentiation
 
-- [ ] v1.0 Vision — camera image analysis (GigaChat 2.0, GPT-4o, Ollama)
-- [ ] v1.1 Image generation — Kandinsky (GigaChat) + YandexART
-- [ ] v1.2 MCP — connect external MCP servers as tools
-- [ ] v1.3 State history — LLM analyzes past events and trends
+- [x] v1.0 Vision — camera image analysis (GigaChat 2.0, GPT-4o, Ollama)
+- [x] v1.1 Image generation — Kandinsky (GigaChat) + YandexART
+- [x] v1.2 MCP — connect external MCP servers as tools (via HA native MCP + Assist API)
+- [x] v1.3 State history — LLM analyzes past events and trends
 
 ## Phase 3 — Leadership
 
-- [ ] v1.4 Multi-agent — Dispatcher + specialized agents (LangGraph)
+- [x] v1.4 Multi-agent — Dispatcher + specialized agents (tool-based delegation)
 - [ ] v1.5 Telegram bot — home control via Telegram
 - [ ] v1.6 STT/TTS — Yandex SpeechKit, full voice pipeline
 - [ ] v1.7 Skill system — loadable skills from YAML
