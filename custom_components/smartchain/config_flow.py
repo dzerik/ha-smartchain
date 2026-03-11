@@ -287,8 +287,21 @@ class ConversationSubentryFlow(ConfigSubentryFlow):
 class OptionsFlow(config_entries.OptionsFlow):
     """SmartChain config flow options handler."""
 
+    def __init__(self) -> None:
+        """Initialize options flow."""
+        self._generated_yaml: str | None = None
+
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
-        """Manage the options."""
+        """Manage the options — show menu with settings and automation generator."""
+        return self.async_show_menu(
+            step_id="init",
+            menu_options=["settings", "generate_automation"],
+        )
+
+    async def async_step_settings(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Manage model settings."""
         unique_id = self.config_entry.unique_id
         engine = self.config_entry.data.get(CONF_ENGINE, ID_GIGACHAT)
         models = await async_fetch_models(self.hass, engine, self.config_entry.data)
@@ -299,7 +312,7 @@ class OptionsFlow(config_entries.OptionsFlow):
                 model = user_input.get(CONF_CHAT_MODEL)
             if not model or not model.strip():
                 return self.async_show_form(
-                    step_id="init",
+                    step_id="settings",
                     data_schema=schema,
                     errors={"base": "model_required"},
                 )
@@ -311,8 +324,95 @@ class OptionsFlow(config_entries.OptionsFlow):
             return self.async_create_entry(title=unique_id, data=user_input)
 
         return self.async_show_form(
-            step_id="init",
+            step_id="settings",
             data_schema=schema,
+        )
+
+    async def async_step_generate_automation(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Step 1: User enters automation description."""
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            description = user_input.get("description", "").strip()
+            if not description:
+                errors["description"] = "description_required"
+            else:
+                helpers = self.hass.data.get(DOMAIN, {})
+                find_client = helpers.get("find_client")
+                generate_yaml = helpers.get("generate_yaml")
+
+                if not find_client or not generate_yaml:
+                    errors["base"] = "service_not_ready"
+                else:
+                    client = find_client(self.hass)
+                    if not client:
+                        errors["base"] = "no_agent"
+                    else:
+                        try:
+                            self._generated_yaml = await generate_yaml(client, description)
+                            return await self.async_step_preview_automation()
+                        except Exception:
+                            LOGGER.exception("Failed to generate automation")
+                            errors["base"] = "generation_failed"
+
+        return self.async_show_form(
+            step_id="generate_automation",
+            data_schema=vol.Schema(
+                {
+                    vol.Required("description"): selector.TextSelector(
+                        selector.TextSelectorConfig(multiline=True),
+                    ),
+                }
+            ),
+            errors=errors,
+        )
+
+    async def async_step_preview_automation(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Step 2: Show generated YAML and let user confirm deploy."""
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            yaml_text = user_input.get("automation_yaml", "").strip()
+            if not yaml_text:
+                errors["automation_yaml"] = "empty_yaml"
+            else:
+                deploy = user_input.get("deploy", False)
+                if deploy:
+                    helpers = self.hass.data.get(DOMAIN, {})
+                    deploy_fn = helpers.get("deploy_automation")
+                    if deploy_fn:
+                        try:
+                            result = await deploy_fn(yaml_text)
+                            if result.get("error"):
+                                errors["base"] = "deploy_failed"
+                            else:
+                                return self.async_abort(reason="automation_deployed")
+                        except Exception:
+                            LOGGER.exception("Failed to deploy automation")
+                            errors["base"] = "deploy_failed"
+                    else:
+                        errors["base"] = "service_not_ready"
+                else:
+                    # User chose not to deploy — just close
+                    return self.async_abort(reason="automation_not_deployed")
+
+        return self.async_show_form(
+            step_id="preview_automation",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        "automation_yaml", default=self._generated_yaml or ""
+                    ): selector.TextSelector(
+                        selector.TextSelectorConfig(multiline=True),
+                    ),
+                    vol.Required("deploy", default=True): bool,
+                }
+            ),
+            errors=errors,
         )
 
 

@@ -361,10 +361,24 @@ def mock_openai_options_entry(hass: HomeAssistant):
     return entry
 
 
-async def test_options_flow_shows_form(
+async def _options_flow_select_settings(hass, entry_id):
+    """Helper: init options flow and select 'settings' from menu."""
+    result = await hass.config_entries.options.async_init(entry_id)
+    assert result["type"] is FlowResultType.MENU
+    assert result["step_id"] == "init"
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {"next_step_id": "settings"},
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "settings"
+    return result
+
+
+async def test_options_flow_shows_menu(
     hass: HomeAssistant, mock_gigachat_options_entry, mock_llm_client
 ) -> None:
-    """Test that options flow init step shows form."""
+    """Test that options flow init step shows menu."""
     with patch(
         "custom_components.smartchain.get_client",
         new_callable=AsyncMock,
@@ -374,8 +388,10 @@ async def test_options_flow_shows_form(
         await hass.async_block_till_done()
 
     result = await hass.config_entries.options.async_init(mock_gigachat_options_entry.entry_id)
-    assert result["type"] is FlowResultType.FORM
+    assert result["type"] is FlowResultType.MENU
     assert result["step_id"] == "init"
+    assert "settings" in result["menu_options"]
+    assert "generate_automation" in result["menu_options"]
 
 
 async def test_options_flow_submit_with_model(
@@ -390,7 +406,7 @@ async def test_options_flow_submit_with_model(
         await hass.config_entries.async_setup(mock_gigachat_options_entry.entry_id)
         await hass.async_block_till_done()
 
-    result = await hass.config_entries.options.async_init(mock_gigachat_options_entry.entry_id)
+    result = await _options_flow_select_settings(hass, mock_gigachat_options_entry.entry_id)
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
         {
@@ -416,7 +432,7 @@ async def test_options_flow_model_required_error(
         await hass.config_entries.async_setup(mock_gigachat_options_entry.entry_id)
         await hass.async_block_till_done()
 
-    result = await hass.config_entries.options.async_init(mock_gigachat_options_entry.entry_id)
+    result = await _options_flow_select_settings(hass, mock_gigachat_options_entry.entry_id)
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
         {
@@ -443,7 +459,7 @@ async def test_options_flow_custom_model_user(
         await hass.config_entries.async_setup(mock_gigachat_options_entry.entry_id)
         await hass.async_block_till_done()
 
-    result = await hass.config_entries.options.async_init(mock_gigachat_options_entry.entry_id)
+    result = await _options_flow_select_settings(hass, mock_gigachat_options_entry.entry_id)
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
         {
@@ -471,7 +487,7 @@ async def test_options_flow_gigachat_extra_fields(
         await hass.config_entries.async_setup(mock_gigachat_options_entry.entry_id)
         await hass.async_block_till_done()
 
-    result = await hass.config_entries.options.async_init(mock_gigachat_options_entry.entry_id)
+    result = await _options_flow_select_settings(hass, mock_gigachat_options_entry.entry_id)
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
         {
@@ -500,8 +516,7 @@ async def test_options_flow_openai_no_gigachat_fields(
         await hass.config_entries.async_setup(mock_openai_options_entry.entry_id)
         await hass.async_block_till_done()
 
-    result = await hass.config_entries.options.async_init(mock_openai_options_entry.entry_id)
-    assert result["type"] is FlowResultType.FORM
+    result = await _options_flow_select_settings(hass, mock_openai_options_entry.entry_id)
     # Schema should not contain profanity/verify_ssl for non-GigaChat
     schema_keys = [str(k) for k in result["data_schema"].schema]
     assert CONF_PROFANITY not in schema_keys
@@ -520,7 +535,7 @@ async def test_options_flow_empty_llm_api_removed(
         await hass.config_entries.async_setup(mock_gigachat_options_entry.entry_id)
         await hass.async_block_till_done()
 
-    result = await hass.config_entries.options.async_init(mock_gigachat_options_entry.entry_id)
+    result = await _options_flow_select_settings(hass, mock_gigachat_options_entry.entry_id)
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
         {

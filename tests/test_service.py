@@ -432,3 +432,60 @@ async def test_generate_automation_llm_error(hass: HomeAssistant):
 
     assert result["automation_yaml"] == ""
     assert "LLM timeout" in result["error"]
+
+
+async def test_generate_automation_deploy(hass: HomeAssistant):
+    """Test generate_automation with deploy=true creates automation in HA."""
+    await async_setup(hass, {})
+
+    yaml_output = """alias: Morning coffee
+description: Turn on coffee machine at 7 AM
+trigger:
+  - platform: time
+    at: "07:00:00"
+action:
+  - service: switch.turn_on
+    target:
+      entity_id: switch.coffee_machine"""
+
+    mock_client = AsyncMock()
+    mock_client.ainvoke.return_value = AIMessage(content=yaml_output)
+    _setup_entry_with_client(hass, mock_client)
+
+    # Mock automation.reload service
+    hass.services.async_register("automation", "reload", AsyncMock())
+
+    result = await hass.services.async_call(
+        DOMAIN,
+        "generate_automation",
+        {"description": "Coffee at 7AM", "deploy": True},
+        blocking=True,
+        return_response=True,
+    )
+
+    assert "alias: Morning coffee" in result["automation_yaml"]
+    assert result["deployed"] is True
+    assert result["alias"] == "Morning coffee"
+    assert "automation_id" in result
+
+
+async def test_generate_automation_deploy_false(hass: HomeAssistant):
+    """Test generate_automation with deploy=false does not create automation."""
+    await async_setup(hass, {})
+
+    yaml_output = "alias: Test\ntrigger: []\naction: []"
+
+    mock_client = AsyncMock()
+    mock_client.ainvoke.return_value = AIMessage(content=yaml_output)
+    _setup_entry_with_client(hass, mock_client)
+
+    result = await hass.services.async_call(
+        DOMAIN,
+        "generate_automation",
+        {"description": "Test", "deploy": False},
+        blocking=True,
+        return_response=True,
+    )
+
+    assert result["automation_yaml"] != ""
+    assert "deployed" not in result
