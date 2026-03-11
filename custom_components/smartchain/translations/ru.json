@@ -62,10 +62,27 @@
   },
   "options": {
     "error": {
-      "model_required": "Выберите модель из списка либо задайте свою"
+      "model_required": "Выберите модель из списка либо задайте свою",
+      "description_required": "Введите описание автоматизации",
+      "no_agent": "Нет доступного агента SmartChain. Сначала настройте агента.",
+      "service_not_ready": "Сервисы SmartChain не готовы. Перезагрузите интеграцию.",
+      "generation_failed": "Не удалось сгенерировать автоматизацию. Попробуйте ещё раз или перефразируйте.",
+      "deploy_failed": "Не удалось создать автоматизацию. Проверьте YAML и попробуйте снова.",
+      "empty_yaml": "YAML автоматизации не может быть пустым"
+    },
+    "abort": {
+      "automation_deployed": "Автоматизация создана и добавлена в Home Assistant!",
+      "automation_not_deployed": "Автоматизация сгенерирована, но не добавлена. Вы можете скопировать YAML вручную."
     },
     "step": {
       "init": {
+        "title": "SmartChain",
+        "menu_options": {
+          "settings": "Настройки модели",
+          "generate_automation": "Генерация автоматизации через AI"
+        }
+      },
+      "settings": {
         "title": "Настройки модели",
         "data": {
           "llm_hass_api": "Assist API (управление устройствами HA)",
@@ -79,6 +96,21 @@
           "process_builtin_sentences": "Встроенный командный процессор HA",
           "chat_history": "История сообщений",
           "enable_history_tool": "Инструмент истории состояний (LLM может запрашивать прошлые состояния устройств)"
+        }
+      },
+      "generate_automation": {
+        "title": "Генерация автоматизации через AI",
+        "description": "Опишите нужную автоматизацию на естественном языке. SmartChain сгенерирует YAML за вас.",
+        "data": {
+          "description": "Описание автоматизации"
+        }
+      },
+      "preview_automation": {
+        "title": "Просмотр и создание автоматизации",
+        "description": "Проверьте сгенерированный YAML. Вы можете отредактировать его перед созданием.",
+        "data": {
+          "automation_yaml": "YAML автоматизации",
+          "deploy": "Создать в Home Assistant"
         }
       }
     }

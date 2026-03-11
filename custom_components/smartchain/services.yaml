@@ -61,8 +61,8 @@ generate_automation:
   name: Generate Automation
   description: >
     Describe an automation in natural language and SmartChain will generate
-    valid Home Assistant automation YAML using an LLM. The generated YAML
-    is returned in the response and can be copied to automations.yaml.
+    valid Home Assistant automation YAML using an LLM. Optionally deploy
+    it directly to Home Assistant.
   fields:
     description:
       name: Description
@@ -80,3 +80,11 @@ generate_automation:
       selector:
         entity:
           domain: conversation
+    deploy:
+      name: Deploy
+      description: Automatically deploy the generated automation to Home Assistant
+      required: false
+      default: false
+      example: true
+      selector:
+        boolean:

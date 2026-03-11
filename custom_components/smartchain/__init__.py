@@ -2,12 +2,15 @@
 
 import base64
 import logging
+import uuid
 
 import voluptuous as vol
+import yaml
 from homeassistant.components.camera import async_get_image
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse
+from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 from langchain_core.messages import HumanMessage
 
@@ -86,8 +89,12 @@ SERVICE_GENERATE_AUTOMATION_SCHEMA = vol.Schema(
     {
         vol.Required("description"): str,
         vol.Optional("entity_id"): str,
+        vol.Optional("deploy", default=False): bool,
     }
 )
+
+AUTOMATIONS_STORAGE_KEY = "automations"
+AUTOMATIONS_STORAGE_VERSION = 1
 
 SENSOR_LAST_ANALYSIS = f"sensor.{DOMAIN}_last_analysis"
 EVENT_IMAGE_ANALYZED = f"{DOMAIN}_image_analyzed"
@@ -216,29 +223,69 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
         return {"response": response_text}
 
+    async def _generate_automation_yaml(client, description: str) -> str:
+        """Generate automation YAML from natural language description."""
+        prompt = GENERATE_AUTOMATION_PROMPT.format(description=description)
+        result = await client.ainvoke([HumanMessage(content=prompt)])
+        yaml_text = result.content.strip()
+        # Strip markdown code fences if LLM wraps output
+        if yaml_text.startswith("```"):
+            lines = yaml_text.split("\n")
+            lines = [line for line in lines if not line.startswith("```")]
+            yaml_text = "\n".join(lines).strip()
+        return yaml_text
+
+    async def _deploy_automation_to_ha(yaml_text: str) -> dict:
+        """Deploy automation YAML to HA via .storage/automations."""
+        config = yaml.safe_load(yaml_text)
+        if not isinstance(config, dict):
+            return {"error": "Generated YAML is not a valid automation object."}
+
+        config["id"] = uuid.uuid4().hex
+
+        store = Store(hass, AUTOMATIONS_STORAGE_VERSION, AUTOMATIONS_STORAGE_KEY)
+        data = await store.async_load() or {"items": []}
+        data["items"].append(config)
+        await store.async_save(data)
+
+        await hass.services.async_call("automation", "reload", blocking=True)
+
+        alias = config.get("alias", "Unnamed")
+        return {"deployed": True, "automation_id": config["id"], "alias": alias}
+
     async def _handle_generate_automation(call: ServiceCall) -> ServiceResponse:
         """Handle smartchain.generate_automation service call."""
         description = call.data["description"]
         entity_id = call.data.get("entity_id")
+        deploy = call.data.get("deploy", False)
 
         client = _find_client(hass, entity_id)
         if not client:
             return {"automation_yaml": "", "error": "No SmartChain agent available."}
 
-        prompt = GENERATE_AUTOMATION_PROMPT.format(description=description)
-
         try:
-            result = await client.ainvoke([HumanMessage(content=prompt)])
-            yaml_text = result.content.strip()
-            # Strip markdown code fences if LLM wraps output
-            if yaml_text.startswith("```"):
-                lines = yaml_text.split("\n")
-                lines = [line for line in lines if not line.startswith("```")]
-                yaml_text = "\n".join(lines).strip()
-            return {"automation_yaml": yaml_text}
+            yaml_text = await _generate_automation_yaml(client, description)
         except Exception as err:
             LOGGER.exception("SmartChain generate_automation error: %s", err)
             return {"automation_yaml": "", "error": str(err)}
+
+        response: dict = {"automation_yaml": yaml_text}
+
+        if deploy:
+            try:
+                deploy_result = await _deploy_automation_to_ha(yaml_text)
+                response.update(deploy_result)
+            except Exception as err:
+                LOGGER.exception("SmartChain deploy_automation error: %s", err)
+                response["error"] = f"Generated OK but deploy failed: {err}"
+
+        return response
+
+    # Store helpers for use by Options Flow wizard
+    hass.data.setdefault(DOMAIN, {})
+    hass.data[DOMAIN]["generate_yaml"] = _generate_automation_yaml
+    hass.data[DOMAIN]["deploy_automation"] = _deploy_automation_to_ha
+    hass.data[DOMAIN]["find_client"] = _find_client
 
     hass.services.async_register(
         DOMAIN,
