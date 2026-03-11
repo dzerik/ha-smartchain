@@ -324,3 +324,111 @@ async def test_analyze_image_notify_failure_does_not_break(hass: HomeAssistant):
     # Sensor should still be updated
     state = hass.states.get("sensor.smartchain_last_analysis")
     assert state is not None
+
+
+# --- generate_automation tests ---
+
+
+async def test_generate_automation_service_registered(hass: HomeAssistant):
+    """Test that smartchain.generate_automation service is registered after setup."""
+    assert await async_setup(hass, {})
+    assert hass.services.has_service(DOMAIN, "generate_automation")
+
+
+async def test_generate_automation_no_agent(hass: HomeAssistant):
+    """Test generate_automation service when no agent is available."""
+    await async_setup(hass, {})
+
+    result = await hass.services.async_call(
+        DOMAIN,
+        "generate_automation",
+        {"description": "Turn on lights at sunset"},
+        blocking=True,
+        return_response=True,
+    )
+
+    assert result["automation_yaml"] == ""
+    assert "No SmartChain agent" in result["error"]
+
+
+async def test_generate_automation_returns_yaml(hass: HomeAssistant):
+    """Test generate_automation returns LLM-generated YAML."""
+    await async_setup(hass, {})
+
+    yaml_output = """alias: Lights at sunset
+description: Turn on living room lights at sunset
+trigger:
+  - platform: sun
+    event: sunset
+action:
+  - service: light.turn_on
+    target:
+      entity_id: light.living_room"""
+
+    mock_client = AsyncMock()
+    mock_client.ainvoke.return_value = AIMessage(content=yaml_output)
+    _setup_entry_with_client(hass, mock_client)
+
+    result = await hass.services.async_call(
+        DOMAIN,
+        "generate_automation",
+        {"description": "Turn on living room lights at sunset"},
+        blocking=True,
+        return_response=True,
+    )
+
+    assert "alias: Lights at sunset" in result["automation_yaml"]
+    assert "light.turn_on" in result["automation_yaml"]
+    mock_client.ainvoke.assert_called_once()
+
+
+async def test_generate_automation_strips_code_fences(hass: HomeAssistant):
+    """Test generate_automation strips markdown code fences from LLM output."""
+    await async_setup(hass, {})
+
+    yaml_with_fences = """```yaml
+alias: Coffee at 7AM
+trigger:
+  - platform: time
+    at: "07:00:00"
+action:
+  - service: switch.turn_on
+    target:
+      entity_id: switch.coffee_machine
+```"""
+
+    mock_client = AsyncMock()
+    mock_client.ainvoke.return_value = AIMessage(content=yaml_with_fences)
+    _setup_entry_with_client(hass, mock_client)
+
+    result = await hass.services.async_call(
+        DOMAIN,
+        "generate_automation",
+        {"description": "Make coffee at 7 AM"},
+        blocking=True,
+        return_response=True,
+    )
+
+    assert "```" not in result["automation_yaml"]
+    assert "alias: Coffee at 7AM" in result["automation_yaml"]
+    assert "switch.coffee_machine" in result["automation_yaml"]
+
+
+async def test_generate_automation_llm_error(hass: HomeAssistant):
+    """Test generate_automation handles LLM error gracefully."""
+    await async_setup(hass, {})
+
+    mock_client = AsyncMock()
+    mock_client.ainvoke.side_effect = Exception("LLM timeout")
+    _setup_entry_with_client(hass, mock_client)
+
+    result = await hass.services.async_call(
+        DOMAIN,
+        "generate_automation",
+        {"description": "Something"},
+        blocking=True,
+        return_response=True,
+    )
+
+    assert result["automation_yaml"] == ""
+    assert "LLM timeout" in result["error"]

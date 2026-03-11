@@ -1,0 +1,89 @@
+blueprint:
+  name: "SmartChain: Camera Security Guard"
+  description: >
+    When motion is detected, captures a camera snapshot and sends it to an LLM
+    for analysis via smartchain.analyze_image. If the LLM reports a threat level
+    of medium or high, sends a notification with the analysis result.
+  domain: automation
+  input:
+    motion_sensor:
+      name: Motion Sensor
+      description: Binary sensor that triggers on motion detection
+      selector:
+        entity:
+          domain: binary_sensor
+          device_class: motion
+    camera_entity:
+      name: Camera
+      description: Camera entity to capture a snapshot from
+      selector:
+        entity:
+          domain: camera
+    notify_service:
+      name: Notification Service
+      description: Notification entity to send alerts to
+      selector:
+        entity:
+          domain: notify
+    agent_entity:
+      name: SmartChain Agent (optional)
+      description: Conversation agent entity to use (leave empty for default)
+      default: ""
+      selector:
+        entity:
+          domain: conversation
+    prompt:
+      name: Analysis Prompt
+      description: Instructions for the LLM on how to analyze the image
+      default: >
+        Analyze this security camera image. Describe what you see.
+        Is there a person? Is it someone suspicious or just a regular visitor?
+        Rate the threat level: none, low, medium, high.
+        Respond in JSON format: {"person": true/false, "description": "...", "threat": "none/low/medium/high"}
+      selector:
+        text:
+          multiline: true
+    cooldown:
+      name: Cooldown (seconds)
+      description: Minimum time between alerts to avoid notification spam
+      default: 60
+      selector:
+        number:
+          min: 10
+          max: 600
+          unit_of_measurement: seconds
+
+trigger:
+  - platform: state
+    entity_id: !input motion_sensor
+    to: "on"
+
+condition:
+  - condition: template
+    value_template: >
+      {% set last = state_attr('sensor.smartchain_last_analysis', 'timestamp') %}
+      {% if last is none %}true
+      {% else %}{{ (now().isoformat()[:19] > (as_datetime(last) + timedelta(seconds=(!input cooldown))).isoformat()[:19]) }}
+      {% endif %}
+
+action:
+  - service: smartchain.analyze_image
+    data:
+      camera_entity_id: !input camera_entity
+      message: !input prompt
+      entity_id: !input agent_entity
+    response_variable: analysis
+
+  - condition: template
+    value_template: >
+      {{ 'high' in analysis.response | lower or 'medium' in analysis.response | lower }}
+
+  - service: notify.send_message
+    target:
+      entity_id: !input notify_service
+    data:
+      title: "SmartChain Security Alert"
+      message: "{{ analysis.response }}"
+
+mode: single
+max_exceeded: silent

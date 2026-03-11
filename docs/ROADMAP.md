@@ -1,6 +1,6 @@
 # SmartChain — Дорожная карта развития
 
-Дата: 2026-03-11 | Текущая версия: 2.0.0
+Дата: 2026-03-11 | Текущая версия: 2.2.0
 
 ## Оглавление
 
@@ -32,7 +32,9 @@
 | 1.0–1.5 | Vision (attachments), генерация изображений, MCP, история состояний, multi-agent delegation |
 | 1.6–1.8 | Telegram-бот, STT/TTS (GigaAM + Silero), Skill-система, prompt caching |
 | 1.9.x | Динамическое получение списка моделей от провайдеров, фиксы GigaChat |
-| **2.0.0** | **`analyze_image` сервис** — анализ камер через LLM, рефакторинг `_find_client` (114 тестов) |
+| 2.0.0 | `analyze_image` сервис — анализ камер через LLM, рефакторинг `_find_client` (114 тестов) |
+| 2.1.x | GigaChat vision fix (`auto_upload_images=True`), bugfixes |
+| **2.2.0** | **`generate_automation` сервис** — генерация автоматизаций через LLM, Blueprint Security Guard (123 теста) |
 
 ### Текущая архитектура
 
@@ -94,57 +96,30 @@ graph TB
 - Сервис `smartchain.analyze_image` — snapshot камеры → multimodal LLM → текстовый ответ
 - Поддержка: GigaChat 2.0, OpenAI GPT-4o, Anthropic Claude, Ollama (LLaVA)
 - Vision attachments в conversation entity (через ChatLog)
+- 3 канала доставки: event, sensor, notify
 
-### v2.1 — Camera Security Guard
+### v2.1 — Camera Security Guard (DONE)
 
-**Приоритет:** Высокий
-**Сложность:** Средняя
-**WOW-фактор:** Очень высокий
-
-**Что:**
-- Continuous monitoring: Frigate/камера детектит движение → snapshot → `analyze_image` → решение
-- Умная фильтрация: "Кот — не отправляю уведомление. Незнакомец — отправляю."
-- Blueprint автоматизации для быстрого старта
+- Blueprint автоматизации: motion → analyze_image → threat filter → notify
+- GigaChat vision fix: `auto_upload_images=True`
+- Cooldown для предотвращения спама уведомлений
 - Работает полностью локально через Ollama + LLaVA
 
-**Реализация:**
+### v2.2 — LLM-generated Automations (DONE)
+
+- Сервис `smartchain.generate_automation` — описание на естественном языке → YAML
+- LLM генерирует валидный YAML автоматизации HA
+- Автоматическая очистка markdown code fences из ответа LLM
+- Работает с любым из 6 провайдеров
+
+**Пример использования:**
 ```yaml
-# Пример автоматизации
-automation:
-  trigger:
-    - platform: state
-      entity_id: binary_sensor.front_door_motion
-      to: "on"
-  action:
-    - service: smartchain.analyze_image
-      data:
-        camera_entity_id: camera.front_door
-        message: >
-          Analyze this security camera image.
-          Is there a person? Is it someone familiar or a stranger?
-          Rate the threat level: none/low/medium/high.
-          Respond in JSON: {"person": bool, "description": "...", "threat": "..."}
-      response_variable: analysis
-    - condition: template
-      value_template: "{{ 'high' in analysis.response or 'medium' in analysis.response }}"
-    - service: notify.mobile_app
-      data:
-        message: "{{ analysis.response }}"
+service: smartchain.generate_automation
+data:
+  description: "Каждое утро в 7:00 включи кофемашину, если я дома. По выходным — в 9:00."
+response_variable: result
 ```
-
-### v2.2 — LLM-generated Automations
-
-**Приоритет:** Высокий
-**Сложность:** Средняя
-
-**Что:**
-- Пользователь описывает автоматизацию на естественном языке
-- LLM генерирует YAML автоматизации HA
-- Валидация и деплой через HA API
-- Сервис `smartchain.create_automation`
-
-**Пример:**
-> "Каждое утро в 7:00 включи кофемашину, если я дома. По выходным — в 9:00."
+Ответ в `result.automation_yaml` — готовый YAML для копирования в automations.yaml.
 
 ### v2.3 — RAG over Home History
 
@@ -301,18 +276,18 @@ LLM "спит" ночью и моделирует сценарии: "Что ес
 
 | Метрика | Значение |
 |---------|----------|
-| Версия | 2.0.0 |
-| Тестов | 114 |
+| Версия | 2.2.0 |
+| Тестов | 123 |
 | Провайдеров | 6 |
-| Сервисов | 2 (ask, analyze_image) |
+| Сервисов | 3 (ask, analyze_image, generate_automation) |
 | Platforms | CONVERSATION + AI_TASK |
 
 ### Целевые метрики по фазам
 
 | Фаза | Версия | Тестов | Ключевая фича |
 |-------|--------|--------|---------------|
-| Текущая | 2.0.0 | 114 | Vision analyze_image |
-| Фаза 2 | 2.x | ~130 | Security Guard + Automations + RAG |
+| Текущая | 2.2.0 | 123 | Vision + Security Guard + Generate Automation |
+| Фаза 2 | 2.x | ~140 | RAG + Energy Advisor |
 | Фаза 3 | 3.x | ~150 | Event Reactor + Anomaly Detection |
 | Фаза 4 | 4.x | ~180 | Ambient Intelligence Daemon |
 
@@ -340,8 +315,8 @@ gantt
 
     section Фаза 2 — Дифференциация
     v2.0 Vision analyze_image        :done, b0, 2026-03, 2026-03
-    v2.1 Camera Security Guard       :b1, 2026-04, 2026-05
-    v2.2 LLM-generated Automations   :b2, 2026-04, 2026-05
+    v2.1 Camera Security Guard       :done, b1, 2026-03, 2026-03
+    v2.2 Generate Automation         :done, b2, 2026-03, 2026-03
     v2.3 RAG over History            :b3, 2026-05, 2026-06
     v2.4 Energy Advisor              :b4, 2026-06, 2026-07
 
