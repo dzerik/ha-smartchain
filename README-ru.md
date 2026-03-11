@@ -9,6 +9,8 @@
 [![HACS](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://hacs.xyz)
 [![GitHub release](https://img.shields.io/github/v/release/dzerik/ha-smartchain)](https://github.com/dzerik/ha-smartchain/releases)
 
+> **⚠️ Ранняя пре-альфа.** Проект находится на очень ранней стадии разработки. Практически гарантированно не рабочий или почти не рабочий. Используйте на свой страх и риск — ожидайте ломающие изменения, отсутствующий функционал и баги. Баг-репорты и контрибуции приветствуются!
+
 ## Обзор
 
 SmartChain — кастомная интеграция Home Assistant, предоставляющая интеллектуального голосового/текстового ассистента на базе нескольких LLM-провайдеров через LangChain:
