@@ -56,6 +56,7 @@ from .delegate_tool import (
     get_delegate_tool_definition,
 )
 from .history_tool import execute_history_tool, get_history_tool_definition
+from .skills import load_skills, skills_to_prompt
 
 LOGGER = logging.getLogger(__name__)
 
@@ -113,6 +114,7 @@ class SmartChainConversationEntity(ConversationEntity):
         self.entry = entry
         self._subentry_id = subentry_id
         self._options = options or {}
+        self._skills_prompt: str | None = None
 
         if subentry_id:
             self._attr_unique_id = f"{entry.entry_id}_{subentry_id}"
@@ -154,6 +156,13 @@ class SmartChainConversationEntity(ConversationEntity):
         """Return mapping of agent_name -> subentry_id for delegation."""
         return {a["name"]: a["sub_id"] for a in self._sibling_agents}
 
+    def _get_skills_prompt(self) -> str:
+        """Return cached skills prompt text."""
+        if self._skills_prompt is None:
+            skills = load_skills(self.hass.config.config_dir)
+            self._skills_prompt = skills_to_prompt(skills)
+        return self._skills_prompt
+
     @property
     def supported_languages(self) -> list[str] | Literal["*"]:
         """Return a list of supported languages."""
@@ -186,6 +195,11 @@ class SmartChainConversationEntity(ConversationEntity):
                 parse_result=False,
             )
             chat_log.content[0] = SystemContent(content=prompt)
+
+        # Append skills prompt to system message
+        skills_text = self._get_skills_prompt()
+        if skills_text and isinstance(chat_log.content[0], SystemContent):
+            chat_log.content[0] = SystemContent(content=chat_log.content[0].content + skills_text)
 
         use_builtin = options.get(CONF_PROCESS_BUILTIN_SENTENCES, DEFAULT_PROCESS_BUILTIN_SENTENCES)
         if use_builtin and not llm_hass_api:
