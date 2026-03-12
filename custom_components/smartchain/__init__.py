@@ -714,7 +714,8 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
                 "_panel_custom": {
                     "name": "smartchain-panel",
                     "module_url": f"/smartchain/smartchain-panel.js?v={panel_version}",
-                }
+                },
+                "version": panel_version,
             },
         )
     except Exception:
