@@ -535,25 +535,41 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         return {"deployed": True, "alias": alias, "blueprint_path": bp_path}
 
     def _list_yaml_items(gen_type: str | None = None) -> list[dict]:
-        """List all YAML items (automations, scripts, scenes, blueprints)."""
+        """List all YAML items (automations, scripts, scenes, blueprints).
+
+        Loads only from YAML files — no state machine to avoid duplicates.
+        Blueprints: scans entire blueprints/ tree with rglob('*.yaml').
+        """
         items: list[dict] = []
         types = [gen_type] if gen_type else list(YAML_FILE_MAP.keys()) + ["blueprint"]
 
         for t in types:
             if t == "blueprint":
-                bp_dir = Path(hass.config.path("blueprints", "automation"))
-                if bp_dir.is_dir():
-                    for bp_file in sorted(bp_dir.rglob("*.yaml")):
+                # Scan ALL *.yaml files under blueprints/ recursively
+                bp_root = Path(hass.config.path("blueprints"))
+                if bp_root.is_dir():
+                    for bp_file in sorted(bp_root.rglob("*.yaml")):
                         try:
-                            with open(bp_file, encoding="utf-8") as f:
-                                data = yaml.safe_load(f)
-                            bp_meta = data.get("blueprint", {}) if isinstance(data, dict) else {}
-                            rel = str(bp_file.relative_to(bp_dir))
+                            rel = str(bp_file.relative_to(bp_root))
+                            # Try to extract name from blueprint metadata
+                            alias = bp_file.stem
+                            domain = bp_file.parent.name
+                            try:
+                                with open(bp_file, encoding="utf-8") as f:
+                                    data = yaml.safe_load(f)
+                                if isinstance(data, dict) and "blueprint" in data:
+                                    bp_meta = data["blueprint"]
+                                    if isinstance(bp_meta, dict):
+                                        alias = bp_meta.get("name", alias)
+                                        domain = bp_meta.get("domain", domain)
+                            except Exception:
+                                pass
                             items.append(
                                 {
                                     "id": rel,
-                                    "alias": bp_meta.get("name", bp_file.stem),
+                                    "alias": alias,
                                     "type": "blueprint",
+                                    "domain": domain,
                                 }
                             )
                         except Exception:
@@ -571,7 +587,6 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
                                     "alias": item.get("alias") or item.get("name", "Unnamed"),
                                     "type": t,
                                 }
-                                # Mark blueprint-based automations
                                 if "use_blueprint" in item:
                                     bp = item["use_blueprint"]
                                     entry["blueprint_based"] = True
@@ -580,12 +595,14 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
                                 items.append(entry)
                 except FileNotFoundError:
                     pass
+                except Exception:
+                    pass
         return items
 
     def _get_yaml_item(gen_type: str, item_id: str) -> str | None:
         """Get YAML content for a specific item by type and id."""
         if gen_type == "blueprint":
-            bp_base = Path(hass.config.path("blueprints", "automation"))
+            bp_base = Path(hass.config.path("blueprints"))
             bp_path = (bp_base / item_id).resolve()
             # Prevent path traversal — resolved path must be under bp_base
             if not str(bp_path).startswith(str(bp_base.resolve())):
@@ -682,6 +699,11 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         await hass.http.async_register_static_paths(
             [StaticPathConfig("/smartchain", str(panel_dir), False)]
         )
+        import json
+
+        manifest_path = Path(__file__).parent / "manifest.json"
+        manifest = json.loads(manifest_path.read_text())
+        panel_version = manifest.get("version", "0")
         async_register_built_in_panel(
             hass,
             component_name="custom",
@@ -691,7 +713,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
             config={
                 "_panel_custom": {
                     "name": "smartchain-panel",
-                    "module_url": "/smartchain/smartchain-panel.js",
+                    "module_url": f"/smartchain/smartchain-panel.js?v={panel_version}",
                 }
             },
         )

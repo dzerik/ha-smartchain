@@ -1,7 +1,7 @@
 import { SC_STYLES } from "./styles.js";
+import { showConfirm, showToast } from "./services.js";
 import "./components/sidebar-explorer.js";
 import "./components/code-editor.js";
-import "./components/diff-viewer.js";
 import "./components/ai-bar.js";
 import "./components/toolbar.js";
 import "./components/camera-tab.js";
@@ -10,7 +10,7 @@ import "./components/camera-tab.js";
  * <smartchain-panel> — IDE-like panel for SmartChain.
  *
  * Two modes:
- *   1. Editor — two-column layout: sidebar (explorer) + main (toolbar, editor, diff, AI bar)
+ *   1. Editor — sidebar (explorer) + main (toolbar, Monaco, AI bar)
  *   2. Camera — camera analysis tab
  */
 class SmartChainPanel extends HTMLElement {
@@ -18,12 +18,13 @@ class SmartChainPanel extends HTMLElement {
     super();
     this._hass = null;
     this._initialized = false;
-    this._mode = "editor"; // "editor" | "camera"
+    this._mode = "editor";
     this._originalYaml = "";
     this._currentType = "automation";
     this._currentAlias = "";
     this._currentId = null;
     this._diffVisible = false;
+    this._sidebarCollapsed = false;
   }
 
   set hass(hass) {
@@ -36,29 +37,30 @@ class SmartChainPanel extends HTMLElement {
   }
 
   _propagateHass() {
-    const sidebar = this.querySelector("sc-sidebar-explorer");
-    const aiBar = this.querySelector("sc-ai-bar");
-    const toolbar = this.querySelector("sc-toolbar");
-    const camTab = this.querySelector("sc-camera-tab");
-    if (sidebar) sidebar.hass = this._hass;
-    if (aiBar) aiBar.hass = this._hass;
-    if (toolbar) toolbar.hass = this._hass;
-    if (camTab) camTab.hass = this._hass;
+    for (const sel of ["sc-sidebar-explorer", "sc-ai-bar", "sc-toolbar", "sc-camera-tab"]) {
+      const el = this.querySelector(sel);
+      if (el) el.hass = this._hass;
+    }
   }
 
   _initialize() {
     this.innerHTML = `
       <style>${SC_STYLES}</style>
 
-      <!-- Mode tabs -->
       <div class="sc-mode-tabs">
-        <button class="sc-mode-tab active" data-mode="editor">\u2699 Editor</button>
-        <button class="sc-mode-tab" data-mode="camera">\uD83D\uDCF7 Camera</button>
+        <button class="sc-sidebar-toggle" title="Toggle sidebar">
+          <ha-icon icon="mdi:menu"></ha-icon>
+        </button>
+        <button class="sc-mode-tab active" data-mode="editor">
+          <ha-icon icon="mdi:code-tags"></ha-icon> Editor
+        </button>
+        <button class="sc-mode-tab" data-mode="camera">
+          <ha-icon icon="mdi:camera"></ha-icon> Camera
+        </button>
       </div>
 
       <!-- Editor mode -->
       <div class="sc-ide" id="mode-editor">
-        <!-- Left sidebar -->
         <div class="sc-sidebar">
           <div class="sc-sidebar-header">
             <ha-icon icon="mdi:robot"></ha-icon>
@@ -67,18 +69,19 @@ class SmartChainPanel extends HTMLElement {
           <sc-sidebar-explorer></sc-sidebar-explorer>
         </div>
 
-        <!-- Right main area -->
         <div class="sc-main">
           <sc-toolbar></sc-toolbar>
           <div class="sc-editor-area">
             <sc-code-editor></sc-code-editor>
-            <sc-diff-viewer></sc-diff-viewer>
           </div>
           <sc-ai-bar></sc-ai-bar>
           <div class="sc-statusbar">
             <span class="sb-lines">0 lines</span>
-            <span class="sb-type">automation</span>
+            <span class="sb-type">yaml</span>
             <span class="sb-id"></span>
+            <span style="margin-left:auto;color:var(--disabled-text-color,#999);font-size:11px;">
+              Ctrl+Shift+V validate &middot; Ctrl+Shift+D deploy &middot; Ctrl+Shift+G diff &middot; Ctrl+Enter AI
+            </span>
           </div>
         </div>
       </div>
@@ -99,6 +102,7 @@ class SmartChainPanel extends HTMLElement {
     this._propagateHass();
   }
 
+  /* ---- Mode Switch ---- */
   _setupModeSwitch() {
     this.querySelectorAll(".sc-mode-tab").forEach((tab) => {
       tab.addEventListener("click", () => {
@@ -109,74 +113,105 @@ class SmartChainPanel extends HTMLElement {
         this.querySelector("#mode-camera").classList.toggle("sc-hidden", this._mode !== "camera");
       });
     });
+
+    this.querySelector(".sc-sidebar-toggle").addEventListener("click", () => {
+      this._sidebarCollapsed = !this._sidebarCollapsed;
+      this.querySelector(".sc-sidebar").classList.toggle("collapsed", this._sidebarCollapsed);
+    });
   }
 
+  /* ---- Sidebar ---- */
   _setupSidebar() {
     const sidebar = this.querySelector("sc-sidebar-explorer");
 
-    sidebar.addEventListener("select", (e) => {
+    sidebar.addEventListener("select", async (e) => {
       const { yaml, type, id, alias } = e.detail;
+      if (!(await this._confirmUnsavedChanges())) return;
       this._loadYaml(yaml, type, id, alias);
     });
 
-    sidebar.addEventListener("new", () => {
+    sidebar.addEventListener("new", async () => {
+      if (!(await this._confirmUnsavedChanges())) return;
       this._newFile();
     });
   }
 
+  async _confirmUnsavedChanges() {
+    const editor = this.querySelector("sc-code-editor");
+    const currentValue = editor?.value || "";
+    if (currentValue !== this._originalYaml && currentValue.trim() !== "") {
+      return await showConfirm(
+        "Unsaved Changes",
+        "You have unsaved changes. Discard them and switch to another file?",
+        "Discard",
+        "sc-btn-warn"
+      );
+    }
+    return true;
+  }
+
+  /* ---- Toolbar ---- */
   _setupToolbar() {
     const toolbar = this.querySelector("sc-toolbar");
-    toolbar.getYaml = () => this.querySelector("sc-code-editor")?.value || "";
+    const editor = this.querySelector("sc-code-editor");
+    toolbar.getYaml = () => editor?.value || "";
 
     toolbar.addEventListener("action", (e) => {
       const { action } = e.detail;
-      if (action === "diff") {
-        this._toggleDiff();
+      switch (action) {
+        case "diff": this._toggleDiff(); break;
+        case "diff-prev": editor.goToPrevDiff(); break;
+        case "diff-next": editor.goToNextDiff(); break;
+        case "diff-toggle-mode": editor.renderSideBySide = e.detail.sideBySide; break;
+        case "diff-accept": this._acceptDiff(); break;
+        case "diff-revert": this._revertDiff(); break;
       }
     });
   }
 
+  /* ---- Editor ---- */
   _setupEditor() {
     const editor = this.querySelector("sc-code-editor");
 
-    editor.addEventListener("change", () => {
+    editor.addEventListener("change", (e) => {
+      const val = e.detail.value;
       const toolbar = this.querySelector("sc-toolbar");
-      const val = editor.value;
-      const isDirty = val !== this._originalYaml;
-      toolbar.dirty = isDirty;
+      toolbar.dirty = val !== this._originalYaml;
 
-      // Update AI bar
       const aiBar = this.querySelector("sc-ai-bar");
       if (aiBar) aiBar.currentYaml = val;
 
-      // Update diff
-      const diff = this.querySelector("sc-diff-viewer");
-      if (diff && diff.visible) {
-        diff.newText = val;
-      }
-
-      // Update status bar
       this._updateStatusBar(val);
+    });
+
+    editor.addEventListener("diff-updated", () => this._updateDiffStats());
+
+    editor.addEventListener("action", (e) => {
+      const { id } = e.detail;
+      const toolbar = this.querySelector("sc-toolbar");
+      if (id === "validate") toolbar.querySelector(".tb-validate")?.click();
+      else if (id === "deploy") toolbar.querySelector(".tb-deploy")?.click();
+      else if (id === "diff") this._toggleDiff();
+      else if (id === "ai-apply") {
+        const input = this.querySelector("sc-ai-bar .ab-input");
+        if (input) input.focus();
+      }
     });
   }
 
+  /* ---- AI Bar ---- */
   _setupAiBar() {
     const aiBar = this.querySelector("sc-ai-bar");
     const editor = this.querySelector("sc-code-editor");
-    const diff = this.querySelector("sc-diff-viewer");
     const toolbar = this.querySelector("sc-toolbar");
 
     aiBar.addEventListener("result", (e) => {
       const { yaml } = e.detail;
       const previousYaml = editor.value;
 
-      // Set new value
+      editor.originalValue = previousYaml || this._originalYaml;
       editor.value = yaml;
-
-      // Show diff automatically
-      diff.oldText = previousYaml || this._originalYaml;
-      diff.newText = yaml;
-      diff.visible = true;
+      editor.diffMode = true;
       this._diffVisible = true;
       toolbar.diffActive = true;
       toolbar.dirty = yaml !== this._originalYaml;
@@ -185,18 +220,20 @@ class SmartChainPanel extends HTMLElement {
     });
   }
 
+  /* ---- File Operations ---- */
   _loadYaml(yaml, type, id, alias) {
     const editor = this.querySelector("sc-code-editor");
     const toolbar = this.querySelector("sc-toolbar");
     const aiBar = this.querySelector("sc-ai-bar");
-    const diff = this.querySelector("sc-diff-viewer");
 
     this._originalYaml = yaml;
     this._currentType = type;
     this._currentAlias = alias;
     this._currentId = id;
 
-    editor.value = yaml;
+    editor.forceNormalMode(yaml);
+    this._diffVisible = false;
+    toolbar.diffActive = false;
     toolbar.title = `${alias} (${type})`;
     toolbar.dirty = false;
     toolbar.currentType = type;
@@ -204,53 +241,72 @@ class SmartChainPanel extends HTMLElement {
     aiBar.currentType = type;
     aiBar.setType(type);
 
-    // Reset diff
-    diff.oldText = yaml;
-    diff.newText = yaml;
-    if (this._diffVisible) {
-      diff.visible = true;
-    }
-
     this._updateStatusBar(yaml);
-    editor.focus();
   }
 
   _newFile() {
     const editor = this.querySelector("sc-code-editor");
     const toolbar = this.querySelector("sc-toolbar");
     const aiBar = this.querySelector("sc-ai-bar");
-    const diff = this.querySelector("sc-diff-viewer");
     const sidebar = this.querySelector("sc-sidebar-explorer");
 
     this._originalYaml = "";
     this._currentAlias = "";
     this._currentId = null;
 
-    editor.value = "";
+    editor.forceNormalMode("");
+    this._diffVisible = false;
+    toolbar.diffActive = false;
     toolbar.title = "New";
     toolbar.dirty = false;
     aiBar.currentYaml = "";
-    diff.visible = false;
-    this._diffVisible = false;
-    toolbar.diffActive = false;
     sidebar.setActive(null, null);
 
     this._updateStatusBar("");
-    editor.focus();
   }
 
+  /* ---- Diff ---- */
   _toggleDiff() {
-    const diff = this.querySelector("sc-diff-viewer");
-    const toolbar = this.querySelector("sc-toolbar");
     const editor = this.querySelector("sc-code-editor");
+    const toolbar = this.querySelector("sc-toolbar");
 
     this._diffVisible = !this._diffVisible;
-    diff.oldText = this._originalYaml;
-    diff.newText = editor.value;
-    diff.visible = this._diffVisible;
+    if (this._diffVisible) editor.originalValue = this._originalYaml;
+    editor.diffMode = this._diffVisible;
     toolbar.diffActive = this._diffVisible;
   }
 
+  _acceptDiff() {
+    const editor = this.querySelector("sc-code-editor");
+    const toolbar = this.querySelector("sc-toolbar");
+
+    this._originalYaml = editor.value;
+    editor.acceptChanges();
+    this._diffVisible = false;
+    toolbar.diffActive = false;
+    toolbar.dirty = false;
+    showToast("Changes accepted", "success", 2000);
+  }
+
+  _revertDiff() {
+    const editor = this.querySelector("sc-code-editor");
+    const toolbar = this.querySelector("sc-toolbar");
+
+    editor.revertChanges();
+    this._diffVisible = false;
+    toolbar.diffActive = false;
+    toolbar.dirty = false;
+    showToast("Reverted to original", "info", 2000);
+  }
+
+  _updateDiffStats() {
+    const editor = this.querySelector("sc-code-editor");
+    const toolbar = this.querySelector("sc-toolbar");
+    const stats = editor.getDiffStats();
+    toolbar.updateDiffStats(stats);
+  }
+
+  /* ---- Status Bar ---- */
   _updateStatusBar(yaml) {
     const lines = (yaml || "").split("\n").length;
     const linesEl = this.querySelector(".sb-lines");
