@@ -16,12 +16,19 @@ export class ScEntityPicker extends HTMLElement {
     this._selected = [];
     this._filter = "";
     this._open = false;
+    this._inline = false;
     this._rendered = false;
     this._onDocClick = this._handleDocClick.bind(this);
   }
 
-  set entities(val) { this._entities = val || []; }
+  set entities(val) {
+    this._entities = val || [];
+    if (this._rendered) this._renderDropdown();
+  }
   get entities() { return this._entities; }
+
+  set inline(val) { this._inline = !!val; }
+  get inline() { return this._inline; }
 
   set selected(val) {
     this._selected = val || [];
@@ -30,6 +37,7 @@ export class ScEntityPicker extends HTMLElement {
   get selected() { return this._selected; }
 
   connectedCallback() {
+    if (this.hasAttribute("inline")) this._inline = true;
     if (!this._rendered) {
       this._render();
       this._rendered = true;
@@ -42,12 +50,14 @@ export class ScEntityPicker extends HTMLElement {
   }
 
   _handleDocClick(e) {
+    if (this._inline) return;
     if (!this.querySelector(".ep-wrap")?.contains(e.target)) {
       this._closeDropdown();
     }
   }
 
   _closeDropdown() {
+    if (this._inline) return;
     const dropdown = this.querySelector(".ep-dropdown");
     if (dropdown) dropdown.classList.remove("open");
     this._open = false;
@@ -91,6 +101,16 @@ export class ScEntityPicker extends HTMLElement {
           display: none;
         }
         .ep-dropdown.open { display: block; }
+        :host([inline]) .ep-dropdown,
+        .ep-dropdown.inline {
+          position: static;
+          display: block;
+          max-height: none;
+          border: none;
+          box-shadow: none;
+          border-radius: 0;
+          margin-top: 8px;
+        }
         .ep-domain {
           padding: 8px 14px;
           font-size: 11px;
@@ -166,15 +186,22 @@ export class ScEntityPicker extends HTMLElement {
     const input = this.querySelector(".ep-search");
     const dropdown = this.querySelector(".ep-dropdown");
 
+    if (this._inline) {
+      dropdown.classList.add("inline");
+      this._renderDropdown();
+    }
+
     input.addEventListener("focus", () => {
       this._renderDropdown();
-      dropdown.classList.add("open");
-      this._open = true;
+      if (!this._inline) {
+        dropdown.classList.add("open");
+        this._open = true;
+      }
     });
     input.addEventListener("input", () => {
       this._filter = input.value.toLowerCase();
       this._renderDropdown();
-      if (!this._open) {
+      if (!this._inline && !this._open) {
         dropdown.classList.add("open");
         this._open = true;
       }
@@ -190,7 +217,8 @@ export class ScEntityPicker extends HTMLElement {
       const text = `${e.id} ${e.name}`.toLowerCase();
       return !filter || text.includes(filter);
     });
-    const limited = filtered.slice(0, 100);
+    const limit = this._inline ? 200 : 100;
+    const limited = filtered.slice(0, limit);
 
     if (!limited.length) {
       dropdown.innerHTML = '<div class="ep-empty">No entities found</div>';
@@ -212,8 +240,8 @@ export class ScEntityPicker extends HTMLElement {
         </span>
       </div>`;
     }
-    if (filtered.length > 100) {
-      html += `<div class="ep-empty">${filtered.length - 100} more results...</div>`;
+    if (filtered.length > limit) {
+      html += `<div class="ep-empty">${filtered.length - limit} more results...</div>`;
     }
 
     dropdown.innerHTML = html;

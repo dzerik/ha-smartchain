@@ -19,5 +19,5 @@
     "langchain-ollama>=0.3.0,<1",
     "yandexcloud==0.295.0"
   ],
-  "version": "3.4.2"
+  "version": "3.5.0"
 }
