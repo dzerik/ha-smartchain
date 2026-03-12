@@ -17,6 +17,7 @@ class SmartChainPanel extends HTMLElement {
   constructor() {
     super();
     this._hass = null;
+    this._panel = null;
     this._initialized = false;
     this._mode = "editor";
     this._originalYaml = "";
@@ -25,6 +26,10 @@ class SmartChainPanel extends HTMLElement {
     this._currentId = null;
     this._diffVisible = false;
     this._sidebarCollapsed = false;
+  }
+
+  set panel(panel) {
+    this._panel = panel;
   }
 
   set hass(hass) {
@@ -37,7 +42,7 @@ class SmartChainPanel extends HTMLElement {
   }
 
   _propagateHass() {
-    for (const sel of ["sc-sidebar-explorer", "sc-ai-bar", "sc-toolbar", "sc-camera-tab"]) {
+    for (const sel of ["sc-sidebar-explorer", "sc-ai-bar", "sc-toolbar", "sc-camera-tab", "sc-code-editor"]) {
       const el = this.querySelector(sel);
       if (el) el.hass = this._hass;
     }
@@ -165,6 +170,11 @@ class SmartChainPanel extends HTMLElement {
         case "diff-toggle-mode": editor.renderSideBySide = e.detail.sideBySide; break;
         case "diff-accept": this._acceptDiff(); break;
         case "diff-revert": this._revertDiff(); break;
+        case "validate":
+          if (e.detail.result) {
+            editor.setValidation(e.detail.result);
+          }
+          break;
       }
     });
   }
@@ -181,6 +191,7 @@ class SmartChainPanel extends HTMLElement {
       const aiBar = this.querySelector("sc-ai-bar");
       if (aiBar) aiBar.currentYaml = val;
 
+      editor.clearValidation();
       this._updateStatusBar(val);
     });
 
@@ -319,3 +330,15 @@ class SmartChainPanel extends HTMLElement {
 }
 
 customElements.define("smartchain-panel", SmartChainPanel);
+
+/* ---- Version banner ---- */
+(() => {
+  const scriptUrl = import.meta.url || "";
+  const vMatch = scriptUrl.match(/[?&]v=([^&]+)/);
+  const version = vMatch ? vMatch[1] : "unknown";
+  console.info(
+    `%c  SMARTCHAIN  %c  v${version}  `,
+    "color: #fff; background: #03a9f4; font-weight: bold; padding: 2px 6px; border-radius: 4px 0 0 4px;",
+    "color: #fff; background: #444; font-weight: bold; padding: 2px 6px; border-radius: 0 4px 4px 0;"
+  );
+})();

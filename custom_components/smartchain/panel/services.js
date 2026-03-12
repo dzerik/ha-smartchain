@@ -125,14 +125,14 @@ export function showToast(message, type = "info", duration = 3500) {
 export function showConfirm(title, message, confirmLabel = "Continue", confirmClass = "sc-btn-primary") {
   return new Promise((resolve) => {
     const overlay = document.createElement("div");
-    overlay.className = "sc-dialog-overlay";
+    overlay.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center;";
     overlay.innerHTML = `
-      <div class="sc-dialog">
-        <h3>${escapeHtml(title)}</h3>
-        <p>${escapeHtml(message)}</p>
-        <div class="sc-dialog-actions">
-          <button class="sc-btn sc-btn-ghost sc-dialog-cancel">Cancel</button>
-          <button class="sc-btn ${confirmClass} sc-dialog-confirm">${escapeHtml(confirmLabel)}</button>
+      <div style="background:var(--card-background-color,#1e1e1e);border-radius:12px;padding:28px;max-width:420px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,0.4);">
+        <h3 style="margin:0 0 12px;font-size:18px;font-weight:600;color:var(--primary-text-color,#fff);">${escapeHtml(title)}</h3>
+        <p style="margin:0 0 24px;font-size:14px;color:var(--secondary-text-color,#aaa);line-height:1.5;">${escapeHtml(message)}</p>
+        <div style="display:flex;justify-content:flex-end;gap:10px;">
+          <button class="sc-dialog-cancel" style="padding:8px 18px;border-radius:8px;border:1px solid var(--divider-color,#444);background:transparent;color:var(--primary-text-color,#fff);cursor:pointer;font-size:14px;">Cancel</button>
+          <button class="sc-dialog-confirm" style="padding:8px 18px;border-radius:8px;border:none;background:${confirmClass === "sc-btn-warn" ? "var(--error-color,#f44336)" : "var(--primary-color,#03a9f4)"};color:#fff;cursor:pointer;font-size:14px;">${escapeHtml(confirmLabel)}</button>
         </div>
       </div>
     `;
