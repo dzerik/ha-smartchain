@@ -5,6 +5,66 @@ All notable changes to this project are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 project follows [Semantic Versioning](https://semver.org/).
 
+## [3.0.5] - 2026-03-12
+
+### Fixed
+- **Code displayed in fragments** — `_rebuildEditor()` now clears container DOM (`innerHTML = ""`) before creating new editor, preventing leftover elements from previous instance
+- **Stale content during rebuild** — `forceNormalMode(newValue)` accepts value parameter to set content atomically with editor rebuild, avoiding flash of old content
+
+## [3.0.4] - 2026-03-12
+
+### Fixed
+- **Diff view opens on file load** — `forceNormalMode()` always exits diff when loading/creating files, regardless of flag state
+- **"No changes" in diff stats** — replaced unreliable `setTimeout` with Monaco `onDidUpdateDiff` event for accurate stats
+- **Diff state desync** — `forceNormalMode()` disposes diff editor even if `_diffMode` flag was already false
+
+## [3.0.3] - 2026-03-12
+
+### Fixed
+- **Duplicate automations removed** — removed HA state machine loading, only YAML files are listed (no more duplicates)
+- **Blueprints now visible** — removed filter that skipped files without `blueprint` metadata key; all `*.yaml` files under `blueprints/` are now listed via `rglob('*.yaml')`
+- **Unsaved changes prompt** — switching files or creating new shows confirm dialog when editor has unsaved changes
+- **Cursor blinking at 1:1** — removed `editor.focus()` call after loading YAML to prevent cursor position reset
+
+## [3.0.2] - 2026-03-12
+
+### Changed
+- **Diff view redesigned** — full diff toolbar with navigation (prev/next change), inline/side-by-side toggle, diff statistics (+N/-N), Accept/Revert buttons
+- `goToDiff('next')` / `goToDiff('previous')` Monaco API for diff navigation
+- `renderSideBySide` toggle for inline vs side-by-side diff modes
+- Accept applies modified content as new baseline; Revert restores original
+- **Agent selector visible** — moved agent and type selectors from hidden options into the main AI bar, always visible
+
+### Fixed
+- Agent/subagent selector was hidden inside collapsible options and not discoverable
+
+## [3.0.1] - 2026-03-12
+
+### Fixed
+- **Sidebar scroll** — item list now scrollable with proper flex layout on `sc-sidebar-explorer`
+- **Tooltips** — type filter buttons (Automations/Scripts/Scenes/Blueprints) now show tooltip labels on hover
+- **Blueprints loading** — scan entire `blueprints/` tree (automation + script + custom domains), not just `blueprints/automation/`
+- **Load all items** — automations, scripts, scenes now also discovered from HA state machine (UI-defined items in `.storage/`), not only from YAML files
+- **Monaco Editor visibility** — fixed zero-height container by setting `display: flex; flex: 1` on host custom elements
+
+## [3.0.0] - 2026-03-12
+
+### Added
+- **Monaco Editor** — replaced custom YAML editor with Microsoft Monaco Editor (VS Code engine) loaded from CDN
+- Full YAML/JSON syntax highlighting, IntelliSense, bracket matching, folding, find & replace (Ctrl+F)
+- **Built-in diff editor** — Monaco's native side-by-side diff view with change navigation, replaces custom LCS diff
+- **Jinja2 language support** — custom Monarch tokenizer for HA Jinja2 templates (`{{ }}`, `{% %}`, `{# #}`)
+- **Custom keyboard shortcuts**: Ctrl+Shift+V (validate), Ctrl+Shift+D (deploy), Ctrl+Shift+G (diff toggle), Ctrl+Enter (AI focus)
+- **Context menu actions** — SmartChain validate/deploy/diff/copy available in editor right-click menu
+- SmartChain dark theme (`smartchain-dark`) extending VS Dark with Jinja2 token colors
+- Status bar shows keyboard shortcut hints
+
+### Changed
+- `code-editor.js` and `diff-viewer.js` replaced by single `monaco-wrapper.js`
+- Editor container uses `automaticLayout: true` for responsive resizing
+- AI bar result now switches to Monaco diff mode automatically (showing old vs new)
+- **MAJOR**: Monaco loaded from CDN (~2MB cached), requires internet on first load
+
 ## [2.9.0] - 2026-03-12
 
 ### Added

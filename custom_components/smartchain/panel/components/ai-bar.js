@@ -1,17 +1,11 @@
-import { callService, extractResponse, getAgents, getAllEntities, populateSelect } from "../services.js";
+import { callService, extractResponse, getAgents, getAllEntities, populateSelect, showToast } from "../services.js";
 import "./entity-picker.js";
 
 /**
- * <sc-ai-bar> — AI assistant bar for describing changes to LLM.
+ * <sc-ai-bar> — AI prompt bar for describing changes to LLM.
  *
- * Properties:
- *   .hass
- *   .currentYaml — current editor content (to send as source_yaml)
- *   .currentType — "automation" | "script" | "scene" | "blueprint"
- *
- * Events:
- *   "result" — { yaml, isNew } — LLM returned YAML
- *   "error"  — { message }
+ * Properties: .hass, .currentYaml, .currentType
+ * Events: "result" { yaml, isNew }, "error" { message }
  */
 export class ScAiBar extends HTMLElement {
   constructor() {
@@ -57,52 +51,46 @@ export class ScAiBar extends HTMLElement {
         .ab-main {
           display: flex;
           align-items: flex-end;
-          gap: 8px;
-          padding: 8px 12px;
+          gap: 10px;
+          padding: 10px 16px;
         }
-        .ab-input-wrap { flex: 1; }
+        .ab-input-wrap {
+          flex: 1;
+          position: relative;
+        }
         .ab-input {
           width: 100%;
-          padding: 8px 10px;
+          padding: 10px 14px;
           border: 1px solid var(--divider-color, #e0e0e0);
-          border-radius: 8px;
-          font-size: 13px;
+          border-radius: 10px;
+          font-size: 14px;
           font-family: inherit;
           background: var(--primary-background-color, #fafafa);
           color: var(--primary-text-color);
           resize: none;
-          min-height: 36px;
+          min-height: 40px;
           max-height: 120px;
           box-sizing: border-box;
+          transition: border-color 0.2s, box-shadow 0.2s;
         }
-        .ab-input:focus { outline: none; border-color: var(--primary-color); }
-        .ab-actions { display: flex; gap: 4px; flex-shrink: 0; align-items: center; }
-        .ab-options {
-          display: none;
-          padding: 6px 12px 10px;
-          border-top: 1px solid var(--divider-color, #eee);
-          gap: 10px;
-        }
-        .ab-options.open { display: flex; flex-wrap: wrap; align-items: flex-end; }
-        .ab-opt-group { display: flex; flex-direction: column; gap: 2px; }
-        .ab-opt-group label { font-size: 10px; font-weight: 600; text-transform: uppercase; color: var(--secondary-text-color); }
-        .ab-opt-group select {
-          padding: 4px 8px;
-          border: 1px solid var(--divider-color);
-          border-radius: 4px;
-          font-size: 12px;
-          background: var(--primary-background-color);
+        .ab-input:focus { outline: none; border-color: var(--primary-color); box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary-color) 15%, transparent); }
+        .ab-actions { display: flex; gap: 8px; flex-shrink: 0; align-items: center; }
+        .ab-inline-select {
+          padding: 6px 10px;
+          border: 1px solid var(--divider-color, #e0e0e0);
+          border-radius: 8px;
+          font-size: 13px;
+          background: var(--primary-background-color, #fafafa);
           color: var(--primary-text-color);
+          max-width: 160px;
         }
-        .ab-entity-wrap { display: none; padding: 0 12px 8px; }
+        .ab-entity-wrap {
+          display: none;
+          padding: 0 16px 10px;
+        }
         .ab-entity-wrap.open { display: block; }
-        .ab-status {
-          padding: 4px 12px;
-          font-size: 12px;
-        }
-        .ab-status-err { color: var(--error-color, #f44336); }
-        .ab-status-ok { color: var(--success-color, #4caf50); }
       </style>
+
       <div class="ab-wrap">
         <div class="ab-main">
           <div class="ab-input-wrap">
@@ -110,30 +98,24 @@ export class ScAiBar extends HTMLElement {
               placeholder="Describe what to generate or change..."></textarea>
           </div>
           <div class="ab-actions">
-            <button class="sc-btn sc-btn-icon ab-toggle-opts" title="Options">\u2699</button>
-            <button class="sc-btn sc-btn-icon ab-toggle-entities" title="Entity picker">\uD83C\uDFAF</button>
-            <button class="sc-btn sc-btn-primary ab-apply">Apply</button>
-          </div>
-        </div>
-        <div class="ab-options">
-          <div class="ab-opt-group">
-            <label>Agent</label>
-            <select class="ab-agent"></select>
-          </div>
-          <div class="ab-opt-group">
-            <label>Type</label>
-            <select class="ab-type">
+            <select class="ab-agent ab-inline-select" title="Select agent"></select>
+            <select class="ab-type ab-inline-select" title="YAML type">
               <option value="automation">Automation</option>
               <option value="script">Script</option>
               <option value="scene">Scene</option>
               <option value="blueprint">Blueprint</option>
             </select>
+            <button class="sc-btn sc-btn-icon ab-toggle-entities" title="Entity picker">
+              <ha-icon icon="mdi:crosshairs-gps"></ha-icon>
+            </button>
+            <button class="sc-btn sc-btn-primary ab-apply">
+              <ha-icon icon="mdi:auto-fix"></ha-icon> Apply
+            </button>
           </div>
         </div>
         <div class="ab-entity-wrap">
           <sc-entity-picker></sc-entity-picker>
         </div>
-        <div class="ab-status"></div>
       </div>
     `;
 
@@ -144,7 +126,7 @@ export class ScAiBar extends HTMLElement {
       input.style.height = Math.min(input.scrollHeight, 120) + "px";
     });
 
-    // Enter to submit (Shift+Enter for newline)
+    // Enter to submit
     input.addEventListener("keydown", (e) => {
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
@@ -152,15 +134,12 @@ export class ScAiBar extends HTMLElement {
       }
     });
 
-    // Toggle options
-    this.querySelector(".ab-toggle-opts").addEventListener("click", () => {
-      this.querySelector(".ab-options").classList.toggle("open");
-    });
-
     // Toggle entity picker
     this.querySelector(".ab-toggle-entities").addEventListener("click", () => {
       this._entityPickerOpen = !this._entityPickerOpen;
       this.querySelector(".ab-entity-wrap").classList.toggle("open", this._entityPickerOpen);
+      const btn = this.querySelector(".ab-toggle-entities");
+      btn.classList.toggle("active", this._entityPickerOpen);
     });
 
     // Type sync
@@ -168,7 +147,7 @@ export class ScAiBar extends HTMLElement {
       this._currentType = e.target.value;
     });
 
-    // Apply button
+    // Apply
     this.querySelector(".ab-apply").addEventListener("click", () => this._handleApply());
   }
 
@@ -179,8 +158,10 @@ export class ScAiBar extends HTMLElement {
     this._loading = true;
     const btn = this.querySelector(".ab-apply");
     btn.disabled = true;
-    btn.innerHTML = '<span class="sc-spinner"></span>';
-    this._setStatus("");
+    const icon = btn.querySelector("ha-icon");
+    icon.icon = "mdi:loading";
+    const textNode = icon.nextSibling;
+    if (textNode) textNode.textContent = "";
 
     const agentId = this.querySelector(".ab-agent")?.value || undefined;
     const picker = this.querySelector("sc-entity-picker");
@@ -188,10 +169,7 @@ export class ScAiBar extends HTMLElement {
     const hasSource = this._currentYaml.trim().length > 0;
 
     try {
-      const svcData = {
-        description: desc,
-        type: this._currentType,
-      };
+      const svcData = { description: desc, type: this._currentType };
       if (agentId) svcData.entity_id = agentId;
       if (entityIds) svcData.entity_ids = entityIds;
       if (hasSource) svcData.source_yaml = this._currentYaml;
@@ -201,40 +179,30 @@ export class ScAiBar extends HTMLElement {
       let yaml = data.automation_yaml || "";
 
       if (data.error) {
-        this._setStatus(data.error, true);
+        showToast(data.error, "error", 5000);
         this.dispatchEvent(new CustomEvent("error", { detail: { message: data.error } }));
       } else if (yaml) {
         // Strip code fences
         if (yaml.startsWith("```")) {
-          const lines = yaml.split("\n").filter((l) => !l.startsWith("```"));
-          yaml = lines.join("\n").trim();
+          yaml = yaml.split("\n").filter((l) => !l.startsWith("```")).join("\n").trim();
         }
         this.dispatchEvent(new CustomEvent("result", { detail: { yaml, isNew: !hasSource } }));
-        this._setStatus("Done", false);
-        // Clear input
+        showToast("AI changes applied", "success");
         const input = this.querySelector(".ab-input");
         input.value = "";
         input.style.height = "auto";
       }
     } catch (err) {
-      this._setStatus("Error: " + (err.message || err), true);
+      showToast("Error: " + (err.message || err), "error", 5000);
       this.dispatchEvent(new CustomEvent("error", { detail: { message: String(err) } }));
     } finally {
       this._loading = false;
       btn.disabled = false;
-      btn.textContent = "Apply";
+      icon.icon = "mdi:auto-fix";
+      if (textNode) textNode.textContent = " Apply";
     }
   }
 
-  _setStatus(msg, isError) {
-    const el = this.querySelector(".ab-status");
-    if (!el) return;
-    if (!msg) { el.innerHTML = ""; return; }
-    el.innerHTML = `<span class="${isError ? "ab-status-err" : "ab-status-ok"}">${msg}</span>`;
-    if (!isError) setTimeout(() => { if (el) el.innerHTML = ""; }, 3000);
-  }
-
-  /** Update type selector from outside */
   setType(type) {
     this._currentType = type;
     const sel = this.querySelector(".ab-type");

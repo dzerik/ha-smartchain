@@ -1,10 +1,9 @@
-import { callService, extractResponse, getAgents, populateSelect } from "../services.js";
+import { callService, extractResponse, getAgents, populateSelect, showToast } from "../services.js";
 
 /**
- * <sc-camera-tab> — camera analysis tab.
+ * <sc-camera-tab> — Camera image analysis tab.
  *
- * Properties:
- *   .hass = hass object
+ * Properties: .hass
  */
 export class ScCameraTab extends HTMLElement {
   constructor() {
@@ -28,11 +27,9 @@ export class ScCameraTab extends HTMLElement {
   }
 
   _refresh() {
-    // Agents
     const agents = getAgents(this._hass);
     populateSelect(this.querySelector("#ct-agent"), agents, "Auto (first available)");
 
-    // Cameras
     const cameras = [];
     for (const [entityId, state] of Object.entries(this._hass.states)) {
       if (entityId.startsWith("camera.") && state.state !== "unavailable") {
@@ -47,39 +44,75 @@ export class ScCameraTab extends HTMLElement {
 
   _render() {
     this.innerHTML = `
+      <style>
+        .ct-form { display: flex; flex-direction: column; gap: 16px; }
+        .ct-result-card {
+          border: 1px solid var(--divider-color, #e0e0e0);
+          border-radius: 12px;
+          overflow: hidden;
+        }
+        .ct-result-header {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          padding: 10px 16px;
+          background: var(--primary-background-color, #fafafa);
+          border-bottom: 1px solid var(--divider-color, #e0e0e0);
+          font-size: 13px;
+          font-weight: 500;
+          color: var(--secondary-text-color);
+        }
+        .ct-result-header ha-icon { --mdc-icon-size: 18px; }
+        .ct-response {
+          margin: 0;
+          padding: 16px;
+          font-family: var(--code-font-family, monospace);
+          font-size: 13px;
+          line-height: 1.6;
+          white-space: pre-wrap;
+          background: var(--code-editor-background-color, #1e1e1e);
+          color: #d4d4d4;
+        }
+      </style>
+
       <div class="sc-card">
-        <h2>Analyze camera image</h2>
+        <h2><ha-icon icon="mdi:camera" style="--mdc-icon-size:22px;vertical-align:middle;margin-right:6px;"></ha-icon>Analyze Camera Image</h2>
         <p>Select a camera and describe what you want the AI to look for.</p>
 
-        <div class="sc-row">
-          <div>
-            <label class="sc-label">Agent</label>
-            <select id="ct-agent" class="sc-select">
-              <option value="">Auto (first available)</option>
-            </select>
+        <div class="ct-form">
+          <div class="sc-row">
+            <div>
+              <label class="sc-label">Agent</label>
+              <select id="ct-agent" class="sc-select"></select>
+            </div>
+            <div>
+              <label class="sc-label">Camera</label>
+              <select id="ct-camera" class="sc-select"></select>
+            </div>
           </div>
-          <div>
-            <label class="sc-label">Camera</label>
-            <select id="ct-camera" class="sc-select">
-              <option value="">Select camera...</option>
-            </select>
-          </div>
-        </div>
 
-        <label class="sc-label">Question / Instruction</label>
-        <textarea id="ct-prompt" class="sc-textarea"
-          placeholder="What do you see? Is there anyone at the door? Describe the scene."></textarea>
-        <div class="sc-btn-row">
-          <button id="ct-btn-analyze" class="sc-btn sc-btn-primary">Analyze</button>
+          <div>
+            <label class="sc-label">Question / Instruction</label>
+            <textarea id="ct-prompt" class="sc-textarea"
+              placeholder="What do you see? Is there anyone at the door? Describe the scene."></textarea>
+          </div>
+
+          <div>
+            <button id="ct-btn-analyze" class="sc-btn sc-btn-primary">
+              <ha-icon icon="mdi:image-search"></ha-icon> Analyze
+            </button>
+          </div>
         </div>
       </div>
 
       <div id="ct-result" class="sc-hidden">
-        <div class="sc-card">
-          <h2>Analysis Result</h2>
-          <div style="border:1px solid var(--divider-color,#e0e0e0);border-radius:8px;overflow:hidden;">
-            <div style="padding:8px 12px;background:var(--primary-background-color,#fafafa);border-bottom:1px solid var(--divider-color,#e0e0e0);font-size:12px;color:var(--secondary-text-color);">Response</div>
-            <pre id="ct-response" style="margin:0;padding:12px;font-family:var(--code-font-family,monospace);font-size:13px;line-height:1.5;white-space:pre-wrap;background:var(--code-editor-background-color,#1e1e1e);color:#d4d4d4;"></pre>
+        <div class="sc-card" style="padding:0;">
+          <div class="ct-result-card">
+            <div class="ct-result-header">
+              <ha-icon icon="mdi:robot"></ha-icon>
+              Analysis Result
+            </div>
+            <pre id="ct-response" class="ct-response"></pre>
           </div>
         </div>
       </div>
@@ -91,13 +124,18 @@ export class ScCameraTab extends HTMLElement {
   async _handleAnalyze() {
     const camera = this.querySelector("#ct-camera").value;
     const prompt = this.querySelector("#ct-prompt").value.trim();
-    if (!camera || !prompt) return;
+    if (!camera || !prompt) {
+      showToast("Please select a camera and enter a question", "warning");
+      return;
+    }
 
     const agentId = this.querySelector("#ct-agent").value || undefined;
-
     const btn = this.querySelector("#ct-btn-analyze");
     btn.disabled = true;
-    btn.innerHTML = '<span class="sc-spinner"></span>Analyzing...';
+    const icon = btn.querySelector("ha-icon");
+    icon.icon = "mdi:loading";
+    const textNode = icon.nextSibling;
+    if (textNode) textNode.textContent = " Analyzing...";
     this.querySelector("#ct-result").classList.add("sc-hidden");
 
     try {
@@ -110,13 +148,16 @@ export class ScCameraTab extends HTMLElement {
       if (response) {
         this.querySelector("#ct-response").textContent = response;
         this.querySelector("#ct-result").classList.remove("sc-hidden");
+        showToast("Analysis complete", "success");
       }
     } catch (err) {
       this.querySelector("#ct-response").textContent = "Error: " + (err.message || err);
       this.querySelector("#ct-result").classList.remove("sc-hidden");
+      showToast("Analysis failed", "error");
     } finally {
       btn.disabled = false;
-      btn.textContent = "Analyze";
+      icon.icon = "mdi:image-search";
+      if (textNode) textNode.textContent = " Analyze";
     }
   }
 }
