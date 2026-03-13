@@ -16,6 +16,7 @@ from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse
 from homeassistant.helpers.template import Template
 from homeassistant.util import dt as dt_util
+from homeassistant.util.yaml import parse_yaml
 from langchain_core.messages import HumanMessage
 
 from .client_util import get_client
@@ -216,8 +217,8 @@ def _validate_automation_config(
 
     # Parse YAML
     try:
-        config = yaml.safe_load(yaml_text)
-    except yaml.YAMLError as exc:
+        config = parse_yaml(yaml_text)
+    except Exception as exc:
         return {"valid": False, "errors": [f"Invalid YAML syntax: {exc}"], "warnings": []}
 
     if not isinstance(config, dict):
@@ -460,12 +461,21 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
     async def _deploy_automation_to_ha(yaml_text: str, gen_type: str = "automation") -> dict:
         """Deploy YAML to HA (automations.yaml, scripts.yaml, scenes.yaml, or blueprints/)."""
-        config = yaml.safe_load(yaml_text)
+        if gen_type == "blueprint":
+            try:
+                config = parse_yaml(yaml_text)
+            except Exception as exc:
+                return {"error": f"Invalid YAML: {exc}"}
+            if not isinstance(config, dict):
+                return {"error": "Generated YAML is not a valid object."}
+            return await _deploy_blueprint(config, yaml_text)
+
+        try:
+            config = yaml.safe_load(yaml_text)
+        except yaml.YAMLError as exc:
+            return {"error": f"Invalid YAML: {exc}"}
         if not isinstance(config, dict):
             return {"error": "Generated YAML is not a valid object."}
-
-        if gen_type == "blueprint":
-            return await _deploy_blueprint(config, yaml_text)
 
         config["id"] = uuid.uuid4().hex
 
@@ -490,7 +500,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
                     content = yaml.safe_load(f)
                     if isinstance(content, list):
                         existing = content
-            except FileNotFoundError:
+            except (FileNotFoundError, yaml.YAMLError):
                 pass
             existing.append(config)
             with open(target_file, "w", encoding="utf-8") as f:
