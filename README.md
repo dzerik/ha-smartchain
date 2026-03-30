@@ -22,8 +22,6 @@ Supported providers:
 - **DeepSeek** — cheapest cloud provider (V3, R1)
 - **Anthropic** — Claude (Sonnet, Haiku, Opus)
 
-![SmartChain AI Panel](img.png)
-
 ### Key Features
 
 **Conversation**
