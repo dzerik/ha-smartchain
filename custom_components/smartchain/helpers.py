@@ -51,6 +51,7 @@ def _find_smartchain_client(hass: HomeAssistant, agent_id: str | None):
     no specific agent_id is provided or the lookup misses.
     """
     from .const import DOMAIN  # noqa: PLC0415
+
     domain_data = hass.data.get(DOMAIN) or {}
     finder = domain_data.get("find_client")
     if finder is None:
@@ -59,7 +60,7 @@ def _find_smartchain_client(hass: HomeAssistant, agent_id: str | None):
     return finder(hass, agent_id)
 
 
-async def async_generate_structured(
+async def async_generate_structured(  # noqa: UP047
     hass: HomeAssistant,
     *,
     schema: type[T],
@@ -115,7 +116,8 @@ async def async_generate_structured(
         # a typed answer when possible.
         LOGGER.debug(
             "Structured invoke failed on %s: %s — falling back to text",
-            type(client).__name__, exc,
+            type(client).__name__,
+            exc,
         )
         return await _fallback_text_to_schema(client, schema, prompt)
 
@@ -128,7 +130,7 @@ async def async_generate_structured(
     return schema.model_validate(_safe_extract_json(str(result)))
 
 
-async def _fallback_text_to_schema(client, schema: type[T], prompt: str) -> T:
+async def _fallback_text_to_schema(client, schema: type[T], prompt: str) -> T:  # noqa: UP047
     """Last-resort path: plain text invocation + manual JSON extraction.
 
     Used when the underlying chat model can't run native structured output.
@@ -159,6 +161,7 @@ def _safe_extract_json(text: str) -> dict:
         return json.loads(cleaned)
     except json.JSONDecodeError:
         import re  # noqa: PLC0415
+
         match = re.search(r"\{[\s\S]*\}", cleaned)
         if match:
             return json.loads(match.group(0))

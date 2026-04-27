@@ -362,23 +362,17 @@ def mock_openai_options_entry(hass: HomeAssistant):
 
 
 async def _options_flow_select_settings(hass, entry_id):
-    """Helper: init options flow and select 'settings' from menu."""
+    """Helper: init options flow — goes directly to the settings form."""
     result = await hass.config_entries.options.async_init(entry_id)
-    assert result["type"] is FlowResultType.MENU
-    assert result["step_id"] == "init"
-    result = await hass.config_entries.options.async_configure(
-        result["flow_id"],
-        {"next_step_id": "settings"},
-    )
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "settings"
     return result
 
 
-async def test_options_flow_shows_menu(
+async def test_options_flow_shows_settings(
     hass: HomeAssistant, mock_gigachat_options_entry, mock_llm_client
 ) -> None:
-    """Test that options flow init step shows menu."""
+    """Test that options flow init step shows the settings form directly."""
     with patch(
         "custom_components.smartchain.get_client",
         new_callable=AsyncMock,
@@ -388,10 +382,8 @@ async def test_options_flow_shows_menu(
         await hass.async_block_till_done()
 
     result = await hass.config_entries.options.async_init(mock_gigachat_options_entry.entry_id)
-    assert result["type"] is FlowResultType.MENU
-    assert result["step_id"] == "init"
-    assert "settings" in result["menu_options"]
-    assert "generate_automation" in result["menu_options"]
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "settings"
 
 
 async def test_options_flow_submit_with_model(
