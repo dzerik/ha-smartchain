@@ -62,26 +62,9 @@
   },
   "options": {
     "error": {
-      "model_required": "Either Model or Custom Model required",
-      "description_required": "Please enter a description",
-      "no_agent": "No SmartChain agent available. Configure an agent first.",
-      "service_not_ready": "SmartChain services not ready. Reload the integration.",
-      "generation_failed": "Failed to generate automation. Try again or rephrase.",
-      "deploy_failed": "Failed to deploy automation. Check the YAML and try again.",
-      "empty_yaml": "Automation YAML cannot be empty"
-    },
-    "abort": {
-      "automation_deployed": "Automation has been created and deployed to Home Assistant!",
-      "automation_not_deployed": "Automation was generated but not deployed. You can copy the YAML manually."
+      "model_required": "Either Model or Custom Model required"
     },
     "step": {
-      "init": {
-        "title": "SmartChain",
-        "menu_options": {
-          "settings": "Model settings",
-          "generate_automation": "Generate automation with AI"
-        }
-      },
       "settings": {
         "title": "Model configuration",
         "data": {
@@ -96,21 +79,6 @@
           "process_builtin_sentences": "Process HA Builtin Sentences",
           "chat_history": "Chat History",
           "enable_history_tool": "State History Tool (LLM can query past device states)"
-        }
-      },
-      "generate_automation": {
-        "title": "Generate Automation with AI",
-        "description": "Describe the automation you want in natural language. SmartChain will generate the YAML for you.",
-        "data": {
-          "description": "Automation description"
-        }
-      },
-      "preview_automation": {
-        "title": "Preview & Deploy Automation",
-        "description": "Review the generated automation YAML. You can edit it before deploying.",
-        "data": {
-          "automation_yaml": "Automation YAML",
-          "deploy": "Deploy to Home Assistant"
         }
       }
     }
