@@ -20,6 +20,9 @@ from homeassistant.util.yaml import parse_yaml
 from langchain_core.messages import HumanMessage
 
 from .client_util import get_client
+from .helpers import async_generate_structured  # re-exported for downstream integrations
+
+__all__ = ["async_generate_structured"]
 from .const import (
     CONF_CHAT_MODEL,
     CONF_CHAT_MODEL_USER,
