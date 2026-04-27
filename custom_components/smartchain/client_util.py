@@ -97,8 +97,15 @@ async def get_client(
         if not common_args.get("model"):
             common_args.pop("model", None)
         common_args["credentials"] = entry.data[CONF_API_KEY]
-        common_args["verify_ssl_certs"] = entry.options.get(CONF_VERIFY_SSL, DEFAULT_VERIFY_SSL)
-        common_args["profanity_check"] = entry.options.get(CONF_PROFANITY, DEFAULT_PROFANITY)
+        # Prefer per-subentry value (passed via common_args); fall back to legacy entry.options.
+        verify_ssl = common_args.pop(
+            CONF_VERIFY_SSL, entry.options.get(CONF_VERIFY_SSL, DEFAULT_VERIFY_SSL)
+        )
+        profanity = common_args.pop(
+            CONF_PROFANITY, entry.options.get(CONF_PROFANITY, DEFAULT_PROFANITY)
+        )
+        common_args["verify_ssl_certs"] = verify_ssl
+        common_args["profanity_check"] = profanity
         common_args["auto_upload_images"] = True
         client = GigaChat(**common_args)
     elif engine == ID_YANDEX_GPT:

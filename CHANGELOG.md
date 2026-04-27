@@ -5,6 +5,46 @@ All notable changes to this project are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 project follows [Semantic Versioning](https://semver.org/).
 
+## [4.0.1] - 2026-04-27
+
+### Fixed
+- **GigaChat subentry options silently ignored** — `verify_ssl` and `profanity` toggles set in a subentry's form are now actually applied to the GigaChat client. Previously these were always read from the parent entry's options, so per-subentry values were lost.
+- **Event-loop blocking I/O on first message** — `load_skills()` (sync YAML reads from disk) is now awaited via the executor inside the conversation entity, preventing the loop from stalling on the first reply.
+- **Event-loop blocking I/O on multimodal messages** — when a chat log carries image attachments, `_chatlog_to_langchain()` (which reads files and may run TurboJPEG) is now offloaded to the executor. Plain text conversations stay on the event loop with no extra hop.
+- **`_safe_extract_json` mangling responses** — fence-stripping now drops only the opening ` ``` `/` ```json ` fence and a matching trailing ` ``` `, instead of removing every backtick at either end of the response.
+
+### Refactored
+- **Config-flow model validation** — three near-identical model-resolution blocks (`_validate_and_create`, `_validate_and_update`, `OptionsFlow.async_step_settings`) now share a single `_normalize_model_input()` helper.
+- **`common_config_option_schema` alias removed** — the dead backwards-compat shim referenced no live consumers after the v4.0.0 cleanup.
+
+## [4.0.0] - 2026-04-27
+
+### ⚠ BREAKING CHANGES
+
+The LLM-driven YAML generation feature has been removed. SmartChain is now focused on conversation, AI Task, and camera analysis only.
+
+### Removed
+- **Services** — `smartchain.generate_automation`, `smartchain.deploy_automation`, `smartchain.validate_automation`, `smartchain.list_yaml`, `smartchain.get_yaml`. Existing automations that call these will fail at runtime — remove or replace those calls before upgrading.
+- **Options-flow steps** — `generate_automation` and `preview_automation`. The options menu is collapsed: opening the integration's options now goes straight to the model-settings form.
+- **Panel components** — the YAML editor (sidebar explorer, code editor, AI bar, toolbar, entity picker). The sidebar panel is now camera-analysis only.
+- **Const prompts** — `GENERATE_AUTOMATION_PROMPT`, `GENERATE_SCRIPT_PROMPT`, `GENERATE_SCENE_PROMPT`, `GENERATE_BLUEPRINT_PROMPT`, `GENERATE_PROMPTS`, `IMPROVE_YAML_PROMPT`.
+- **`hass.data[DOMAIN]` keys** — `generate_yaml` and `deploy_automation` are no longer registered.
+- **Translation keys** (`options.error.{description_required, no_agent, service_not_ready, generation_failed, deploy_failed, empty_yaml}`, `options.abort.{automation_deployed, automation_not_deployed}`, `options.step.{init, generate_automation, preview_automation}`).
+
+### Kept
+- Conversation entity, AI Task entity, all 6 LLM providers (GigaChat, YandexGPT, OpenAI, Ollama, DeepSeek, Anthropic).
+- `smartchain.ask` and `smartchain.analyze_image` services.
+- `helpers.async_generate_structured()` — generic structured-output helper for downstream integrations (not tied to YAML generation).
+- Sidebar panel — pruned to the camera analysis tab only.
+
+### Migration
+1. Remove any HA automations or scripts that call the deleted services.
+2. If you were generating automations through the SmartChain panel, generate them via the LLM directly (`smartchain.ask`) and paste into HA's native automation editor.
+3. The integration's options form will appear as a single screen instead of a menu — no action required.
+
+### Tests
+- 118 passing (was 128). The 10 dropped tests covered only the removed services.
+
 ## [3.0.5] - 2026-03-12
 
 ### Fixed

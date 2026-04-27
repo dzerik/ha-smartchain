@@ -115,6 +115,23 @@ DEFAULT_OPTIONS = MappingProxyType(
 )
 
 
+def _normalize_model_input(user_input: dict[str, Any]) -> str | None:
+    """Validate that a model is set and strip an empty LLM-API selection.
+
+    Mutates ``user_input`` (drops empty CONF_LLM_HASS_API). Returns a translation
+    key for the error to show, or ``None`` when the input is valid.
+    """
+    model = user_input.get(CONF_CHAT_MODEL_USER)
+    if not model or not model.strip():
+        model = user_input.get(CONF_CHAT_MODEL)
+    if not model or not model.strip():
+        return "model_required"
+
+    if not user_input.get(CONF_LLM_HASS_API):
+        user_input.pop(CONF_LLM_HASS_API, None)
+    return None
+
+
 class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for SmartChain."""
 
@@ -237,18 +254,9 @@ class ConversationSubentryFlow(ConfigSubentryFlow):
         self, user_input: dict[str, Any], unique_id: str, schema: vol.Schema
     ) -> SubentryFlowResult:
         """Validate user input and create subentry."""
-        model = user_input.get(CONF_CHAT_MODEL_USER)
-        if not model or not model.strip():
-            model = user_input.get(CONF_CHAT_MODEL)
-        if not model or not model.strip():
-            return self.async_show_form(
-                step_id="user",
-                data_schema=schema,
-                errors={"base": "model_required"},
-            )
-
-        if not user_input.get(CONF_LLM_HASS_API):
-            user_input.pop(CONF_LLM_HASS_API, None)
+        error = _normalize_model_input(user_input)
+        if error:
+            return self.async_show_form(step_id="user", data_schema=schema, errors={"base": error})
 
         title = user_input.get(CONF_CHAT_MODEL_USER) or user_input.get(CONF_CHAT_MODEL) or "Agent"
         return self.async_create_entry(title=title, data=user_input)
@@ -262,18 +270,11 @@ class ConversationSubentryFlow(ConfigSubentryFlow):
         schema: vol.Schema,
     ) -> SubentryFlowResult:
         """Validate user input and update subentry."""
-        model = user_input.get(CONF_CHAT_MODEL_USER)
-        if not model or not model.strip():
-            model = user_input.get(CONF_CHAT_MODEL)
-        if not model or not model.strip():
+        error = _normalize_model_input(user_input)
+        if error:
             return self.async_show_form(
-                step_id="reconfigure",
-                data_schema=schema,
-                errors={"base": "model_required"},
+                step_id="reconfigure", data_schema=schema, errors={"base": error}
             )
-
-        if not user_input.get(CONF_LLM_HASS_API):
-            user_input.pop(CONF_LLM_HASS_API, None)
 
         title = user_input.get(CONF_CHAT_MODEL_USER) or user_input.get(CONF_CHAT_MODEL) or "Agent"
         return self.async_update_and_abort(
@@ -300,20 +301,11 @@ class OptionsFlow(config_entries.OptionsFlow):
         models = await async_fetch_models(self.hass, engine, self.config_entry.data)
         schema = _subentry_schema(self.hass, unique_id, self.config_entry.options, models=models)
         if user_input is not None:
-            model = user_input.get(CONF_CHAT_MODEL_USER)
-            if not model or not model.strip():
-                model = user_input.get(CONF_CHAT_MODEL)
-            if not model or not model.strip():
+            error = _normalize_model_input(user_input)
+            if error:
                 return self.async_show_form(
-                    step_id="settings",
-                    data_schema=schema,
-                    errors={"base": "model_required"},
+                    step_id="settings", data_schema=schema, errors={"base": error}
                 )
-
-            # Remove empty LLM API selection
-            if not user_input.get(CONF_LLM_HASS_API):
-                user_input.pop(CONF_LLM_HASS_API, None)
-
             return self.async_create_entry(title=unique_id, data=user_input)
 
         return self.async_show_form(
@@ -426,7 +418,3 @@ def _subentry_schema(
             }
         )
     return schema
-
-
-# Keep backward-compatible alias
-common_config_option_schema = _subentry_schema

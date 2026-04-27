@@ -154,9 +154,12 @@ def _safe_extract_json(text: str) -> dict:
     """Strip markdown fences and pull the first JSON object from text."""
     cleaned = (text or "").strip()
     if cleaned.startswith("```"):
-        cleaned = cleaned.strip("`")
+        # Drop opening fence (``` or ```json) and matching trailing fence only.
+        cleaned = cleaned.removeprefix("```").lstrip()
         if cleaned.lower().startswith("json"):
             cleaned = cleaned[4:].lstrip()
+        if cleaned.endswith("```"):
+            cleaned = cleaned[:-3].rstrip()
     try:
         return json.loads(cleaned)
     except json.JSONDecodeError:
