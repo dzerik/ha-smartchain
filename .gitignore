@@ -1,14 +1,28 @@
-__pycache__
-.idea
-/shelf/
-/workspace.xml
-/httpRequests/
-/dataSources/
-/dataSources.local.xml
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+.env
+
+# IDE
+.idea/
 *.iws
 *.iml
 *.ipr
+
+# Project internals (local only)
+CLAUDE.md
+TODO.md
+docs/COMPETITIVE_ANALYSIS.md
+docs/DOCUMENTATION.md
+docs/ROADMAP.md
+docs/USER_GUIDE.md
+
+# Tools
 /.mcp.json
 /.serena/
-.pytest_cache
+.pytest_cache/
 /secrets/
