@@ -11,7 +11,7 @@
 
 ## Overview
 
-SmartChain is a Home Assistant custom integration that provides an intelligent voice/conversation assistant powered by multiple LLM providers through LangChain. Beyond conversation, it includes a built-in AI panel for generating, editing, and deploying automations directly from natural language.
+SmartChain is a Home Assistant custom integration that provides an intelligent voice/conversation assistant powered by multiple LLM providers through LangChain. It also ships a sidebar panel for camera image analysis.
 
 Supported providers:
 
@@ -41,19 +41,14 @@ Supported providers:
 **Services**
 - **`smartchain.ask`** — send a message to LLM from automations (Telegram, Slack, etc.)
 - **`smartchain.analyze_image`** — camera snapshot → multimodal LLM → response
-- **`smartchain.generate_automation`** — natural language → HA automation/script/scene/blueprint YAML
-- **`smartchain.deploy_automation`** — deploy generated YAML to HA configuration files
-- **`smartchain.list_yaml`** — list existing automations, scripts, scenes, or blueprints
-- **`smartchain.get_yaml`** — retrieve the YAML source of any existing HA item
 - **AI Task entity** — structured data generation for automations
 
 **SmartChain AI Panel**
-- Sidebar panel with Generate and Analyze tabs
-- Generate automations, scripts, scenes, and blueprints from text descriptions
-- Edit and improve existing YAML with AI assistance
-- Entity picker and agent selector built in
-- YAML validation (structure, entity IDs, services) before deploy
-- Browse and load existing HA items into the editor
+- Sidebar panel with a camera analysis tab
+- Pick any HA camera, ask the LLM a natural-language question about the snapshot
+- Result is mirrored to the `smartchain_image_analyzed` event and `sensor.smartchain_last_analysis`
+
+> **Note:** The YAML automation/script/scene/blueprint generation feature was removed in v4.0.0. See [CHANGELOG.md](CHANGELOG.md) for migration details.
 
 ## Installation
 
@@ -92,7 +87,7 @@ Supported providers:
 **Settings > Voice Assistants > Add** — select your SmartChain entity as the conversation agent.
 
 ### 5. Open SmartChain AI Panel
-Click **SmartChain AI** in the Home Assistant sidebar to access the automation generation panel.
+Click **SmartChain AI** in the Home Assistant sidebar to open the camera analysis panel.
 
 ![SmartChain AI Panel - Analyze Camera](img_1.png)
 
@@ -108,12 +103,9 @@ Topics:
 - MCP servers
 - Vision (camera image analysis)
 - Skill system (YAML)
-- SmartChain AI Panel (automation generation, camera analysis)
+- SmartChain AI Panel (camera analysis)
 - `smartchain.ask` service (Telegram, Slack)
 - `smartchain.analyze_image` service
-- `smartchain.generate_automation` service
-- Deploy and validate generated YAML
-- Edit and improve existing automations
 - AI Task for automations
 - System prompt customization
 - Parameter and model reference

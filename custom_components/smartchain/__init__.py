@@ -22,7 +22,9 @@ from .const import (
     CONF_CHAT_MODEL_USER,
     CONF_ENGINE,
     CONF_MAX_TOKENS,
+    CONF_PROFANITY,
     CONF_TEMPERATURE,
+    CONF_VERIFY_SSL,
     DEFAULT_TEMPERATURE,
     DOMAIN,
     ID_GIGACHAT,
@@ -47,7 +49,7 @@ async def update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
 
 
 def _resolve_client_args(options: dict) -> dict:
-    """Build common LLM client args from options dict."""
+    """Build common LLM client args from options/subentry data dict."""
     model = options.get(CONF_CHAT_MODEL_USER)
     if not model or not model.strip():
         model = options.get(CONF_CHAT_MODEL)
@@ -64,6 +66,11 @@ def _resolve_client_args(options: dict) -> dict:
         common_args["temperature"] = temperature
     if max_tokens is not None:
         common_args["max_tokens"] = max_tokens
+    # Pass through GigaChat-specific toggles so subentry values aren't silently lost.
+    if CONF_VERIFY_SSL in options:
+        common_args[CONF_VERIFY_SSL] = options[CONF_VERIFY_SSL]
+    if CONF_PROFANITY in options:
+        common_args[CONF_PROFANITY] = options[CONF_PROFANITY]
     return common_args
 
 

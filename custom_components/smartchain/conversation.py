@@ -180,10 +180,12 @@ class SmartChainConversationEntity(ConversationEntity):
         self._prompt_cache_time = now
         return rendered
 
-    def _get_skills_prompt(self) -> str:
-        """Return cached skills prompt text."""
+    async def _async_get_skills_prompt(self) -> str:
+        """Return cached skills prompt text. First call reads YAML files in executor."""
         if self._skills_prompt is None:
-            skills = load_skills(self.hass.config.config_dir)
+            skills = await self.hass.async_add_executor_job(
+                load_skills, self.hass.config.config_dir
+            )
             self._skills_prompt = skills_to_prompt(skills)
         return self._skills_prompt
 
@@ -218,7 +220,7 @@ class SmartChainConversationEntity(ConversationEntity):
             chat_log.content[0] = SystemContent(content=prompt)
 
         # Append skills prompt to system message
-        skills_text = self._get_skills_prompt()
+        skills_text = await self._async_get_skills_prompt()
         if skills_text and isinstance(chat_log.content[0], SystemContent):
             chat_log.content[0] = SystemContent(content=chat_log.content[0].content + skills_text)
 
@@ -259,7 +261,14 @@ class SmartChainConversationEntity(ConversationEntity):
         for _iteration in range(MAX_TOOL_ITERATIONS):
             chat_history_enabled = options.get(CONF_CHAT_HISTORY, DEFAULT_CHAT_HISTORY)
             if chat_history_enabled:
-                messages = _chatlog_to_langchain(chat_log)
+                # _chatlog_to_langchain may read attachment files and run TurboJPEG —
+                # both blocking. Offload to executor when attachments are present.
+                if any(isinstance(c, UserContent) and c.attachments for c in chat_log.content):
+                    messages = await self.hass.async_add_executor_job(
+                        _chatlog_to_langchain, chat_log
+                    )
+                else:
+                    messages = _chatlog_to_langchain(chat_log)
             else:
                 messages = [
                     SystemMessage(content=chat_log.content[0].content),
