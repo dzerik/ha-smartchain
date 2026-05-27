@@ -5,6 +5,7 @@ import json
 import logging
 from typing import Any
 
+import aiohttp
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import template as template_helper
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
@@ -55,3 +56,6 @@ async def execute_rest(
     except TimeoutError:
         LOGGER.warning("REST %s %s timed out after %ss", action.method, url, action.timeout)
         return "Error: request timed out"
+    except aiohttp.ClientError:
+        LOGGER.exception("REST %s %s failed", action.method, url)
+        return "Error: network request failed"

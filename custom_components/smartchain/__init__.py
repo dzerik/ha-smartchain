@@ -305,12 +305,13 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         schema=SERVICE_ANALYZE_IMAGE_SCHEMA,
         supports_response=SupportsResponse.ONLY,
     )
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_RELOAD_TOOLS,
-        _handle_reload_tools,
-        schema=vol.Schema({}),
-    )
+    if not hass.services.has_service(DOMAIN, SERVICE_RELOAD_TOOLS):
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_RELOAD_TOOLS,
+            _handle_reload_tools,
+            schema=vol.Schema({}),
+        )
     return True
 
 

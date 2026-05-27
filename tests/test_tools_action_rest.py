@@ -93,3 +93,21 @@ async def test_rest_timeout_returns_error_string(hass: HomeAssistant) -> None:
         result = await execute_rest(hass, action, {})
 
     assert result == "Error: request timed out"
+
+
+async def test_rest_network_error_returns_error_string(hass: HomeAssistant) -> None:
+    """An aiohttp.ClientError is reported as a clean LLM-readable string."""
+    import aiohttp
+
+    action = RESTAction(method="GET", url="https://example.com")
+
+    session = MagicMock()
+    session.request = MagicMock(side_effect=aiohttp.ClientError("connection refused"))
+
+    with patch(
+        "custom_components.smartchain.tools.actions.rest_action.async_get_clientsession",
+        return_value=session,
+    ):
+        result = await execute_rest(hass, action, {})
+
+    assert result == "Error: network request failed"
