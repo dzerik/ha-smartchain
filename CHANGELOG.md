@@ -5,6 +5,18 @@ All notable changes to this project are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 project follows [Semantic Versioning](https://semver.org/).
 
+## [4.1.0] - 2026-05-27
+
+### Added
+- **Custom tools from YAML** — declarative LLM-callable tools in `/config/smartchain/tools.yaml`. Supports four action types: `service` (HA service-call with Jinja-rendered target/data), `template` (Jinja render), `rest` (HTTP request via the HA aiohttp client session), `script` (HA script call with rendered variables). Each tool has a name (`^[a-z_][a-z0-9_]*$`), description and JSON Schema parameters block; arg validation happens via `jsonschema` before execution. See `docs/superpowers/specs/2026-05-27-custom-tools-yaml-design.md` for the full design.
+- **`allowed_tools` per subentry** — each conversation agent can be limited to a subset of registered tools through a multi-select in the subentry options form. Semantics: missing/`None` => all available tools, `[]` => no custom tools.
+- **`smartchain.reload_tools` service** — re-reads `tools.yaml` atomically; fires `smartchain_tools_reloaded` event with the new tool count on success. On YAML or validation failure, raises `HomeAssistantError` and leaves the previous registry intact.
+- **Built-in tool name protection** — YAML tools cannot shadow `get_state_history` (history tool) or `ask_agent` (delegate tool); duplicates within the YAML are dropped with a logged error rather than crashing setup.
+- **`jsonschema` dependency** added for argument validation.
+
+### Tests
+- 166 passing (was 123). New: `test_tools_model.py`, `test_tools_schema.py`, `test_tools_loader.py`, `test_tools_action_template.py`, `test_tools_action_service.py`, `test_tools_action_rest.py`, `test_tools_action_script.py`, `test_tools_dispatcher.py`, `test_tools_subentry_filter.py`, `test_tools_reload.py`, `test_tools_integration.py`.
+
 ## [4.0.2] - 2026-05-27
 
 ### Security
