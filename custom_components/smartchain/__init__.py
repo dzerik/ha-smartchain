@@ -10,6 +10,7 @@ from homeassistant.components.frontend import async_register_built_in_panel
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.util import dt as dt_util
@@ -17,6 +18,8 @@ from langchain_core.messages import HumanMessage
 
 from .client_util import get_client
 from .helpers import async_generate_structured  # re-exported for downstream integrations
+from .tools import ToolRegistry
+from .tools.loader import LoaderError, load_tools_file
 
 __all__ = ["async_generate_structured"]
 from .const import (
@@ -29,9 +32,12 @@ from .const import (
     CONF_VERIFY_SSL,
     DEFAULT_TEMPERATURE,
     DOMAIN,
+    EVENT_TOOLS_RELOADED,
     ID_GIGACHAT,
+    SERVICE_RELOAD_TOOLS,
     SIGNAL_NEW_ANALYSIS,
     SUBENTRY_TYPE_CONVERSATION,
+    TOOLS_YAML_PATH,
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -138,6 +144,20 @@ def _find_client(hass: HomeAssistant, entity_id: str | None = None):
     return None
 
 
+def _tools_yaml_path(hass: HomeAssistant) -> Path:
+    """Resolve the absolute path to tools.yaml under the HA config directory."""
+    return Path(hass.config.config_dir) / TOOLS_YAML_PATH
+
+
+async def _reload_registry(hass: HomeAssistant) -> int:
+    """Re-read tools.yaml into the registry. Raises LoaderError on failure."""
+    path = _tools_yaml_path(hass)
+    tools = await hass.async_add_executor_job(load_tools_file, path)
+    registry: ToolRegistry = hass.data[DOMAIN]["tools"]
+    registry.replace_all(tools)
+    return len(tools)
+
+
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     """Set up SmartChain domain (register services)."""
 
@@ -220,6 +240,23 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
         return {"response": response_text}
 
+    # Initialise tools registry from /config/smartchain/tools.yaml (optional).
+    hass.data.setdefault(DOMAIN, {})
+    if "tools" not in hass.data[DOMAIN]:
+        hass.data[DOMAIN]["tools"] = ToolRegistry()
+    try:
+        initial = await _reload_registry(hass)
+        LOGGER.info("SmartChain loaded %d custom tools", initial)
+    except LoaderError as err:
+        LOGGER.error("SmartChain tools.yaml load failed at startup: %s", err)
+
+    async def _handle_reload_tools(call: ServiceCall) -> None:
+        try:
+            count = await _reload_registry(hass)
+        except LoaderError as err:
+            raise HomeAssistantError(str(err)) from err
+        hass.bus.async_fire(EVENT_TOOLS_RELOADED, {"count": count})
+
     # Register sidebar panel (graceful — skip if frontend not available).
     # Failures here aren't fatal but they do mean the user has no UI — bump from
     # DEBUG to WARNING so the cause is actually visible in logs.
@@ -252,7 +289,6 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     except Exception as err:
         LOGGER.warning("Could not register SmartChain panel: %s", err)
 
-    hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN]["find_client"] = _find_client
 
     hass.services.async_register(
@@ -268,6 +304,12 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         _handle_analyze_image,
         schema=SERVICE_ANALYZE_IMAGE_SCHEMA,
         supports_response=SupportsResponse.ONLY,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_RELOAD_TOOLS,
+        _handle_reload_tools,
+        schema=vol.Schema({}),
     )
     return True
 
