@@ -1,5 +1,6 @@
 """Pluggable EmbeddingsProvider factory for the memory subsystem."""
 
+import asyncio
 import logging
 from typing import Any, Protocol
 
@@ -8,6 +9,7 @@ from langchain_gigachat import GigaChatEmbeddings
 from langchain_ollama import OllamaEmbeddings
 from langchain_openai import OpenAIEmbeddings
 
+from ...const import MEMORY_EMBED_TIMEOUT_SECONDS
 from .config import MemoryConfig
 
 LOGGER = logging.getLogger(__name__)
@@ -30,10 +32,12 @@ class _ExecutorBacked:
         self._inner = inner
 
     async def embed_query(self, text: str) -> list[float]:
-        return await self._hass.async_add_executor_job(self._inner.embed_query, text)
+        async with asyncio.timeout(MEMORY_EMBED_TIMEOUT_SECONDS):
+            return await self._hass.async_add_executor_job(self._inner.embed_query, text)
 
     async def embed_documents(self, texts: list[str]) -> list[list[float]]:
-        return await self._hass.async_add_executor_job(self._inner.embed_documents, texts)
+        async with asyncio.timeout(MEMORY_EMBED_TIMEOUT_SECONDS):
+            return await self._hass.async_add_executor_job(self._inner.embed_documents, texts)
 
 
 def create_embeddings(hass: HomeAssistant, config: MemoryConfig) -> EmbeddingsProvider:

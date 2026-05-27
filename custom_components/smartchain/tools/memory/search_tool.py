@@ -48,15 +48,23 @@ async def execute_memory_search(
     query: str,
     top_k: int = 5,
     kind: str = "any",
+    subentry_id: str | None = None,
 ) -> str:
     domain_data = hass.data.get(DOMAIN) or {}
     store: MemoryStore | None = domain_data.get("memory")
     if store is None or not getattr(store, "is_available", False):
         return "Memory is not configured for this installation."
 
-    where: dict[str, Any] | None = None
+    conditions: list[dict] = []
     if kind != "any":
-        where = {"kind": kind}
+        conditions.append({"kind": kind})
+    if subentry_id:
+        conditions.append({"subentry_id": subentry_id})
+    where: dict[str, Any] | None = None
+    if len(conditions) == 1:
+        where = conditions[0]
+    elif len(conditions) > 1:
+        where = {"$and": conditions}
 
     try:
         snippets = await store.search(query, top_k=top_k, where=where)

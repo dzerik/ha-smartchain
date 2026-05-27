@@ -1,5 +1,7 @@
 """Tests for the EmbeddingsProvider factory."""
 
+import asyncio
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -59,3 +61,27 @@ async def test_embed_query_offloads_to_executor(hass: HomeAssistant) -> None:
         vec = await provider.embed_query("hello")
     assert vec == [0.1, 0.2, 0.3]
     fake_inner.embed_query.assert_called_once_with("hello")
+
+
+async def test_embed_query_raises_timeout_when_slow(hass: HomeAssistant) -> None:
+    """embed_query raises TimeoutError when the embedding call exceeds the timeout."""
+    import custom_components.smartchain.tools.memory.embeddings as emb_mod
+
+    cfg = MemoryConfig(provider="ollama", model="nomic-embed-text")
+
+    def _slow_embed(text: str) -> list[float]:
+        time.sleep(10)  # would be way too long
+        return [0.0]
+
+    fake_inner = MagicMock()
+    fake_inner.embed_query = _slow_embed
+
+    with patch(
+        "custom_components.smartchain.tools.memory.embeddings.OllamaEmbeddings",
+        return_value=fake_inner,
+    ):
+        provider = create_embeddings(hass, cfg)
+        # Patch the timeout to a tiny value so the test runs fast
+        with patch.object(emb_mod, "MEMORY_EMBED_TIMEOUT_SECONDS", 0.001):
+            with pytest.raises((TimeoutError, asyncio.TimeoutError)):
+                await provider.embed_query("slow")

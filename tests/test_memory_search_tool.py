@@ -78,3 +78,34 @@ async def test_execute_empty_results_returns_no_memories(hass: HomeAssistant) ->
     hass.data.setdefault(DOMAIN, {})["memory"] = store
     result = await execute_memory_search(hass, query="x")
     assert "no" in result.lower() and "memor" in result.lower()
+
+
+async def test_execute_filters_by_subentry_id(hass: HomeAssistant) -> None:
+    """When subentry_id is provided, the where clause should include it."""
+    store = MagicMock()
+    store.is_available = True
+    store.search = AsyncMock(return_value=[])
+    hass.data.setdefault(DOMAIN, {})["memory"] = store
+
+    await execute_memory_search(hass, query="x", subentry_id="sub_abc")
+    args, kwargs = store.search.call_args
+    where = kwargs.get("where") if "where" in kwargs else args[2] if len(args) > 2 else None
+    assert where is not None
+    assert where.get("subentry_id") == "sub_abc"
+
+
+async def test_execute_wraps_kind_and_subentry_in_and(hass: HomeAssistant) -> None:
+    """When both kind and subentry_id are set, filter should use $and syntax."""
+    store = MagicMock()
+    store.is_available = True
+    store.search = AsyncMock(return_value=[])
+    hass.data.setdefault(DOMAIN, {})["memory"] = store
+
+    await execute_memory_search(hass, query="x", kind="conversation", subentry_id="sub_xyz")
+    args, kwargs = store.search.call_args
+    where = kwargs.get("where") if "where" in kwargs else args[2] if len(args) > 2 else None
+    assert where is not None
+    assert "$and" in where
+    conditions = where["$and"]
+    assert {"kind": "conversation"} in conditions
+    assert {"subentry_id": "sub_xyz"} in conditions

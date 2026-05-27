@@ -148,6 +148,8 @@ class MemoryLogbookPoller:
                 continue
             if when.tzinfo is None:
                 when = when.replace(tzinfo=UTC)
+            else:
+                when = when.astimezone(UTC)
             ts_iso = when.isoformat()
             text = f"{ts_iso} • {entry['name']} ({entry['entity_id']}): {entry['message']}"
             doc_id = _logbook_doc_id(ts_iso, entry["entity_id"], entry["message"])

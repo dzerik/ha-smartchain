@@ -205,21 +205,25 @@ async def _reload_registry(hass: HomeAssistant) -> int:
         await manager.start()
 
     # --- Memory subsystem (re)build ---
-    old_retention: RetentionTask | None = hass.data[DOMAIN].get("memory_retention")
-    old_poller: MemoryLogbookPoller | None = hass.data[DOMAIN].get("memory_logbook")
-    if old_retention is not None:
-        await old_retention.stop()
-    if old_poller is not None:
-        await old_poller.stop()
-
-    store, retention, poller = await _build_memory(hass, result.memory_config)
-    hass.data[DOMAIN]["memory"] = store
-    hass.data[DOMAIN]["memory_retention"] = retention
-    hass.data[DOMAIN]["memory_logbook"] = poller
-    if retention is not None:
-        retention.start()
-    if poller is not None:
-        poller.start()
+    try:
+        new_store, new_retention, new_poller = await _build_memory(hass, result.memory_config)
+    except Exception:  # noqa: BLE001
+        LOGGER.exception("memory rebuild failed; keeping previous subsystem")
+    else:
+        old_retention: RetentionTask | None = hass.data[DOMAIN].get("memory_retention")
+        old_poller: MemoryLogbookPoller | None = hass.data[DOMAIN].get("memory_logbook")
+        if old_retention is not None:
+            await old_retention.stop()
+        if old_poller is not None:
+            await old_poller.stop()
+        hass.data[DOMAIN]["memory"] = new_store
+        hass.data[DOMAIN]["memory_retention"] = new_retention
+        hass.data[DOMAIN]["memory_logbook"] = new_poller
+        hass.data[DOMAIN]["memory_config"] = result.memory_config
+        if new_retention is not None:
+            new_retention.start()
+        if new_poller is not None:
+            new_poller.start()
 
     # MCP tools arrive asynchronously after start(); the count fired in the
     # reload event therefore reflects only the synchronously-loaded YAML tools.
@@ -458,4 +462,5 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         poller: MemoryLogbookPoller | None = hass.data.get(DOMAIN, {}).get("memory_logbook")
         if poller is not None:
             await poller.stop()
+        hass.data.get(DOMAIN, {}).pop("memory_config", None)
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)

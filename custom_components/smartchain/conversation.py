@@ -355,6 +355,7 @@ class SmartChainConversationEntity(ConversationEntity):
                                 query=args.get("query", ""),
                                 top_k=int(args.get("top_k", 5)),
                                 kind=str(args.get("kind", "any")),
+                                subentry_id=self._subentry_id,
                             )
                         except Exception:
                             LOGGER.exception("search_memory dispatch failed")
@@ -402,7 +403,8 @@ class SmartChainConversationEntity(ConversationEntity):
             if not chat_log.unresponded_tool_results:
                 break
 
-        if memory_enabled:
+        memory_config = self.hass.data.get(DOMAIN, {}).get("memory_config")
+        if memory_enabled and memory_config is not None and memory_config.ingest_conversation:
             assistant_text = ""
             for content in reversed(chat_log.content):
                 if isinstance(content, AssistantContent) and content.content:
