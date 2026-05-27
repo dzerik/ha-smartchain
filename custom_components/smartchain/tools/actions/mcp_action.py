@@ -1,15 +1,14 @@
-"""Execute an MCP action — defers to the MCPManager.
+"""Execute an MCP action — defers to the MCPManager in hass.data."""
 
-This file is a stub for Task 3. The real implementation lands in Task 10
-once MCPManager is in place; for now we expose a callable that raises so
-the dispatcher branch is wired but the unimplemented path is loud.
-"""
-
+import logging
 from typing import Any
 
 from homeassistant.core import HomeAssistant
 
+from ...const import DOMAIN
 from ..model import MCPAction
+
+LOGGER = logging.getLogger(__name__)
 
 
 async def execute_mcp(
@@ -17,5 +16,9 @@ async def execute_mcp(
     action: MCPAction,
     args: dict[str, Any],
 ) -> str:
-    """Stub — replaced in Task 10 with the real MCPManager-backed call."""
-    raise NotImplementedError("execute_mcp not implemented until Task 10")
+    """Look up the MCPManager and ask it to call the configured tool."""
+    domain_data = hass.data.get(DOMAIN) or {}
+    manager = domain_data.get("mcp_manager")
+    if manager is None:
+        return f"Error: MCP server {action.server} is unavailable"
+    return await manager.call_tool(action.server, action.tool_name, args)
