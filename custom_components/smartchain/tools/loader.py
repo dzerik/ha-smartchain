@@ -1,6 +1,7 @@
 """Load and validate /config/smartchain/tools.yaml."""
 
 import logging
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -9,6 +10,7 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.util.yaml import load_yaml as ha_load_yaml
 
 from ..const import RESERVED_TOOL_NAMES
+from .mcp.config import HTTPConfig, MCPServerConfig, SSEConfig, StdioConfig
 from .model import (
     CustomTool,
     RESTAction,
@@ -26,7 +28,15 @@ class LoaderError(Exception):
     """Raised when tools.yaml cannot be parsed or validated."""
 
 
-def load_tools_file(path: Path) -> list[CustomTool]:
+@dataclass(frozen=True)
+class LoaderResult:
+    """Combined result of parsing tools.yaml."""
+
+    yaml_tools: list[CustomTool] = field(default_factory=list)
+    mcp_servers: list[MCPServerConfig] = field(default_factory=list)
+
+
+def load_tools_file(path: Path) -> LoaderResult:
     """Read, validate and convert a tools.yaml file into CustomTool objects.
 
     Uses HA's yaml loader so `!secret` and `!include` resolve correctly.
@@ -35,7 +45,7 @@ def load_tools_file(path: Path) -> list[CustomTool]:
     reserved-name entries are dropped with an error logged but do not raise.
     """
     if not path.is_file():
-        return []
+        return LoaderResult()
 
     try:
         raw = ha_load_yaml(str(path))
@@ -43,7 +53,7 @@ def load_tools_file(path: Path) -> list[CustomTool]:
         raise LoaderError(f"tools.yaml parse error: {err}") from err
 
     if raw is None:
-        return []
+        return LoaderResult()
 
     try:
         validated = TOOLS_FILE_SCHEMA(raw)
@@ -69,7 +79,7 @@ def load_tools_file(path: Path) -> list[CustomTool]:
                 action=_action_from_dict(entry["action"]),
             )
         )
-    return out
+    return LoaderResult(yaml_tools=out, mcp_servers=_servers_from_validated(validated))
 
 
 def _action_from_dict(d: dict[str, Any]) -> ToolAction:
@@ -100,3 +110,46 @@ def _action_from_dict(d: dict[str, Any]) -> ToolAction:
             variables=d.get("variables", {}),
         )
     raise LoaderError(f"unknown action type {t!r}")
+
+
+def _servers_from_validated(validated: dict) -> list[MCPServerConfig]:
+    """Convert validated `mcp_servers` block into MCPServerConfig dataclasses."""
+    out: list[MCPServerConfig] = []
+    for s in validated.get("mcp_servers", []) or []:
+        out.append(_server_from_dict(s))
+    return out
+
+
+def _server_from_dict(d: dict) -> MCPServerConfig:
+    transport = d["transport"]
+    common = {
+        "name": d["name"],
+        "prefix": d.get("prefix"),
+        "include_tools": list(d.get("include_tools") or []),
+        "exclude_tools": list(d.get("exclude_tools") or []),
+        "enabled": d.get("enabled", True),
+    }
+    if transport == "stdio":
+        return StdioConfig(
+            **common,
+            command=d["command"],
+            args=list(d.get("args") or []),
+            env=dict(d.get("env") or {}),
+        )
+    if transport == "sse":
+        return SSEConfig(
+            **common,
+            url=d["url"],
+            headers=dict(d.get("headers") or {}),
+            timeout=d.get("timeout", 30),
+            verify_ssl=d.get("verify_ssl", True),
+        )
+    if transport == "http":
+        return HTTPConfig(
+            **common,
+            url=d["url"],
+            headers=dict(d.get("headers") or {}),
+            timeout=d.get("timeout", 30),
+            verify_ssl=d.get("verify_ssl", True),
+        )
+    raise LoaderError(f"unsupported transport {transport!r}")

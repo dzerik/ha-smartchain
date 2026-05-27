@@ -21,20 +21,20 @@ def test_load_basic_yaml(tmp_path: Path) -> None:
     target = tmp_path / "tools.yaml"
     target.write_text((FIXTURE_DIR / "tools_basic.yaml").read_text())
 
-    tools = load_tools_file(target)
+    result = load_tools_file(target)
 
-    assert [t.name for t in tools] == ["ping", "turn_on_light"]
-    assert isinstance(tools[0].action, TemplateAction)
-    assert tools[0].action.value_template == "pong"
-    assert isinstance(tools[1].action, ServiceAction)
-    assert tools[1].action.domain == "light"
-    assert tools[1].action.target == {"area_id": "{{ area }}"}
+    assert [t.name for t in result.yaml_tools] == ["ping", "turn_on_light"]
+    assert isinstance(result.yaml_tools[0].action, TemplateAction)
+    assert result.yaml_tools[0].action.value_template == "pong"
+    assert isinstance(result.yaml_tools[1].action, ServiceAction)
+    assert result.yaml_tools[1].action.domain == "light"
+    assert result.yaml_tools[1].action.target == {"area_id": "{{ area }}"}
 
 
 def test_load_missing_file_returns_empty(tmp_path: Path) -> None:
-    """A missing tools.yaml is not an error; it yields an empty list."""
+    """A missing tools.yaml is not an error; it yields an empty LoaderResult."""
     target = tmp_path / "does_not_exist.yaml"
-    assert load_tools_file(target) == []
+    assert load_tools_file(target).yaml_tools == []
 
 
 def test_load_invalid_yaml_raises(tmp_path: Path) -> None:
@@ -73,9 +73,9 @@ def test_load_duplicate_names_drops_later(tmp_path: Path, caplog) -> None:
         "    parameters: { type: object, properties: {} }\n"
         "    action: { type: template, value_template: b }\n"
     )
-    tools = load_tools_file(target)
-    assert len(tools) == 1
-    assert tools[0].description == "first"
+    result = load_tools_file(target)
+    assert len(result.yaml_tools) == 1
+    assert result.yaml_tools[0].description == "first"
     assert "duplicate" in caplog.text.lower()
 
 
@@ -89,6 +89,6 @@ def test_load_reserved_name_drops_it(tmp_path: Path, caplog) -> None:
         "    parameters: { type: object, properties: {} }\n"
         "    action: { type: template, value_template: x }\n"
     )
-    tools = load_tools_file(target)
-    assert tools == []
+    result = load_tools_file(target)
+    assert result.yaml_tools == []
     assert "reserved" in caplog.text.lower()

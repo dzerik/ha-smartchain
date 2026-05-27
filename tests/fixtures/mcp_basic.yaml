@@ -1,0 +1,11 @@
+tools: []
+mcp_servers:
+  - name: fs
+    transport: stdio
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-filesystem", "/config/notes"]
+  - name: brave
+    transport: sse
+    url: https://example.com/mcp/brave
+    headers:
+      Authorization: "Bearer test"

@@ -152,10 +152,11 @@ def _tools_yaml_path(hass: HomeAssistant) -> Path:
 async def _reload_registry(hass: HomeAssistant) -> int:
     """Re-read tools.yaml into the registry. Raises LoaderError on failure."""
     path = _tools_yaml_path(hass)
-    tools = await hass.async_add_executor_job(load_tools_file, path)
+    result = await hass.async_add_executor_job(load_tools_file, path)
     registry: ToolRegistry = hass.data[DOMAIN]["tools"]
-    registry.replace_all(tools)
-    return len(tools)
+    registry.replace_all(result.yaml_tools)
+    # MCP server handling lands in Task 9.
+    return len(result.yaml_tools)
 
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
