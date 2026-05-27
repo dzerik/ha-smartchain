@@ -110,6 +110,35 @@ Topics:
 - System prompt customization
 - Parameter and model reference
 
+## Long-term Memory (v4.3.0+)
+
+SmartChain can persist conversation turns and (opt-in) HA logbook events into a
+local Chroma vector database and let the LLM recall them through a built-in
+`search_memory` tool. Enable it by adding a `memory:` block to
+`/config/smartchain/tools.yaml`:
+
+```yaml
+memory:
+  provider: ollama                # ollama | openai | gigachat | yandex
+  model: nomic-embed-text
+  base_url: http://localhost:11434
+  retention_days: 90
+  ingest_conversation: true
+  ingest_logbook:
+    enabled: false
+    domains: [light, climate, lock]
+    poll_interval_minutes: 60
+```
+
+- `provider`: where embeddings come from. `ollama` is local and free (default).
+  Cloud providers (`openai`, `gigachat`, `yandex`) require `api_key`.
+- `retention_days: 0` disables the daily cleanup task.
+- The `smartchain.clear_memory` service deletes stored memories filtered by
+  `kind` and/or `agent_id`.
+
+When the `memory:` block is absent, the feature stays disabled and the
+integration behaves exactly as in 4.2.0.
+
 ## License
 
 MIT
