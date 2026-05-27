@@ -26,7 +26,7 @@ def test_custom_tool_to_llm_schema_minimal() -> None:
 
 
 def test_registry_add_and_lookup() -> None:
-    """ToolRegistry stores tools by name and rejects duplicates."""
+    """ToolRegistry stores tools by name and retrieves them correctly."""
     reg = ToolRegistry()
     tool = CustomTool(
         name="ping",

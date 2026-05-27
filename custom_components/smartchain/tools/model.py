@@ -2,7 +2,7 @@
 
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any, Literal, TypeAlias
 
 
 @dataclass(frozen=True)
@@ -47,7 +47,7 @@ class ScriptAction:
     variables: dict[str, Any] = field(default_factory=dict)
 
 
-ToolAction = ServiceAction | TemplateAction | RESTAction | ScriptAction
+ToolAction: TypeAlias = ServiceAction | TemplateAction | RESTAction | ScriptAction
 
 
 @dataclass(frozen=True)
