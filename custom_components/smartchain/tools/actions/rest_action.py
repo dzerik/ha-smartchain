@@ -47,15 +47,11 @@ async def execute_rest(
             ) as resp:
                 if resp.status >= 400:
                     body = await resp.text()
-                    LOGGER.warning(
-                        "REST %s %s -> %s: %s", action.method, url, resp.status, body
-                    )
+                    LOGGER.warning("REST %s %s -> %s: %s", action.method, url, resp.status, body)
                     return f"Error: HTTP {resp.status}"
                 if action.response_format == "json":
                     return json.dumps(await resp.json(), ensure_ascii=False, default=str)
                 return await resp.text()
     except TimeoutError:
-        LOGGER.warning(
-            "REST %s %s timed out after %ss", action.method, url, action.timeout
-        )
+        LOGGER.warning("REST %s %s timed out after %ss", action.method, url, action.timeout)
         return "Error: request timed out"

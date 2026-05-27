@@ -18,9 +18,7 @@ def _async_cm(value):
 
 async def test_rest_get_returns_text(hass: HomeAssistant) -> None:
     """A GET request in text mode returns the response body as-is."""
-    action = RESTAction(
-        method="GET", url="https://example.com/x?q={{ q }}", response_format="text"
-    )
+    action = RESTAction(method="GET", url="https://example.com/x?q={{ q }}", response_format="text")
 
     fake_resp = MagicMock()
     fake_resp.status = 200
