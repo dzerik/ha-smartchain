@@ -6,12 +6,14 @@ from typing import Any
 import jsonschema
 from homeassistant.core import HomeAssistant
 
+from .actions.mcp_action import execute_mcp
 from .actions.rest_action import execute_rest
 from .actions.script_action import execute_script
 from .actions.service_action import execute_service
 from .actions.template_action import execute_template
 from .model import (
     CustomTool,
+    MCPAction,
     RESTAction,
     ScriptAction,
     ServiceAction,
@@ -42,6 +44,8 @@ async def dispatch(
             return await execute_rest(hass, action, args)
         if isinstance(action, ScriptAction):
             return await execute_script(hass, action, args)
+        if isinstance(action, MCPAction):
+            return await execute_mcp(hass, action, args)
     except Exception:  # noqa: BLE001 — boundary, must not leak details to LLM
         LOGGER.exception("Custom tool %s execution failed", tool.name)
         return "Tool execution failed; check Home Assistant logs."

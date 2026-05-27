@@ -47,7 +47,17 @@ class ScriptAction:
     variables: dict[str, Any] = field(default_factory=dict)
 
 
-type ToolAction = ServiceAction | TemplateAction | RESTAction | ScriptAction
+@dataclass(frozen=True)
+class MCPAction:
+    """Call a tool exposed by a connected MCP server."""
+
+    type: Literal["mcp"] = "mcp"
+    server: str = ""
+    tool_name: str = ""
+    timeout: int = 30
+
+
+type ToolAction = ServiceAction | TemplateAction | RESTAction | ScriptAction | MCPAction
 
 
 @dataclass(frozen=True)

@@ -61,3 +61,14 @@ def test_registry_replace_swaps_contents_atomically() -> None:
 
     assert reg.get("a") is None
     assert reg.get("b") is b
+
+
+def test_mcp_action_is_a_tool_action() -> None:
+    """MCPAction is a valid ToolAction variant carrying server + tool_name."""
+    from custom_components.smartchain.tools.model import MCPAction
+
+    action = MCPAction(server="filesystem", tool_name="list_directory")
+    assert action.type == "mcp"
+    assert action.server == "filesystem"
+    assert action.tool_name == "list_directory"
+    assert action.timeout == 30
