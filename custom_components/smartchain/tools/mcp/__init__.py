@@ -1,6 +1,6 @@
 """SmartChain MCP (Model Context Protocol) client subsystem."""
 
-from .config import MCPServerConfig, StdioConfig, SSEConfig, HTTPConfig
+from .config import HTTPConfig, MCPServerConfig, SSEConfig, StdioConfig
 from .manager import MCPManager
 
 __all__ = [
