@@ -333,7 +333,7 @@ class SmartChainConversationEntity(ConversationEntity):
                     if not isinstance(content, AssistantContent) or not content.tool_calls:
                         continue
                     for tc in content.tool_calls:
-                        if tc.tool_name not in custom_by_name:
+                        if tc.tool_name not in custom_by_name or not tc.external:
                             continue
                         if any(
                             isinstance(c, ToolResultContent) and c.tool_call_id == tc.id
