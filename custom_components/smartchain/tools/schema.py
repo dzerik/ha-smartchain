@@ -2,7 +2,7 @@
 
 import voluptuous as vol
 
-from ..const import TOOL_NAME_PATTERN
+from ..const import MCP_NAME_PATTERN, TOOL_NAME_PATTERN
 
 _NAME = vol.All(str, vol.Match(TOOL_NAME_PATTERN))
 _NON_EMPTY_STR = vol.All(str, vol.Length(min=1))
@@ -84,8 +84,70 @@ TOOL_SCHEMA = vol.Schema(
     }
 )
 
+_MCP_NAME = vol.All(str, vol.Match(MCP_NAME_PATTERN))
+
+_MCP_SHARED = {
+    vol.Required("name"): _MCP_NAME,
+    vol.Optional("prefix"): vol.Any(None, str),
+    vol.Optional("include_tools", default=list): [str],
+    vol.Optional("exclude_tools", default=list): [str],
+    vol.Optional("enabled", default=True): bool,
+}
+
+_STDIO_SERVER = vol.Schema(
+    {
+        **_MCP_SHARED,
+        vol.Required("transport"): "stdio",
+        vol.Required("command"): _NON_EMPTY_STR,
+        vol.Optional("args", default=list): [str],
+        vol.Optional("env", default=dict): {str: str},
+    }
+)
+
+_SSE_SERVER = vol.Schema(
+    {
+        **_MCP_SHARED,
+        vol.Required("transport"): "sse",
+        vol.Required("url"): _NON_EMPTY_STR,
+        vol.Optional("headers", default=dict): {str: str},
+        vol.Optional("timeout", default=30): vol.All(int, vol.Range(min=1, max=300)),
+        vol.Optional("verify_ssl", default=True): bool,
+    }
+)
+
+_HTTP_SERVER = vol.Schema(
+    {
+        **_MCP_SHARED,
+        vol.Required("transport"): "http",
+        vol.Required("url"): _NON_EMPTY_STR,
+        vol.Optional("headers", default=dict): {str: str},
+        vol.Optional("timeout", default=30): vol.All(int, vol.Range(min=1, max=300)),
+        vol.Optional("verify_ssl", default=True): bool,
+    }
+)
+
+_MCP_TRANSPORTS = ["stdio", "sse", "http"]
+
+
+def _validate_mcp_server(value: object) -> dict:
+    """Discriminated dispatch on `transport` with a clear unknown-transport error."""
+    if not isinstance(value, dict) or "transport" not in value:
+        raise vol.Invalid("mcp_server must be a dict with a 'transport' key")
+    transport = value["transport"]
+    if transport == "stdio":
+        return _STDIO_SERVER(value)
+    if transport == "sse":
+        return _SSE_SERVER(value)
+    if transport == "http":
+        return _HTTP_SERVER(value)
+    raise vol.Invalid(f"unknown transport {transport!r}; expected one of {_MCP_TRANSPORTS}")
+
+
+MCP_SERVER_SCHEMA = _validate_mcp_server
+
 TOOLS_FILE_SCHEMA = vol.Schema(
     {
-        vol.Required("tools"): [TOOL_SCHEMA],
+        vol.Optional("tools", default=list): [TOOL_SCHEMA],
+        vol.Optional("mcp_servers", default=list): [MCP_SERVER_SCHEMA],
     }
 )

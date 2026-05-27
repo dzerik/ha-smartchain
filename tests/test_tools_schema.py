@@ -90,10 +90,16 @@ def test_tools_file_schema_accepts_empty_list() -> None:
     TOOLS_FILE_SCHEMA({"tools": []})
 
 
-def test_tools_file_schema_requires_tools_key() -> None:
-    """Top-level dict must have `tools` key."""
+def test_tools_file_schema_rejects_unknown_top_level_keys() -> None:
+    """Unknown top-level keys are rejected (only `tools` and `mcp_servers` allowed)."""
     with pytest.raises(vol.Invalid):
         TOOLS_FILE_SCHEMA({"functions": []})
+
+
+def test_tools_file_schema_accepts_empty_dict_now() -> None:
+    """With both keys Optional, an empty top-level dict is valid (yields empty registry)."""
+    result = TOOLS_FILE_SCHEMA({})
+    assert result == {"tools": [], "mcp_servers": []}
 
 
 def test_tool_schema_unknown_action_type_has_clear_message() -> None:
