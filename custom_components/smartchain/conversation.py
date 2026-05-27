@@ -60,6 +60,7 @@ from .delegate_tool import (
 from .history_tool import execute_history_tool, get_history_tool_definition
 from .skills import load_skills, skills_to_prompt
 from .tools import CustomTool, ToolRegistry
+from .tools.dispatcher import dispatch as dispatch_custom_tool
 
 LOGGER = logging.getLogger(__name__)
 PROMPT_CACHE_TTL = 30  # seconds
@@ -271,7 +272,12 @@ class SmartChainConversationEntity(ConversationEntity):
         if sibling_agents:
             tools.append(get_delegate_tool_definition(sibling_agents))
 
+        registry: ToolRegistry | None = self.hass.data.get(DOMAIN, {}).get("tools")
+        custom_tools = self._collect_custom_tools(registry) if registry else []
+        if custom_tools:
+            tools.extend(t.to_llm_schema() for t in custom_tools)
         bound_client = client.bind_tools(tools) if tools else client
+        custom_by_name: dict[str, CustomTool] = {t.name: t for t in custom_tools}
 
         for _iteration in range(MAX_TOOL_ITERATIONS):
             chat_history_enabled = options.get(CONF_CHAT_HISTORY, DEFAULT_CHAT_HISTORY)
@@ -293,7 +299,11 @@ class SmartChainConversationEntity(ConversationEntity):
             try:
                 async for _content in chat_log.async_add_delta_content_stream(
                     user_input.agent_id,
-                    _async_langchain_stream(bound_client, messages),
+                    _async_langchain_stream(
+                        bound_client,
+                        messages,
+                        frozenset(custom_by_name),
+                    ),
                 ):
                     pass
             except Exception as err:
@@ -316,6 +326,31 @@ class SmartChainConversationEntity(ConversationEntity):
                 await _handle_delegate_tool_calls(
                     clients, self._agent_map, chat_log, user_input.agent_id
                 )
+
+            # Handle YAML-defined custom-tool calls.
+            if custom_by_name:
+                for content in list(chat_log.content):
+                    if not isinstance(content, AssistantContent) or not content.tool_calls:
+                        continue
+                    for tc in content.tool_calls:
+                        if tc.tool_name not in custom_by_name:
+                            continue
+                        if any(
+                            isinstance(c, ToolResultContent) and c.tool_call_id == tc.id
+                            for c in chat_log.content
+                        ):
+                            continue
+                        tool_result = await dispatch_custom_tool(
+                            self.hass, custom_by_name[tc.tool_name], tc.tool_args
+                        )
+                        chat_log.async_add_assistant_content_without_tools(
+                            ToolResultContent(
+                                agent_id=user_input.agent_id,
+                                tool_call_id=tc.id,
+                                tool_name=tc.tool_name,
+                                tool_result=tool_result,
+                            )
+                        )
 
             if not chat_log.unresponded_tool_results:
                 break
@@ -470,9 +505,12 @@ async def _handle_delegate_tool_calls(
 
 
 async def _async_langchain_stream(
-    client: Any, messages: list[BaseMessage]
+    client: Any,
+    messages: list[BaseMessage],
+    external_tool_names: frozenset[str] = frozenset(),
 ) -> AsyncIterable[dict[str, Any]]:
     """Convert LangChain astream chunks to HA delta dicts."""
+    _external = external_tool_names | {HISTORY_TOOL_NAME, DELEGATE_TOOL_NAME}
     first = True
     async for chunk in client.astream(messages):
         delta: dict[str, Any] = {}
@@ -488,7 +526,7 @@ async def _async_langchain_stream(
                     tool_name=tc["name"],
                     tool_args=tc["args"],
                     id=tc["id"],
-                    external=(tc["name"] in (HISTORY_TOOL_NAME, DELEGATE_TOOL_NAME)),
+                    external=(tc["name"] in _external),
                 )
                 for tc in chunk.tool_calls
             ]
