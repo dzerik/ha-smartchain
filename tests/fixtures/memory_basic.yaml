@@ -1,0 +1,9 @@
+tools: []
+memory:
+  provider: ollama
+  model: nomic-embed-text
+  retention_days: 30
+  ingest_logbook:
+    enabled: true
+    domains: [light, lock]
+    poll_interval_minutes: 30
