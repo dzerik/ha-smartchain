@@ -171,3 +171,9 @@ SERVICE_RELOAD_TOOLS = "reload_tools"
 EVENT_TOOLS_RELOADED = f"{DOMAIN}_tools_reloaded"
 TOOL_NAME_PATTERN = r"^[a-z_][a-z0-9_]*$"
 RESERVED_TOOL_NAMES = frozenset({HISTORY_TOOL_NAME, DELEGATE_TOOL_NAME})
+
+# MCP client (v4.2.0)
+MCP_RECONNECT_INITIAL_DELAY = 1.0  # seconds
+MCP_RECONNECT_MAX_DELAY = 30.0  # seconds
+MCP_CALL_TIMEOUT_DEFAULT = 30  # seconds
+MCP_NAME_PATTERN = r"^[a-z_][a-z0-9_-]*$"
