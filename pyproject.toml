@@ -33,4 +33,5 @@ dev = [
     "PyTurboJPEG>=2.0",
     "hassil>=3.5.0",
     "home-assistant-intents>=2026.3.3",
+    "jsonschema>=4.0",
 ]

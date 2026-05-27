@@ -162,3 +162,11 @@ DEFAULT_ENABLE_HISTORY_TOOL = False
 HISTORY_TOOL_NAME = "get_state_history"
 HISTORY_TOOL_MAX_HOURS = 24
 DELEGATE_TOOL_NAME = "ask_agent"
+
+# Custom tools (v4.1.0)
+TOOLS_YAML_PATH = "smartchain/tools.yaml"
+CONF_ALLOWED_TOOLS = "allowed_tools"
+SERVICE_RELOAD_TOOLS = "reload_tools"
+EVENT_TOOLS_RELOADED = f"{DOMAIN}_tools_reloaded"
+TOOL_NAME_PATTERN = r"^[a-z_][a-z0-9_]*$"
+RESERVED_TOOL_NAMES = frozenset({"get_state_history", "ask_agent"})
