@@ -20,6 +20,7 @@ from .client_util import get_client
 from .helpers import async_generate_structured  # re-exported for downstream integrations
 from .tools import ToolRegistry
 from .tools.loader import LoaderError, load_tools_file
+from .tools.mcp import MCPManager
 
 __all__ = ["async_generate_structured"]
 from .const import (
@@ -155,8 +156,14 @@ async def _reload_registry(hass: HomeAssistant) -> int:
     result = await hass.async_add_executor_job(load_tools_file, path)
     registry: ToolRegistry = hass.data[DOMAIN]["tools"]
     registry.replace_all(result.yaml_tools)
-    # MCP server handling lands in Task 9.
-    return len(result.yaml_tools)
+
+    manager: MCPManager | None = hass.data[DOMAIN].get("mcp_manager")
+    if manager is not None:
+        await manager.stop()
+        manager.configure(result.mcp_servers)
+        await manager.start()
+
+    return len(result.yaml_tools) + len(result.mcp_servers)
 
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
@@ -245,6 +252,8 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     hass.data.setdefault(DOMAIN, {})
     if "tools" not in hass.data[DOMAIN]:
         hass.data[DOMAIN]["tools"] = ToolRegistry()
+    if "mcp_manager" not in hass.data[DOMAIN]:
+        hass.data[DOMAIN]["mcp_manager"] = MCPManager(hass, hass.data[DOMAIN]["tools"])
     try:
         initial = await _reload_registry(hass)
         LOGGER.info("SmartChain loaded %d custom tools", initial)
@@ -347,4 +356,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload SmartChain."""
+    # Stop MCP connections when the last config entry is unloaded.
+    remaining = [
+        e for e in hass.config_entries.async_entries(DOMAIN) if e.entry_id != entry.entry_id
+    ]
+    if not remaining:
+        manager: MCPManager | None = hass.data.get(DOMAIN, {}).get("mcp_manager")
+        if manager is not None:
+            await manager.stop()
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
