@@ -5,6 +5,20 @@ All notable changes to this project are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 project follows [Semantic Versioning](https://semver.org/).
 
+## [4.3.0] - 2026-05-27
+
+### Added
+- **Long-term memory / RAG** — opt-in `memory:` block in `tools.yaml`. SmartChain now keeps embeddings of conversation turns (and optionally HA logbook events) in a local Chroma vector DB at `.storage/smartchain_memory/`, and the LLM can recall them via a built-in `search_memory` tool. Pluggable embeddings provider: Ollama (default), OpenAI, GigaChat, Yandex. See `docs/superpowers/specs/2026-05-27-rag-memory-design.md` for the full design.
+- **Daily retention cleanup** — configurable `retention_days` (default 90, 0 disables).
+- **`smartchain.clear_memory` service** — deletes stored memories, filtered by `kind` and/or `agent_id`; fires `smartchain_memory_cleared` with the deleted count.
+- **`chromadb` + `langchain-chroma`** added as dependencies (loaded lazily — pulled only when memory is enabled).
+
+### Changed
+- `smartchain.reload_tools` now also re-builds the memory subsystem (graceful stop of retention/logbook tasks, fresh build from updated `memory:` block).
+
+### Tests
+- ~268 passing (was 217). New: `test_memory_config.py`, `test_memory_embeddings.py`, `test_memory_chunking.py`, `test_memory_store.py`, `test_memory_schema.py`, `test_memory_loader.py`, `test_memory_ingest_conversation.py`, `test_memory_ingest_logbook.py`, `test_memory_retention.py`, `test_memory_search_tool.py`, `test_memory_clear_service.py`, `test_memory_integration.py`.
+
 ## [4.2.0] - 2026-05-27
 
 ### Added
