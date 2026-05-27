@@ -2,7 +2,14 @@
 
 import voluptuous as vol
 
-from ..const import MCP_NAME_PATTERN, TOOL_NAME_PATTERN
+from ..const import (
+    MCP_NAME_PATTERN,
+    MEMORY_DEFAULT_LOGBOOK_POLL_MINUTES,
+    MEMORY_LOGBOOK_POLL_MAX_MINUTES,
+    MEMORY_LOGBOOK_POLL_MIN_MINUTES,
+    MEMORY_PROVIDERS,
+    TOOL_NAME_PATTERN,
+)
 
 _NAME = vol.All(str, vol.Match(TOOL_NAME_PATTERN))
 _NON_EMPTY_STR = vol.All(str, vol.Length(min=1))
@@ -145,9 +152,38 @@ def _validate_mcp_server(value: object) -> dict:
 
 MCP_SERVER_SCHEMA = _validate_mcp_server
 
+_LOGBOOK_SCHEMA = vol.Schema(
+    {
+        vol.Optional("enabled", default=False): bool,
+        vol.Optional("domains", default=list): [str],
+        vol.Optional("poll_interval_minutes", default=MEMORY_DEFAULT_LOGBOOK_POLL_MINUTES): vol.All(
+            int,
+            vol.Range(
+                min=MEMORY_LOGBOOK_POLL_MIN_MINUTES,
+                max=MEMORY_LOGBOOK_POLL_MAX_MINUTES,
+            ),
+        ),
+    }
+)
+
+
+MEMORY_SCHEMA = vol.Schema(
+    {
+        vol.Required("provider"): vol.In(MEMORY_PROVIDERS),
+        vol.Required("model"): _NON_EMPTY_STR,
+        vol.Optional("enabled", default=True): bool,
+        vol.Optional("base_url"): vol.Any(None, str),
+        vol.Optional("api_key"): vol.Any(None, str),
+        vol.Optional("retention_days", default=90): vol.All(int, vol.Range(min=0, max=3650)),
+        vol.Optional("ingest_conversation", default=True): bool,
+        vol.Optional("ingest_logbook", default=dict): _LOGBOOK_SCHEMA,
+    }
+)
+
 TOOLS_FILE_SCHEMA = vol.Schema(
     {
         vol.Optional("tools", default=list): [TOOL_SCHEMA],
         vol.Optional("mcp_servers", default=list): [MCP_SERVER_SCHEMA],
+        vol.Optional("memory"): MEMORY_SCHEMA,
     }
 )
