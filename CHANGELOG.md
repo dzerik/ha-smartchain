@@ -5,6 +5,20 @@ All notable changes to this project are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 project follows [Semantic Versioning](https://semver.org/).
 
+## [4.2.0] - 2026-05-27
+
+### Added
+- **MCP client** — SmartChain can now connect to remote MCP (Model Context Protocol) servers declared in `/config/smartchain/tools.yaml` under a new `mcp_servers` block. Three transports supported: `stdio` (local subprocess), `sse` (Server-Sent Events) and `http` (streamable HTTP). Discovered tools land in the same `ToolRegistry` as YAML tools — `allowed_tools` per-subentry filtering works across both sources. See `docs/superpowers/specs/2026-05-27-mcp-client-design.md` for the full design.
+- **Per-server failure isolation + auto-reconnect** — one failing MCP server does not affect others. Exponential backoff from 1 s to 30 s.
+- **`mcp` Python SDK** added as a dependency.
+
+### Changed
+- `smartchain.reload_tools` now restarts MCP connections too — graceful disconnect, re-read YAML, fresh connect. Atomic on failure (prior registry preserved).
+- `tools.yaml` `tools:` key is now optional (was required) — files with only `mcp_servers:` are valid.
+
+### Tests
+- 214 passing (was 167). New: `test_mcp_config.py`, `test_mcp_schema.py`, `test_mcp_naming.py`, `test_mcp_client.py`, `test_mcp_manager.py`, `test_mcp_action.py`, `test_mcp_loader.py`, `test_mcp_reload.py`, `test_mcp_integration.py`.
+
 ## [4.1.0] - 2026-05-27
 
 ### Added
