@@ -5,6 +5,17 @@ All notable changes to this project are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 project follows [Semantic Versioning](https://semver.org/).
 
+## [4.4.0] - 2026-05-27
+
+### Added
+- **Multi-agent orchestration tools** — two new built-in LLM tools opt-in per subentry via `enable_multi_agent_tools`:
+  - `ask_agents` — parallel fan-out via `asyncio.gather` to up to 5 sibling agents at once; per-agent timeout 60 s; responses returned in a single formatted block for the calling agent to summarise.
+  - `critique_response` — ask another sibling to review a draft answer (text-in / text-out, no tool recursion). Useful for safety-critical actions and uncertainty resolution.
+- **`enable_multi_agent_tools` option** — appears in the subentry form only when the entry has 2+ subentries; defaults to `false`. The existing `ask_agent` (single-delegate) is unchanged.
+
+### Tests
+- ~289 passing (was 272). New: `test_delegate_many_tool.py`, `test_critique_tool.py`, `test_multi_agent_subentry_filter.py`, `test_multi_agent_integration.py`.
+
 ## [4.3.0] - 2026-05-27
 
 ### Added
