@@ -27,6 +27,7 @@ from httpx import ConnectError
 
 from .client_util import async_fetch_models, validate_client
 from .const import (
+    CONF_ALLOWED_TOOLS,
     CONF_API_KEY,
     CONF_BASE_URL,
     CONF_CHAT_HISTORY,
@@ -415,6 +416,22 @@ def _subentry_schema(
                     },
                     default=DEFAULT_VERIFY_SSL,
                 ): bool,
+            }
+        )
+    registry = hass.data.get(DOMAIN, {}).get("tools")
+    if registry is not None and len(registry) > 0:
+        schema = schema.extend(
+            {
+                vol.Optional(
+                    CONF_ALLOWED_TOOLS,
+                    description={"suggested_value": options.get(CONF_ALLOWED_TOOLS)},
+                ): selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=registry.names(),
+                        multiple=True,
+                        mode=SelectSelectorMode("list"),
+                    ),
+                ),
             }
         )
     return schema

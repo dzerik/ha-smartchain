@@ -36,6 +36,7 @@ from langchain_core.messages import (
 )
 
 from .const import (
+    CONF_ALLOWED_TOOLS,
     CONF_CHAT_HISTORY,
     CONF_ENABLE_HISTORY_TOOL,
     CONF_LLM_HASS_API,
@@ -58,6 +59,7 @@ from .delegate_tool import (
 )
 from .history_tool import execute_history_tool, get_history_tool_definition
 from .skills import load_skills, skills_to_prompt
+from .tools import CustomTool, ToolRegistry
 
 LOGGER = logging.getLogger(__name__)
 PROMPT_CACHE_TTL = 30  # seconds
@@ -115,7 +117,8 @@ class SmartChainConversationEntity(ConversationEntity):
         """Initialize the entity."""
         self.entry = entry
         self._subentry_id = subentry_id
-        self._options = options or {}
+        self._options = options if options is not None else {}
+        self._options_explicit = options is not None
         self._skills_prompt: str | None = None
         self._prompt_cache: str | None = None
         self._prompt_cache_key: str | None = None
@@ -131,7 +134,7 @@ class SmartChainConversationEntity(ConversationEntity):
     @property
     def _agent_options(self) -> dict[str, Any]:
         """Return the effective options for this agent."""
-        if self._subentry_id:
+        if self._subentry_id or self._options_explicit:
             return self._options
         return dict(self.entry.options)
 
@@ -160,6 +163,18 @@ class SmartChainConversationEntity(ConversationEntity):
     def _agent_map(self) -> dict[str, str]:
         """Return mapping of agent_name -> subentry_id for delegation."""
         return {a["name"]: a["sub_id"] for a in self._sibling_agents}
+
+    def _collect_custom_tools(self, registry: ToolRegistry) -> list[CustomTool]:
+        """Return registry tools allowed for this agent.
+
+        `allowed_tools` semantics: missing/None => all tools; [] => none.
+        """
+        allowed = self._agent_options.get(CONF_ALLOWED_TOOLS)
+        all_tools = list(registry.all())
+        if allowed is None:
+            return all_tools
+        allowed_set = set(allowed)
+        return [t for t in all_tools if t.name in allowed_set]
 
     def _render_prompt_cached(self, raw_prompt: str) -> str:
         """Render Jinja2 prompt with TTL cache to avoid repeated template rendering."""
