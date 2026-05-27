@@ -40,14 +40,18 @@ from .const import (
     CONF_ALLOWED_TOOLS,
     CONF_CHAT_HISTORY,
     CONF_ENABLE_HISTORY_TOOL,
+    CONF_ENABLE_MULTI_AGENT_TOOLS,
     CONF_LLM_HASS_API,
     CONF_PROCESS_BUILTIN_SENTENCES,
     CONF_PROMPT,
+    CRITIQUE_TOOL_NAME,
     DEFAULT_CHAT_HISTORY,
     DEFAULT_DEVICES_PROMPT,
     DEFAULT_ENABLE_HISTORY_TOOL,
+    DEFAULT_ENABLE_MULTI_AGENT_TOOLS,
     DEFAULT_PROCESS_BUILTIN_SENTENCES,
     DEFAULT_PROMPT,
+    DELEGATE_MANY_TOOL_NAME,
     DELEGATE_TOOL_NAME,
     DOMAIN,
     HISTORY_TOOL_NAME,
@@ -62,6 +66,14 @@ from .delegate_tool import (
 from .history_tool import execute_history_tool, get_history_tool_definition
 from .skills import load_skills, skills_to_prompt
 from .tools import CustomTool, ToolRegistry
+from .tools.critique_tool import (
+    execute_critique_tool,
+    get_critique_tool_definition,
+)
+from .tools.delegate_many_tool import (
+    execute_delegate_many_tool,
+    get_delegate_many_tool_definition,
+)
 from .tools.dispatcher import dispatch as dispatch_custom_tool
 from .tools.memory import MemoryStore
 from .tools.memory.ingest import ingest_conversation_turn
@@ -135,7 +147,8 @@ class SmartChainConversationEntity(ConversationEntity):
 
         if subentry_id:
             self._attr_unique_id = f"{entry.entry_id}_{subentry_id}"
-            self._attr_name = entry.subentries[subentry_id].title
+            subentry = (entry.subentries or {}).get(subentry_id)
+            self._attr_name = subentry.title if subentry is not None else subentry_id
         else:
             self._attr_unique_id = entry.entry_id
             self._attr_name = None
@@ -157,6 +170,9 @@ class SmartChainConversationEntity(ConversationEntity):
     @property
     def _sibling_agents(self) -> list[dict[str, str]]:
         """Return list of other agents in the same config entry (for delegation)."""
+        cache = getattr(self, "_sibling_agents_cache", None)
+        if cache is not None:
+            return cache
         if not self._subentry_id or not self.entry.subentries:
             return []
         agents = []
@@ -280,6 +296,12 @@ class SmartChainConversationEntity(ConversationEntity):
         if sibling_agents:
             tools.append(get_delegate_tool_definition(sibling_agents))
 
+        multi_agent_tool_names = _collect_multi_agent_tool_names(self)
+        multi_agent_enabled = bool(multi_agent_tool_names)
+        if multi_agent_enabled:
+            tools.append(get_delegate_many_tool_definition(sibling_agents))
+            tools.append(get_critique_tool_definition(sibling_agents))
+
         memory_store: MemoryStore | None = self.hass.data.get(DOMAIN, {}).get("memory")
         memory_enabled = memory_store is not None and memory_store.is_available
         if memory_enabled:
@@ -313,6 +335,8 @@ class SmartChainConversationEntity(ConversationEntity):
                 _extra_external: frozenset[str] = (
                     frozenset({MEMORY_TOOL_NAME}) if memory_enabled else frozenset()
                 )
+                if multi_agent_enabled:
+                    _extra_external |= {DELEGATE_MANY_TOOL_NAME, CRITIQUE_TOOL_NAME}
                 async for _content in chat_log.async_add_delta_content_stream(
                     user_input.agent_id,
                     _async_langchain_stream(
@@ -374,6 +398,13 @@ class SmartChainConversationEntity(ConversationEntity):
                 await _handle_delegate_tool_calls(
                     clients, self._agent_map, chat_log, user_input.agent_id
                 )
+                if multi_agent_enabled:
+                    await _handle_delegate_many_tool_calls(
+                        clients, self._agent_map, chat_log, user_input.agent_id
+                    )
+                    await _handle_critique_tool_calls(
+                        clients, self._agent_map, chat_log, user_input.agent_id
+                    )
 
             # Handle YAML-defined custom-tool calls.
             if custom_by_name:
@@ -576,6 +607,85 @@ async def _handle_delegate_tool_calls(
             )
 
 
+async def _handle_delegate_many_tool_calls(
+    clients: dict,
+    agent_map: dict[str, str],
+    chat_log: ChatLog,
+    agent_id: str,
+) -> None:
+    """Run pending ask_agents tool calls and append their results."""
+    for content in list(chat_log.content):
+        if not isinstance(content, AssistantContent) or not content.tool_calls:
+            continue
+        for tc in content.tool_calls:
+            if tc.tool_name != DELEGATE_MANY_TOOL_NAME or not tc.external:
+                continue
+            if any(
+                isinstance(c, ToolResultContent) and c.tool_call_id == tc.id
+                for c in chat_log.content
+            ):
+                continue
+            args = tc.tool_args or {}
+            try:
+                result_text = await execute_delegate_many_tool(
+                    clients,
+                    agent_map,
+                    list(args.get("agents", [])),
+                    str(args.get("query", "")),
+                )
+            except Exception:
+                LOGGER.exception("ask_agents dispatch failed")
+                result_text = "Tool execution failed; check Home Assistant logs."
+            chat_log.async_add_assistant_content_without_tools(
+                ToolResultContent(
+                    agent_id=agent_id,
+                    tool_call_id=tc.id,
+                    tool_name=tc.tool_name,
+                    tool_result=result_text,
+                )
+            )
+
+
+async def _handle_critique_tool_calls(
+    clients: dict,
+    agent_map: dict[str, str],
+    chat_log: ChatLog,
+    agent_id: str,
+) -> None:
+    """Run pending critique_response tool calls and append their results."""
+    for content in list(chat_log.content):
+        if not isinstance(content, AssistantContent) or not content.tool_calls:
+            continue
+        for tc in content.tool_calls:
+            if tc.tool_name != CRITIQUE_TOOL_NAME or not tc.external:
+                continue
+            if any(
+                isinstance(c, ToolResultContent) and c.tool_call_id == tc.id
+                for c in chat_log.content
+            ):
+                continue
+            args = tc.tool_args or {}
+            try:
+                result_text = await execute_critique_tool(
+                    clients,
+                    agent_map,
+                    str(args.get("reviewer", "")),
+                    str(args.get("original_question", "")),
+                    str(args.get("candidate_answer", "")),
+                )
+            except Exception:
+                LOGGER.exception("critique_response dispatch failed")
+                result_text = "Tool execution failed; check Home Assistant logs."
+            chat_log.async_add_assistant_content_without_tools(
+                ToolResultContent(
+                    agent_id=agent_id,
+                    tool_call_id=tc.id,
+                    tool_name=tc.tool_name,
+                    tool_result=result_text,
+                )
+            )
+
+
 async def _async_langchain_stream(
     client: Any,
     messages: list[BaseMessage],
@@ -605,3 +715,18 @@ async def _async_langchain_stream(
 
         if delta:
             yield delta
+
+
+def _collect_multi_agent_tool_names(
+    entity: "SmartChainConversationEntity",
+) -> list[str]:
+    """Return the names of multi-agent tools this entity would expose right now.
+
+    Used by tests and by `_async_handle_message` to keep the gating logic in
+    one place.
+    """
+    options = entity._agent_options
+    enabled = options.get(CONF_ENABLE_MULTI_AGENT_TOOLS, DEFAULT_ENABLE_MULTI_AGENT_TOOLS)
+    if not enabled or not entity._sibling_agents:
+        return []
+    return [DELEGATE_MANY_TOOL_NAME, CRITIQUE_TOOL_NAME]
