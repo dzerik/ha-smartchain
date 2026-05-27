@@ -34,6 +34,7 @@ from .const import (
     CONF_CHAT_MODEL,
     CONF_CHAT_MODEL_USER,
     CONF_ENABLE_HISTORY_TOOL,
+    CONF_ENABLE_MULTI_AGENT_TOOLS,
     CONF_ENGINE,
     CONF_ENGINE_OPTIONS,
     CONF_FOLDER_ID,
@@ -48,6 +49,7 @@ from .const import (
     DEFAULT_CHAT_HISTORY,
     DEFAULT_CHAT_MODEL,
     DEFAULT_ENABLE_HISTORY_TOOL,
+    DEFAULT_ENABLE_MULTI_AGENT_TOOLS,
     DEFAULT_OLLAMA_BASE_URL,
     DEFAULT_PROCESS_BUILTIN_SENTENCES,
     DEFAULT_PROFANITY,
@@ -432,6 +434,24 @@ def _subentry_schema(
                         mode=SelectSelectorMode("list"),
                     ),
                 ),
+            }
+        )
+    # Multi-agent tools are only meaningful when the user has 2+ subentries.
+    entries = hass.config_entries.async_entries(DOMAIN) if hass else []
+    has_multiple_subentries = any(len(e.subentries or {}) > 1 for e in entries)
+    if has_multiple_subentries:
+        schema = schema.extend(
+            {
+                vol.Optional(
+                    CONF_ENABLE_MULTI_AGENT_TOOLS,
+                    description={
+                        "suggested_value": options.get(
+                            CONF_ENABLE_MULTI_AGENT_TOOLS,
+                            DEFAULT_ENABLE_MULTI_AGENT_TOOLS,
+                        )
+                    },
+                    default=DEFAULT_ENABLE_MULTI_AGENT_TOOLS,
+                ): bool,
             }
         )
     return schema
