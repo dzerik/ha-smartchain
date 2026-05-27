@@ -94,3 +94,15 @@ def test_tools_file_schema_requires_tools_key() -> None:
     """Top-level dict must have `tools` key."""
     with pytest.raises(vol.Invalid):
         TOOLS_FILE_SCHEMA({"functions": []})
+
+
+def test_tool_schema_unknown_action_type_has_clear_message() -> None:
+    """Unknown action types produce a 'unknown action type' message."""
+    raw = {
+        "name": "x",
+        "description": "x",
+        "parameters": {"type": "object", "properties": {}},
+        "action": {"type": "shell", "cmd": "rm -rf /"},
+    }
+    with pytest.raises(vol.Invalid, match="unknown action type"):
+        TOOL_SCHEMA(raw)

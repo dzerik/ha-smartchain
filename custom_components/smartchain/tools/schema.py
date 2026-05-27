@@ -40,7 +40,7 @@ _REST_ACTION = vol.Schema(
         vol.Required("method"): vol.In(["GET", "POST", "PUT", "DELETE"]),
         vol.Required("url"): _NON_EMPTY_STR,
         vol.Optional("headers", default=dict): {str: str},
-        vol.Optional("payload"): vol.Any(dict, None),
+        vol.Optional("payload", default=None): vol.Any(dict, None),
         vol.Optional("timeout", default=10): vol.All(int, vol.Range(min=1, max=120)),
         vol.Optional("response_format", default="text"): vol.In(["text", "json"]),
     }
@@ -54,7 +54,26 @@ _SCRIPT_ACTION = vol.Schema(
     }
 )
 
-_ACTION = vol.Any(_SERVICE_ACTION, _TEMPLATE_ACTION, _REST_ACTION, _SCRIPT_ACTION)
+_ACTION_TYPES = ["service", "template", "rest", "script"]
+
+
+def _validate_action(value: object) -> dict:
+    """Validate the action block with a clear error on unknown type."""
+    if not isinstance(value, dict) or "type" not in value:
+        raise vol.Invalid("action must be a dict with a 'type' key")
+    action_type = value["type"]
+    if action_type == "service":
+        return _SERVICE_ACTION(value)
+    if action_type == "template":
+        return _TEMPLATE_ACTION(value)
+    if action_type == "rest":
+        return _REST_ACTION(value)
+    if action_type == "script":
+        return _SCRIPT_ACTION(value)
+    raise vol.Invalid(f"unknown action type {action_type!r}; expected one of {_ACTION_TYPES}")
+
+
+_ACTION = _validate_action
 
 TOOL_SCHEMA = vol.Schema(
     {
