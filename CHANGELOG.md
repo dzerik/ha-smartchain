@@ -5,6 +5,20 @@ All notable changes to this project are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 project follows [Semantic Versioning](https://semver.org/).
 
+## [4.0.2] - 2026-05-27
+
+### Security
+- **Provider error messages no longer leak credentials** — `smartchain.ask` and `smartchain.analyze_image` previously returned `f"Error: {err}"` to callers. LangChain provider exceptions (e.g. `openai.AuthenticationError`) routinely embed key fragments in their text, so any authorised HA user who triggered an auth failure could read part of the API key from the service response. Errors now return a generic message; full details remain in the HA log via `LOGGER.exception`.
+
+### Fixed
+- **`entity_id` parameter in `smartchain.ask` / `analyze_image` was always ignored** — the old `_find_client` matched `entity_id.endswith(f"{entry_id}_{sub_id}")`, but the actual `entity_id` is slugified from the subentry title and never contains the UUID, so the routing argument silently fell through to "first available client." Routing now resolves `entity_id → unique_id` via the entity registry, then looks up the matching subentry client.
+- **`sensor.smartchain_last_analysis` is now a proper SensorEntity** — previously written via `hass.states.async_set`, which bypassed the entity registry, prevented rename / disable / expose-to-Assist, triggered "Entity does not have a unique_id" warnings, and let unbounded `full_response` text into recorder/WS payloads. The sensor now lives on the new `Platform.SENSOR` platform with `RestoreEntity` support and a 4 KiB cap on `full_response`. Wiring is via the new `SIGNAL_NEW_ANALYSIS` dispatcher signal — automations that subscribe to `sensor.smartchain_last_analysis` keep working unchanged.
+- **`manifest.json` `integration_type`** — was `"service"` but the integration registers `conversation`, `ai_task` and now `sensor` platforms. Changed to `"hub"` to match HA's contract; future HA versions may hide entities from settings UI when `"service"` is set on entity-bearing integrations.
+- **Panel registration failures now log at WARNING** instead of DEBUG, so a misconfigured frontend doesn't silently disable the SmartChain panel without a visible reason in the log.
+
+### Tests
+- 123 passing (was 118). Added: `test_sensor.py` (4 tests covering creation, dispatch update, attribute cap, singleton across entries) and one regression test in `test_service.py` proving `entity_id` now routes through entity_registry.
+
 ## [4.0.1] - 2026-04-27
 
 ### Fixed

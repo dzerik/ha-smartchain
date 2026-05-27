@@ -154,6 +154,9 @@ CONF_FOLDER_ID = "folder_id"
 MAX_TOOL_ITERATIONS = 10
 SUBENTRY_TYPE_CONVERSATION = "conversation"
 
+# Dispatcher signal: emitted by analyze_image, consumed by the Last Analysis sensor.
+SIGNAL_NEW_ANALYSIS = f"{DOMAIN}_new_analysis"
+
 CONF_ENABLE_HISTORY_TOOL = "enable_history_tool"
 DEFAULT_ENABLE_HISTORY_TOOL = False
 HISTORY_TOOL_NAME = "get_state_history"

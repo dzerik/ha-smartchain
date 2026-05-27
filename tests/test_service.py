@@ -3,10 +3,11 @@
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from langchain_core.messages import AIMessage
 
 from custom_components.smartchain import async_setup
-from custom_components.smartchain.const import DOMAIN
+from custom_components.smartchain.const import DOMAIN, SIGNAL_NEW_ANALYSIS
 
 from .conftest import MOCK_GIGACHAT_DATA
 
@@ -87,6 +88,42 @@ async def test_ask_service_with_subentry_client(hass: HomeAssistant):
     )
 
     assert result["response"] == "Sunny weather"
+
+
+async def test_find_client_routes_via_entity_registry(hass: HomeAssistant):
+    """`entity_id` parameter routes to the right subentry via entity_registry.
+
+    Regression for the bug where _find_client compared entity_id against
+    `{entry_id}_{sub_id}` with endswith(), which never matched real
+    slug-derived entity IDs.
+    """
+    from homeassistant.helpers import entity_registry as er
+
+    from custom_components.smartchain import _find_client
+
+    await async_setup(hass, {})
+
+    client_a = AsyncMock(name="agent_a")
+    client_b = AsyncMock(name="agent_b")
+
+    entry = MagicMock()
+    entry.entry_id = "abcd1234"
+    entry.domain = DOMAIN
+    entry.data = dict(MOCK_GIGACHAT_DATA)
+    entry.unique_id = "GigaChat"
+    entry.runtime_data = {"subA": client_a, "subB": client_b}
+    hass.config_entries._entries[entry.entry_id] = entry
+
+    ent_reg = er.async_get(hass)
+    ent_reg.async_get_or_create(
+        domain="conversation",
+        platform=DOMAIN,
+        unique_id="abcd1234_subB",
+        suggested_object_id="smartchain_assistant_b",
+    )
+
+    found = _find_client(hass, "conversation.smartchain_assistant_b")
+    assert found is client_b
 
 
 async def test_analyze_image_service_registered(hass: HomeAssistant):
@@ -182,7 +219,7 @@ async def test_analyze_image_camera_error(hass: HomeAssistant):
             return_response=True,
         )
 
-    assert "Error getting camera image" in result["response"]
+    assert "camera image" in result["response"].lower()
 
 
 def _setup_entry_with_client(hass, mock_client):
@@ -231,8 +268,8 @@ async def test_analyze_image_fires_event(hass: HomeAssistant):
     assert "timestamp" in events[0].data
 
 
-async def test_analyze_image_updates_sensor(hass: HomeAssistant):
-    """Test analyze_image updates sensor.smartchain_last_analysis."""
+async def test_analyze_image_dispatches_signal(hass: HomeAssistant):
+    """Test analyze_image dispatches SIGNAL_NEW_ANALYSIS for the sensor entity."""
     await async_setup(hass, {})
 
     mock_client = AsyncMock()
@@ -243,26 +280,36 @@ async def test_analyze_image_updates_sensor(hass: HomeAssistant):
     mock_image.content = b"\xff\xd8fake"
     mock_image.content_type = "image/jpeg"
 
-    with patch("custom_components.smartchain.async_get_image", return_value=mock_image):
-        await hass.services.async_call(
-            DOMAIN,
-            "analyze_image",
-            {"message": "Check garage", "camera_entity_id": "camera.garage"},
-            blocking=True,
-            return_response=True,
-        )
+    received: list[dict] = []
 
-    state = hass.states.get("sensor.smartchain_last_analysis")
-    assert state is not None
-    assert state.state == "Garage door is open"
-    assert state.attributes["camera_entity_id"] == "camera.garage"
-    assert state.attributes["message"] == "Check garage"
-    assert state.attributes["full_response"] == "Garage door is open"
-    assert "timestamp" in state.attributes
+    def _on_signal(d: dict) -> None:
+        received.append(d)
+
+    unsub = async_dispatcher_connect(hass, SIGNAL_NEW_ANALYSIS, _on_signal)
+
+    try:
+        with patch("custom_components.smartchain.async_get_image", return_value=mock_image):
+            await hass.services.async_call(
+                DOMAIN,
+                "analyze_image",
+                {"message": "Check garage", "camera_entity_id": "camera.garage"},
+                blocking=True,
+                return_response=True,
+            )
+        await hass.async_block_till_done()
+    finally:
+        unsub()
+
+    assert len(received) == 1
+    payload = received[0]
+    assert payload["response"] == "Garage door is open"
+    assert payload["camera_entity_id"] == "camera.garage"
+    assert payload["message"] == "Check garage"
+    assert "timestamp" in payload
 
 
 async def test_analyze_image_with_notify_returns_response(hass: HomeAssistant):
-    """Test analyze_image returns response and updates sensor when notify_entity is provided."""
+    """Test analyze_image returns response when notify_entity is provided."""
     await async_setup(hass, {})
 
     mock_client = AsyncMock()
@@ -286,12 +333,8 @@ async def test_analyze_image_with_notify_returns_response(hass: HomeAssistant):
             return_response=True,
         )
 
-    # Response is returned even though notify service may not exist
+    # Response is returned even though notify service may not exist.
     assert result["response"] == "Stranger at door"
-    # Sensor is still updated
-    state = hass.states.get("sensor.smartchain_last_analysis")
-    assert state is not None
-    assert state.state == "Stranger at door"
 
 
 async def test_analyze_image_notify_failure_does_not_break(hass: HomeAssistant):
@@ -319,8 +362,5 @@ async def test_analyze_image_notify_failure_does_not_break(hass: HomeAssistant):
             return_response=True,
         )
 
-    # Response should still be returned even if notify fails
+    # Response should still be returned even if notify fails.
     assert result["response"] == "All clear"
-    # Sensor should still be updated
-    state = hass.states.get("sensor.smartchain_last_analysis")
-    assert state is not None

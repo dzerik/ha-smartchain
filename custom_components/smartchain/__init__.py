@@ -10,6 +10,8 @@ from homeassistant.components.frontend import async_register_built_in_panel
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse
+from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.util import dt as dt_util
 from langchain_core.messages import HumanMessage
 
@@ -28,12 +30,13 @@ from .const import (
     DEFAULT_TEMPERATURE,
     DOMAIN,
     ID_GIGACHAT,
+    SIGNAL_NEW_ANALYSIS,
     SUBENTRY_TYPE_CONVERSATION,
 )
 
 LOGGER = logging.getLogger(__name__)
 
-PLATFORMS = [Platform.CONVERSATION]
+PLATFORMS = [Platform.CONVERSATION, Platform.SENSOR]
 
 try:
     from homeassistant.components import ai_task  # noqa: F401
@@ -92,21 +95,37 @@ SERVICE_ANALYZE_IMAGE_SCHEMA = vol.Schema(
     }
 )
 
+# Kept for backwards-compatibility with users who reference the entity_id from
+# automations / templates. The actual entity is registered via the SENSOR platform
+# in sensor.py.
 SENSOR_LAST_ANALYSIS = f"sensor.{DOMAIN}_last_analysis"
 EVENT_IMAGE_ANALYZED = f"{DOMAIN}_image_analyzed"
 
+_GENERIC_LLM_ERROR = "LLM request failed; see Home Assistant logs for details."
+_GENERIC_CAMERA_ERROR = "Failed to read camera image; see Home Assistant logs for details."
+
 
 def _find_client(hass: HomeAssistant, entity_id: str | None = None):
-    """Find a SmartChain LLM client, optionally matching entity_id."""
+    """Find a SmartChain LLM client, optionally routed by entity_id.
+
+    Routing uses entity_registry to resolve `entity_id` -> `unique_id`, which is
+    the only stable mapping back to a subentry / config entry (entity_id is
+    derived from the title slug, not the unique_id).
+    """
     if entity_id:
-        for entry in hass.config_entries.async_entries(DOMAIN):
-            if entry.runtime_data is None:
-                continue
-            if isinstance(entry.runtime_data, dict):
-                for sub_id, c in entry.runtime_data.items():
-                    uid = f"{entry.entry_id}_{sub_id}"
-                    if entity_id.endswith(uid):
-                        return c
+        ent_reg = er.async_get(hass)
+        ent_entry = ent_reg.async_get(entity_id)
+        if ent_entry and ent_entry.platform == DOMAIN and ent_entry.unique_id:
+            unique_id = ent_entry.unique_id
+            for entry in hass.config_entries.async_entries(DOMAIN):
+                if entry.runtime_data is None:
+                    continue
+                if isinstance(entry.runtime_data, dict):
+                    for sub_id, client in entry.runtime_data.items():
+                        if unique_id == f"{entry.entry_id}_{sub_id}":
+                            return client
+                elif unique_id == entry.entry_id:
+                    return entry.runtime_data
 
     for entry in hass.config_entries.async_entries(DOMAIN):
         if entry.runtime_data is None:
@@ -134,9 +153,12 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         try:
             result = await client.ainvoke([HumanMessage(content=message)])
             return {"response": result.content}
-        except Exception as err:
-            LOGGER.exception("SmartChain ask service error: %s", err)
-            return {"response": f"Error: {err}"}
+        except Exception:
+            # Provider exception messages may embed credentials (e.g. OpenAI's
+            # AuthenticationError includes the offending key fragment). Don't
+            # surface them to service callers — full detail is in the log.
+            LOGGER.exception("SmartChain ask service error")
+            return {"response": _GENERIC_LLM_ERROR}
 
     async def _handle_analyze_image(call: ServiceCall) -> ServiceResponse:
         """Handle smartchain.analyze_image service call."""
@@ -146,9 +168,9 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
         try:
             image = await async_get_image(hass, camera_entity_id, timeout=10)
-        except Exception as err:
-            LOGGER.error("Failed to get image from %s: %s", camera_entity_id, err)
-            return {"response": f"Error getting camera image: {err}"}
+        except Exception:
+            LOGGER.exception("Failed to get image from %s", camera_entity_id)
+            return {"response": _GENERIC_CAMERA_ERROR}
 
         encoded = base64.b64encode(image.content).decode("utf-8")
         mime_type = image.content_type or "image/jpeg"
@@ -166,9 +188,9 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         try:
             result = await client.ainvoke([HumanMessage(content=multimodal_content)])
             response_text = result.content
-        except Exception as err:
-            LOGGER.exception("SmartChain analyze_image error: %s", err)
-            return {"response": f"Error: {err}"}
+        except Exception:
+            LOGGER.exception("SmartChain analyze_image error")
+            return {"response": _GENERIC_LLM_ERROR}
 
         now = dt_util.utcnow().isoformat()
         event_data = {
@@ -179,19 +201,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         }
 
         hass.bus.async_fire(EVENT_IMAGE_ANALYZED, event_data)
-
-        hass.states.async_set(
-            SENSOR_LAST_ANALYSIS,
-            response_text[:255],
-            {
-                "camera_entity_id": camera_entity_id,
-                "message": message,
-                "full_response": response_text,
-                "timestamp": now,
-                "friendly_name": "SmartChain Last Analysis",
-                "icon": "mdi:camera-iris",
-            },
-        )
+        async_dispatcher_send(hass, SIGNAL_NEW_ANALYSIS, event_data)
 
         notify_entity = call.data.get("notify_entity")
         if notify_entity:
@@ -210,7 +220,9 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
         return {"response": response_text}
 
-    # Register sidebar panel (graceful — skip if frontend not available)
+    # Register sidebar panel (graceful — skip if frontend not available).
+    # Failures here aren't fatal but they do mean the user has no UI — bump from
+    # DEBUG to WARNING so the cause is actually visible in logs.
     try:
         panel_dir = Path(__file__).parent / "panel"
         from homeassistant.components.http import StaticPathConfig
@@ -237,8 +249,8 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
                 "version": panel_version,
             },
         )
-    except Exception:
-        LOGGER.debug("Could not register SmartChain panel (frontend not available)")
+    except Exception as err:
+        LOGGER.warning("Could not register SmartChain panel: %s", err)
 
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN]["find_client"] = _find_client
