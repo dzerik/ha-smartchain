@@ -27,6 +27,7 @@ from homeassistant.components.conversation.chat_log import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers import intent, llm, template
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.util import dt as dt_util
 from langchain_core.messages import (
     AIMessage,
     BaseMessage,
@@ -51,6 +52,7 @@ from .const import (
     DOMAIN,
     HISTORY_TOOL_NAME,
     MAX_TOOL_ITERATIONS,
+    MEMORY_TOOL_NAME,
     SUBENTRY_TYPE_CONVERSATION,
 )
 from .delegate_tool import (
@@ -61,6 +63,12 @@ from .history_tool import execute_history_tool, get_history_tool_definition
 from .skills import load_skills, skills_to_prompt
 from .tools import CustomTool, ToolRegistry
 from .tools.dispatcher import dispatch as dispatch_custom_tool
+from .tools.memory import MemoryStore
+from .tools.memory.ingest import ingest_conversation_turn
+from .tools.memory.search_tool import (
+    execute_memory_search,
+    get_memory_tool_definition,
+)
 
 LOGGER = logging.getLogger(__name__)
 PROMPT_CACHE_TTL = 30  # seconds
@@ -272,6 +280,11 @@ class SmartChainConversationEntity(ConversationEntity):
         if sibling_agents:
             tools.append(get_delegate_tool_definition(sibling_agents))
 
+        memory_store: MemoryStore | None = self.hass.data.get(DOMAIN, {}).get("memory")
+        memory_enabled = memory_store is not None and memory_store.is_available
+        if memory_enabled:
+            tools.append(get_memory_tool_definition())
+
         registry: ToolRegistry | None = self.hass.data.get(DOMAIN, {}).get("tools")
         custom_tools = self._collect_custom_tools(registry) if registry else []
         if custom_tools:
@@ -297,12 +310,15 @@ class SmartChainConversationEntity(ConversationEntity):
                 ]
 
             try:
+                _extra_external: frozenset[str] = (
+                    frozenset({MEMORY_TOOL_NAME}) if memory_enabled else frozenset()
+                )
                 async for _content in chat_log.async_add_delta_content_stream(
                     user_input.agent_id,
                     _async_langchain_stream(
                         bound_client,
                         messages,
-                        frozenset(custom_by_name),
+                        frozenset(custom_by_name) | _extra_external,
                     ),
                 ):
                     pass
@@ -320,6 +336,37 @@ class SmartChainConversationEntity(ConversationEntity):
             # Handle custom tool calls (marked as external)
             if history_enabled:
                 await _handle_history_tool_calls(self.hass, chat_log, user_input.agent_id)
+            if memory_enabled:
+                for content in list(chat_log.content):
+                    if not isinstance(content, AssistantContent) or not content.tool_calls:
+                        continue
+                    for tc in content.tool_calls:
+                        if tc.tool_name != MEMORY_TOOL_NAME or not tc.external:
+                            continue
+                        if any(
+                            isinstance(c, ToolResultContent) and c.tool_call_id == tc.id
+                            for c in chat_log.content
+                        ):
+                            continue
+                        args = tc.tool_args or {}
+                        try:
+                            result_text = await execute_memory_search(
+                                self.hass,
+                                query=args.get("query", ""),
+                                top_k=int(args.get("top_k", 5)),
+                                kind=str(args.get("kind", "any")),
+                            )
+                        except Exception:
+                            LOGGER.exception("search_memory dispatch failed")
+                            result_text = "Memory lookup failed; see logs."
+                        chat_log.async_add_assistant_content_without_tools(
+                            ToolResultContent(
+                                agent_id=user_input.agent_id,
+                                tool_call_id=tc.id,
+                                tool_name=tc.tool_name,
+                                tool_result=result_text,
+                            )
+                        )
             if sibling_agents:
                 rd = self.entry.runtime_data
                 clients = rd if isinstance(rd, dict) else {}
@@ -354,6 +401,29 @@ class SmartChainConversationEntity(ConversationEntity):
 
             if not chat_log.unresponded_tool_results:
                 break
+
+        if memory_enabled:
+            assistant_text = ""
+            for content in reversed(chat_log.content):
+                if isinstance(content, AssistantContent) and content.content:
+                    assistant_text = content.content
+                    break
+            if assistant_text:
+                self.hass.async_create_background_task(
+                    ingest_conversation_turn(
+                        memory_store,
+                        user_text=user_input.text or "",
+                        assistant_text=assistant_text,
+                        metadata={
+                            "kind": "conversation",
+                            "timestamp": dt_util.utcnow().isoformat(),
+                            "agent_id": user_input.agent_id,
+                            "subentry_id": self._subentry_id or "",
+                            "conversation_id": chat_log.conversation_id,
+                        },
+                    ),
+                    name="smartchain_memory_ingest",
+                )
 
         return conversation.async_get_result_from_chat_log(user_input, chat_log)
 
