@@ -163,7 +163,9 @@ async def _reload_registry(hass: HomeAssistant) -> int:
         manager.configure(result.mcp_servers)
         await manager.start()
 
-    return len(result.yaml_tools) + len(result.mcp_servers)
+    # MCP tools arrive asynchronously after start(); the count fired in the
+    # reload event therefore reflects only the synchronously-loaded YAML tools.
+    return len(result.yaml_tools)
 
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:

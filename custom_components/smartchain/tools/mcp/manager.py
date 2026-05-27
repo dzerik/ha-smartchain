@@ -62,7 +62,9 @@ class MCPManager:
         for name, state in self._servers.items():
             if not state.config.enabled:
                 continue
-            state.task = asyncio.create_task(self._run_server(name), name=f"smartchain_mcp_{name}")
+            state.task = self.hass.async_create_background_task(
+                self._run_server(name), name=f"smartchain_mcp_{name}"
+            )
 
     async def wait_idle(self, timeout: float = 5.0) -> None:
         """Wait until every server's initial connect attempt has completed.
@@ -70,9 +72,9 @@ class MCPManager:
         Used by tests to avoid sleeping; in production the connect tasks keep
         running in the background and reconnect on failure.
         """
-        deadline = asyncio.get_event_loop().time() + timeout
+        deadline = asyncio.get_running_loop().time() + timeout
         while True:
-            now = asyncio.get_event_loop().time()
+            now = asyncio.get_running_loop().time()
             if now > deadline:
                 return
             pending = [
@@ -85,12 +87,15 @@ class MCPManager:
             await asyncio.sleep(0.01)
 
     async def stop(self) -> None:
-        """Cancel all server tasks and close their clients."""
+        """Cancel all server tasks, await them, then close clients and deregister tools."""
         self._stopped = True
+        tasks = [s.task for s in self._servers.values() if s.task is not None]
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
         for state in self._servers.values():
-            if state.task is not None:
-                state.task.cancel()
-        for state in self._servers.values():
+            state.task = None
             if state.client is not None:
                 try:
                     await state.client.close()
@@ -191,5 +196,29 @@ class MCPManager:
             LOGGER.warning("MCP call %s:%s timed out", server, tool_name)
             return "Error: MCP call timed out"
         except Exception:  # noqa: BLE001
-            LOGGER.exception("MCP call %s:%s failed", server, tool_name)
+            LOGGER.exception("MCP call %s:%s failed; triggering reconnect", server, tool_name)
+            await self._reconnect_server(server)
             return f"Error: MCP server {server} is unavailable"
+
+    async def _reconnect_server(self, name: str) -> None:
+        """Tear down a server's state and re-schedule its connect task."""
+        state = self._servers.get(name)
+        if state is None or self._stopped:
+            return
+        if state.client is not None:
+            try:
+                await state.client.close()
+            except Exception:  # noqa: BLE001
+                LOGGER.exception("Error closing MCP client for %s during reconnect", name)
+            state.client = None
+        self._unregister_tools(state)
+        if state.task is not None and not state.task.done():
+            state.task.cancel()
+            try:
+                await state.task
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                pass
+        if not self._stopped and state.config.enabled:
+            state.task = self.hass.async_create_background_task(
+                self._run_server(name), name=f"smartchain_mcp_{name}"
+            )

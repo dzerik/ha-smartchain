@@ -4,6 +4,7 @@ import logging
 from contextlib import AsyncExitStack
 from typing import Any
 
+import httpx
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.sse import sse_client
 from mcp.client.stdio import stdio_client
@@ -16,6 +17,32 @@ except ImportError:  # pragma: no cover — present in mcp>=1.6
 from .config import HTTPConfig, MCPServerConfig, SSEConfig, StdioConfig
 
 LOGGER = logging.getLogger(__name__)
+
+
+def _insecure_httpx_factory(
+    headers: dict[str, str] | None = None,
+    timeout: httpx.Timeout | None = None,
+    auth: httpx.Auth | None = None,
+) -> httpx.AsyncClient:
+    """httpx client factory used when ``verify_ssl: false`` is set.
+
+    The mcp SDK accepts a ``httpx_client_factory`` callable matching the
+    signature of ``mcp.shared._httpx_utils.create_mcp_http_client``.
+    We use it to disable TLS certificate verification.
+    """
+    kwargs: dict[str, Any] = {
+        "follow_redirects": True,
+        "verify": False,
+    }
+    if timeout is None:
+        kwargs["timeout"] = httpx.Timeout(30, read=300)
+    else:
+        kwargs["timeout"] = timeout
+    if headers is not None:
+        kwargs["headers"] = headers
+    if auth is not None:
+        kwargs["auth"] = auth
+    return httpx.AsyncClient(**kwargs)
 
 
 class MCPClient:
@@ -57,23 +84,26 @@ class MCPClient:
             )
             return await stack.enter_async_context(stdio_client(params))
         if isinstance(cfg, SSEConfig):
-            return await stack.enter_async_context(
-                sse_client(
-                    cfg.url,
-                    headers=dict(cfg.headers) or None,
-                    timeout=cfg.timeout,
-                )
-            )
+            sse_kwargs: dict[str, Any] = {
+                "headers": dict(cfg.headers) or None,
+                "timeout": cfg.timeout,
+            }
+            if not cfg.verify_ssl:
+                # httpx_client_factory lets us disable TLS verification.
+                sse_kwargs["httpx_client_factory"] = _insecure_httpx_factory
+            return await stack.enter_async_context(sse_client(cfg.url, **sse_kwargs))
         if isinstance(cfg, HTTPConfig):
             if streamablehttp_client is None:
                 raise RuntimeError(
                     "Streamable HTTP transport is not available in the installed mcp SDK."
                 )
-            ctx = streamablehttp_client(
-                cfg.url,
-                headers=dict(cfg.headers) or None,
-                timeout=cfg.timeout,
-            )
+            http_kwargs: dict[str, Any] = {
+                "headers": dict(cfg.headers) or None,
+                "timeout": cfg.timeout,
+            }
+            if not cfg.verify_ssl:
+                http_kwargs["httpx_client_factory"] = _insecure_httpx_factory
+            ctx = streamablehttp_client(cfg.url, **http_kwargs)
             streams = await stack.enter_async_context(ctx)
             # streamablehttp_client returns (read, write, _) -- session needs only first two.
             return streams[0], streams[1]

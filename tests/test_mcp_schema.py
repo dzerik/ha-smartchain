@@ -82,3 +82,28 @@ def test_tools_file_schema_accepts_yaml_with_only_mcp_servers() -> None:
             ],
         }
     )
+
+
+def test_mcp_server_rejects_bad_prefix() -> None:
+    """`prefix` with invalid chars is rejected at schema time."""
+    with pytest.raises(vol.Invalid):
+        MCP_SERVER_SCHEMA(
+            {
+                "name": "fs",
+                "transport": "stdio",
+                "command": "npx",
+                "prefix": "my-server",  # hyphen not allowed
+            }
+        )
+
+
+def test_mcp_server_accepts_empty_prefix() -> None:
+    """Empty `prefix` means no prefix; that must still validate."""
+    MCP_SERVER_SCHEMA(
+        {
+            "name": "fs",
+            "transport": "stdio",
+            "command": "npx",
+            "prefix": "",
+        }
+    )

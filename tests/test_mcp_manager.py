@@ -136,3 +136,45 @@ async def test_connect_failure_triggers_reconnect_attempt(
 
         assert attempts["n"] >= 2
         await mgr.stop()
+
+
+async def test_call_tool_failure_triggers_reconnect(
+    hass: HomeAssistant,
+) -> None:
+    """A call_tool exception schedules a fresh connect task."""
+    with patch("custom_components.smartchain.tools.mcp.manager.MCPClient") as cls:
+        first = AsyncMock()
+        first.list_tools = AsyncMock(
+            return_value=[
+                {
+                    "name": "x",
+                    "description": "",
+                    "inputSchema": {"type": "object", "properties": {}},
+                }
+            ]
+        )
+        first.call_tool = AsyncMock(side_effect=RuntimeError("transport gone"))
+        first.close = AsyncMock()
+
+        second = AsyncMock()
+        second.list_tools = AsyncMock(return_value=[])
+        second.close = AsyncMock()
+
+        cls.side_effect = [first, second]
+
+        registry = ToolRegistry()
+        mgr = MCPManager(hass, registry)
+        mgr._initial_delay = 0.01
+        mgr.configure([StdioConfig(name="fs", command="npx")])
+        await mgr.start()
+        await mgr.wait_idle()
+
+        # First call surfaces "unavailable" AND triggers a fresh connect.
+        result = await mgr.call_tool("fs", "x", {})
+        assert "unavailable" in result.lower()
+
+        # Wait for the new task to settle.
+        await mgr.wait_idle(timeout=2.0)
+        assert cls.call_count == 2
+
+        await mgr.stop()

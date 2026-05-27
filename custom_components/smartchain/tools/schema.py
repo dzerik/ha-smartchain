@@ -88,7 +88,7 @@ _MCP_NAME = vol.All(str, vol.Match(MCP_NAME_PATTERN))
 
 _MCP_SHARED = {
     vol.Required("name"): _MCP_NAME,
-    vol.Optional("prefix"): vol.Any(None, str),
+    vol.Optional("prefix"): vol.Any(None, vol.All(str, vol.Any("", vol.Match(TOOL_NAME_PATTERN)))),
     vol.Optional("include_tools", default=list): [str],
     vol.Optional("exclude_tools", default=list): [str],
     vol.Optional("enabled", default=True): bool,
