@@ -84,7 +84,6 @@ async def execute_delegate_many_tool(
 
     unavailable: list[tuple[str, str]] = []
     tasks: list = []
-    task_names: list[str] = []
     for name in deduped:
         sub_id = agent_map.get(name)
         client = clients.get(sub_id) if sub_id else None
@@ -92,7 +91,6 @@ async def execute_delegate_many_tool(
             unavailable.append((name, "Error: agent unavailable"))
             continue
         tasks.append(_invoke_with_timeout(client, name, query))
-        task_names.append(name)
 
     if not tasks and not unavailable:
         return "No matching sibling agents available."
@@ -103,8 +101,7 @@ async def execute_delegate_many_tool(
         return "No matching sibling agents available."
 
     results: list[tuple[str, str]] = []
-    if tasks:
-        results = list(await asyncio.gather(*tasks))
+    results = list(await asyncio.gather(*tasks))
     results.extend(unavailable)
 
     # Preserve original order
