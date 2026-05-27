@@ -35,4 +35,6 @@ dev = [
     "home-assistant-intents>=2026.3.3",
     "jsonschema>=4.0",
     "mcp>=1.0,<2",
+    "chromadb>=0.5,<1",
+    "langchain-chroma>=0.1,<1",
 ]
