@@ -1,0 +1,22 @@
+tools:
+  - name: ping
+    description: Reply with pong
+    parameters:
+      type: object
+      properties: {}
+    action:
+      type: template
+      value_template: pong
+  - name: turn_on_light
+    description: Turn on a light
+    parameters:
+      type: object
+      properties:
+        area: { type: string }
+      required: [area]
+    action:
+      type: service
+      domain: light
+      service: turn_on
+      target:
+        area_id: "{{ area }}"
