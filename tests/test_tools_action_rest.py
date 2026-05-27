@@ -74,3 +74,22 @@ async def test_rest_http_error_returns_error_string(hass: HomeAssistant) -> None
         result = await execute_rest(hass, action, {})
 
     assert "500" in result
+
+
+async def test_rest_timeout_returns_error_string(hass: HomeAssistant) -> None:
+    """A TimeoutError from the request is reported as an LLM-readable string."""
+    action = RESTAction(method="GET", url="https://example.com", timeout=1)
+
+    def raise_timeout(*args, **kwargs):
+        raise TimeoutError
+
+    session = MagicMock()
+    session.request = MagicMock(side_effect=raise_timeout)
+
+    with patch(
+        "custom_components.smartchain.tools.actions.rest_action.async_get_clientsession",
+        return_value=session,
+    ):
+        result = await execute_rest(hass, action, {})
+
+    assert result == "Error: request timed out"
