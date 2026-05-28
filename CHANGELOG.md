@@ -5,6 +5,14 @@ All notable changes to this project are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 project follows [Semantic Versioning](https://semver.org/).
 
+## [4.4.1] - 2026-05-28
+
+### Fixed
+- **Installation failure on HA OS / Container** — `chromadb` and `langchain-chroma` were declared in `manifest.json` requirements but HA's pip-install step could not resolve them on many setups (native deps, sqlite version, onnxruntime), causing `Setup failed for custom integration 'smartchain': Requirements for smartchain not found: ['chromadb>=0.5,<1', 'langchain-chroma>=0.1,<1']`. Both are removed from the manifest. `langchain-chroma` was never actually imported — pure dead requirement. `chromadb` becomes an optional runtime dependency: the memory subsystem self-disables with a clear log line if `chromadb` is missing. Users who want long-term memory install it manually with `pip install chromadb` inside the HA Python environment.
+
+### Tests
+- 289 passing (unchanged).
+
 ## [4.4.0] - 2026-05-27
 
 ### Added

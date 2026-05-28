@@ -72,7 +72,15 @@ class MemoryStore:
         try:
             import chromadb  # noqa: PLC0415
             from chromadb.config import Settings  # noqa: PLC0415
-
+        except ImportError:
+            LOGGER.warning(
+                "chromadb is not installed; SmartChain memory subsystem disabled. "
+                "Install it with `pip install chromadb` in the Home Assistant "
+                "environment to enable long-term memory."
+            )
+            self.is_available = False
+            return
+        try:
             self._client = chromadb.PersistentClient(
                 path=str(self.persist_dir),
                 settings=Settings(anonymized_telemetry=False),

@@ -370,6 +370,14 @@ mcp_servers:
 
 Сохранять диалоги и (опционально) HA logbook как embeddings в локальной Chroma векторной БД. LLM может вспоминать их через встроенный tool `search_memory`.
 
+> **Требуется опциональная установка.** `chromadb` НЕ объявлен в `manifest.json` — у него нативные зависимости (sqlite ≥ 3.35, onnxruntime), которые pip-шаг HA не всегда может разрешить. Для memory нужно вручную установить в Python-окружение HA:
+>
+> - **HA Container / Core:** `docker exec homeassistant pip install chromadb`
+> - **HA OS / Supervised:** добавить custom requirement через SSH add-on или [Pyscript](https://github.com/custom-components/pyscript), затем restart HA
+> - **venv install:** `<venv>/bin/pip install chromadb`
+>
+> Без установленного `chromadb` блок `memory:` в `tools.yaml` тихо no-op'ится (одна строка WARNING в логе при старте). Все остальные фичи работают.
+
 ### 9.1. Включение в `tools.yaml`
 
 ```yaml

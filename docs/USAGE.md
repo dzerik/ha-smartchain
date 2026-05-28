@@ -370,6 +370,14 @@ The same `allowed_tools` filter from §7.5 applies — list MCP tools by their *
 
 Persist conversation turns and (opt-in) HA logbook entries as embeddings in a local Chroma vector database. The LLM can recall them through a built-in `search_memory` tool.
 
+> **Optional install required.** `chromadb` is NOT declared in `manifest.json` because it has native dependencies (sqlite ≥ 3.35, onnxruntime) that HA's pip step cannot always resolve. To use memory you must install it manually inside the HA Python environment:
+>
+> - **HA Container / Core:** `docker exec homeassistant pip install chromadb`
+> - **HA OS / Supervised:** add a custom requirement via SSH add-on or use a [Pyscript](https://github.com/custom-components/pyscript) shell, then restart HA
+> - **venv install:** `<venv>/bin/pip install chromadb`
+>
+> Without `chromadb` installed, the `memory:` block in `tools.yaml` is silently no-op'd (a single WARNING log line at startup). All other features keep working.
+
 ### 9.1. Enable in `tools.yaml`
 
 ```yaml
