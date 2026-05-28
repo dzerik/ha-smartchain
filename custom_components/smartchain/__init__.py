@@ -11,6 +11,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.util import dt as dt_util
@@ -53,6 +54,10 @@ from .const import (
 LOGGER = logging.getLogger(__name__)
 
 PLATFORMS = [Platform.CONVERSATION, Platform.SENSOR]
+
+# SmartChain has no YAML-only configuration entry point — it is set up exclusively
+# via config flow. Declaring this satisfies hassfest's CONFIG_SCHEMA check.
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 try:
     from homeassistant.components import ai_task  # noqa: F401
