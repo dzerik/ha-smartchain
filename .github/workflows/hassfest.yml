@@ -1,0 +1,17 @@
+name: Hassfest
+
+on:
+  push:
+    branches:
+      - main
+      - rc-*
+  pull_request:
+
+jobs:
+  validate:
+    name: Hassfest validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Hassfest validation
+        uses: home-assistant/actions/hassfest@master
