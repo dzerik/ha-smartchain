@@ -38,9 +38,11 @@ Supported providers:
 - **Multiple agents** — different models and prompts per provider (sub-entries)
 - **Streaming responses** — real-time token-by-token output
 - **Device control** — Assist API (tool calling): lights, switches, locks, climate
-- **Multi-agent** — task delegation between agents
-- **State history** — LLM analyzes past events and trends
-- **MCP servers** — connect external tools via Model Context Protocol
+- **Multi-agent orchestration** *(v4.4.0+)* — `ask_agents` parallel fan-out across up to 5 siblings, `critique_response` second-opinion review, `ask_agent` single delegation
+- **Custom tools from YAML** *(v4.1.0+)* — declarative LLM-callable tools with four action types (`service`, `template`, `rest`, `script`); per-subentry `allowed_tools` filter
+- **MCP client** *(v4.2.0+)* — connect to remote MCP servers (`stdio` / `sse` / `http`) — filesystem, GitHub, brave-search, etc.; per-server auto-reconnect
+- **Long-term memory / RAG** *(v4.3.0+)* — Chroma vector store; `search_memory` LLM tool; conversation + (opt-in) HA logbook ingest; pluggable embeddings (Ollama / OpenAI / GigaChat / Yandex)
+- **State history** — `get_state_history` tool for past device states
 - **Vision** — camera image analysis via multimodal models
 - **Skill system** — loadable YAML files with additional knowledge
 - **Prompt caching** — token savings on repeated requests
@@ -50,6 +52,8 @@ Supported providers:
 **Services**
 - **`smartchain.ask`** — send a message to LLM from automations (Telegram, Slack, etc.)
 - **`smartchain.analyze_image`** — camera snapshot → multimodal LLM → response
+- **`smartchain.reload_tools`** *(v4.1.0+)* — re-read `tools.yaml`, restart MCP connections, rebuild memory subsystem atomically
+- **`smartchain.clear_memory`** *(v4.3.0+)* — delete stored memories filtered by `kind` and/or `agent_id`
 - **AI Task entity** — structured data generation for automations
 
 **SmartChain AI Panel**
@@ -102,51 +106,24 @@ Click **SmartChain AI** in the Home Assistant sidebar to open the camera analysi
 
 ## Documentation
 
-Full user guide with all features:
-**[docs/USER_GUIDE.md](docs/USER_GUIDE.md)**
+Full user guide with all features and running examples:
+- **English:** [docs/USAGE.md](docs/USAGE.md)
+- **Русский:** [docs/USAGE-ru.md](docs/USAGE-ru.md)
 
-Topics:
-- Multiple agents and multi-agent delegation
-- Device control (Assist API)
-- State history tool
-- MCP servers
-- Vision (camera image analysis)
-- Skill system (YAML)
-- SmartChain AI Panel (camera analysis)
-- `smartchain.ask` service (Telegram, Slack)
-- `smartchain.analyze_image` service
-- AI Task for automations
-- System prompt customization
-- Parameter and model reference
+Covers: providers and credentials · subentry options · all services with examples · built-in conversation tools (Assist API, history, delegate, multi-agent, search_memory) · custom tools from YAML (service / template / rest / script) · MCP client (stdio / SSE / HTTP) · long-term memory (Chroma + 4 embedding providers) · AI Task entity · sidebar panel · skills system · troubleshooting.
 
-## Long-term Memory (v4.3.0+)
+## What's new
 
-SmartChain can persist conversation turns and (opt-in) HA logbook events into a
-local Chroma vector database and let the LLM recall them through a built-in
-`search_memory` tool. Enable it by adding a `memory:` block to
-`/config/smartchain/tools.yaml`:
+| Version | Highlights |
+|---|---|
+| **v4.4.0** | Multi-agent orchestration — `ask_agents` parallel fan-out + `critique_response` second-opinion review |
+| v4.3.0 | Long-term memory / RAG — Chroma vector store, `search_memory` tool, conversation + logbook ingest |
+| v4.2.0 | MCP client — connect to remote MCP servers via stdio / SSE / HTTP with auto-reconnect |
+| v4.1.0 | Custom tools from YAML — declarative LLM tools (service / template / rest / script) |
+| v4.0.2 | Security fixes, proper `Last Analysis` SensorEntity, correct `integration_type` |
+| v4.0.0 | Major refactor — focused on conversation, AI Task and vision |
 
-```yaml
-memory:
-  provider: ollama                # ollama | openai | gigachat | yandex
-  model: nomic-embed-text
-  base_url: http://localhost:11434
-  retention_days: 90
-  ingest_conversation: true
-  ingest_logbook:
-    enabled: false
-    domains: [light, climate, lock]
-    poll_interval_minutes: 60
-```
-
-- `provider`: where embeddings come from. `ollama` is local and free (default).
-  Cloud providers (`openai`, `gigachat`, `yandex`) require `api_key`.
-- `retention_days: 0` disables the daily cleanup task.
-- The `smartchain.clear_memory` service deletes stored memories filtered by
-  `kind` and/or `agent_id`.
-
-When the `memory:` block is absent, the feature stays disabled and the
-integration behaves exactly as in 4.2.0.
+Full release notes: [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 

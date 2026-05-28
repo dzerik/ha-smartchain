@@ -40,9 +40,11 @@ SmartChain — кастомная интеграция Home Assistant, пред�
 - **Несколько агентов** — разные модели и промпты на одном провайдере (sub-entries)
 - **Потоковые ответы** — токен за токеном в реальном времени
 - **Управление устройствами** — Assist API (tool calling): свет, розетки, замки, климат
-- **Мульти-агент** — делегирование задач между агентами
-- **История состояний** — LLM анализирует прошлые события и тренды
-- **MCP-серверы** — подключение внешних инструментов через Model Context Protocol
+- **Мульти-агент оркестрация** *(v4.4.0+)* — `ask_agents` параллельный fan-out до 5 sibling-агентов, `critique_response` ревью второго мнения, `ask_agent` одиночная делегация
+- **Свои tools в YAML** *(v4.1.0+)* — декларативные LLM-инструменты с четырьмя типами действий (`service`, `template`, `rest`, `script`); per-subentry фильтр `allowed_tools`
+- **MCP-клиент** *(v4.2.0+)* — подключение к удалённым MCP-серверам (`stdio` / `sse` / `http`) — filesystem, GitHub, brave-search и др.; автореконнект с exponential backoff
+- **Долговременная память / RAG** *(v4.3.0+)* — Chroma vector store; встроенный tool `search_memory`; ингест диалогов + (опционально) HA logbook; pluggable embeddings (Ollama / OpenAI / GigaChat / Yandex)
+- **История состояний** — tool `get_state_history` для прошлых состояний устройств
 - **Распознавание изображений** — анализ камер через мультимодальные модели
 - **Система навыков** — загружаемые YAML-файлы с дополнительными знаниями
 - **Кэширование промптов** — экономия токенов на повторных запросах
@@ -52,19 +54,16 @@ SmartChain — кастомная интеграция Home Assistant, пред�
 **Сервисы**
 - **`smartchain.ask`** — отправить сообщение LLM из автоматизации (Telegram, Slack и др.)
 - **`smartchain.analyze_image`** — снимок с камеры → мультимодальный LLM → ответ
-- **`smartchain.generate_automation`** — текстовое описание → YAML автоматизации/скрипта/сцены/blueprint
-- **`smartchain.deploy_automation`** — деплой сгенерированного YAML в конфигурацию HA
-- **`smartchain.list_yaml`** — список существующих автоматизаций, скриптов, сцен или blueprint
-- **`smartchain.get_yaml`** — получить YAML-исходник любого существующего элемента HA
+- **`smartchain.reload_tools`** *(v4.1.0+)* — перечитать `tools.yaml`, перезапустить MCP-соединения, атомарно пересобрать память
+- **`smartchain.clear_memory`** *(v4.3.0+)* — удалить сохранённые memories с фильтром по `kind` и/или `agent_id`
 - **AI Task** — генерация структурированных данных в автоматизациях
 
 **Панель SmartChain AI**
-- Боковая панель с вкладками «Генерация» и «Анализ камеры»
-- Создание автоматизаций, скриптов, сцен и blueprint из текстового описания
-- Редактирование и улучшение существующего YAML с помощью AI
-- Встроенный выбор сущностей и агента
-- Валидация YAML (структура, entity ID, сервисы) перед деплоем
-- Просмотр и загрузка существующих элементов HA в редактор
+- Боковая панель с вкладкой анализа камеры
+- Выбор любой камеры HA и постановка вопроса LLM на естественном языке о снимке
+- Результат публикуется в событие `smartchain_image_analyzed` и сенсор `sensor.smartchain_last_analysis`
+
+> **Примечание:** Фича генерации YAML-автоматизаций / скриптов / сцен / blueprint была удалена в v4.0.0. См. [CHANGELOG.md](CHANGELOG.md) для деталей миграции.
 
 ## Установка
 
@@ -103,30 +102,30 @@ SmartChain — кастомная интеграция Home Assistant, пред�
 **Настройки > Голосовые ассистенты > Добавить** — выберите SmartChain как conversation agent.
 
 ### 5. Открытие панели SmartChain AI
-Нажмите **SmartChain AI** в боковой панели Home Assistant для доступа к панели генерации автоматизаций.
+Нажмите **SmartChain AI** в боковой панели Home Assistant — откроется панель анализа камеры.
 
 ![SmartChain AI Panel - Analyze Camera](img_1.png)
 
 ## Документация
 
-Подробное руководство по всем возможностям:
-**[docs/USER_GUIDE.md](docs/USER_GUIDE.md)**
+Полное руководство со всеми возможностями и работающими примерами:
+- **English:** [docs/USAGE.md](docs/USAGE.md)
+- **Русский:** [docs/USAGE-ru.md](docs/USAGE-ru.md)
 
-Темы:
-- Несколько агентов и мульти-агент
-- Управление устройствами (Assist API)
-- История состояний
-- MCP-серверы
-- Распознавание изображений
-- Система навыков (YAML)
-- Панель SmartChain AI (генерация автоматизаций, анализ камер)
-- Сервис `smartchain.ask` (Telegram, Slack)
-- Сервис `smartchain.analyze_image`
-- Сервис `smartchain.generate_automation`
-- Деплой и валидация сгенерированного YAML
-- Редактирование и улучшение существующих автоматизаций
-- AI Task для автоматизаций
-- Настройка промптов
+Темы: провайдеры и креды · опции subentries · все сервисы с примерами · встроенные tools для conversation (Assist API, history, delegate, multi-agent, search_memory) · свои tools в YAML (service / template / rest / script) · MCP-клиент (stdio / SSE / HTTP) · долговременная память (Chroma + 4 провайдера embeddings) · AI Task · sidebar-панель · система навыков · troubleshooting.
+
+## Что нового
+
+| Версия | Что добавлено |
+|---|---|
+| **v4.4.0** | Multi-agent оркестрация — `ask_agents` параллельный fan-out + `critique_response` ревью второго мнения |
+| v4.3.0 | Долговременная память / RAG — Chroma vector store, tool `search_memory`, ингест диалогов + logbook |
+| v4.2.0 | MCP-клиент — подключение к удалённым MCP-серверам через stdio / SSE / HTTP с автореконнектом |
+| v4.1.0 | Свои tools в YAML — декларативные LLM-инструменты (service / template / rest / script) |
+| v4.0.2 | Security-фиксы, корректный `Last Analysis` SensorEntity, правильный `integration_type` |
+| v4.0.0 | Major-рефакторинг — фокус на conversation, AI Task и vision |
+
+Полный список изменений: [CHANGELOG.md](CHANGELOG.md).
 - Справочник параметров и моделей
 
 ## Лицензия
