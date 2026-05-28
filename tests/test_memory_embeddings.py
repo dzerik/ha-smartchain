@@ -69,8 +69,17 @@ async def test_embed_query_raises_timeout_when_slow(hass: HomeAssistant) -> None
 
     cfg = MemoryConfig(provider="ollama", model="nomic-embed-text")
 
+    # Use a threading.Event-cancellable sleep so the executor thread exits
+    # cleanly during pytest teardown. Plain time.sleep(10) leaves the thread
+    # running and raises PytestUnhandledThreadExceptionWarning on teardown.
+    import threading
+
+    cancel = threading.Event()
+
     def _slow_embed(text: str) -> list[float]:
-        time.sleep(10)  # would be way too long
+        # 200ms is well above the patched 1ms timeout but short enough that
+        # the thread exits before pytest teardown noticeably runs.
+        cancel.wait(timeout=0.2)
         return [0.0]
 
     fake_inner = MagicMock()
@@ -85,3 +94,5 @@ async def test_embed_query_raises_timeout_when_slow(hass: HomeAssistant) -> None
         with patch.object(emb_mod, "MEMORY_EMBED_TIMEOUT_SECONDS", 0.001):
             with pytest.raises((TimeoutError, asyncio.TimeoutError)):
                 await provider.embed_query("slow")
+        # Release the executor thread so it exits before teardown
+        cancel.set()
