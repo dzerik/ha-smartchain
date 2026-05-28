@@ -4,6 +4,7 @@
   "codeowners": ["@dzerik"],
   "config_flow": true,
   "dependencies": ["conversation"],
+  "after_dependencies": ["http", "logbook", "recorder"],
   "documentation": "https://github.com/dzerik/ha-smartchain",
   "homekit": {},
   "integration_type": "hub",

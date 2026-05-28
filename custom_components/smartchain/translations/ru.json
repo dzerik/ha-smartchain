@@ -85,6 +85,7 @@
   },
   "config_subentries": {
     "conversation": {
+      "entry_type": "Conversation-агент",
       "initiate_flow": {
         "user": "Добавить агента",
         "reconfigure": "Изменить агента"
