@@ -1,6 +1,6 @@
 [project]
 name = "ha-smartchain"
-version = "4.4.1"
+version = "4.4.2"
 description = "SmartChain — multi-provider LLM conversation agent for Home Assistant"
 readme = "README.md"
 license = "MIT"
@@ -23,18 +23,17 @@ select = ["E", "F", "W", "I", "UP"]
 dev = [
     "pytest-homeassistant-custom-component>=0.13",
     "ruff>=0.15",
-    "langchain-core>=0.3,<1",
-    "langchain-gigachat>=0.3.0",
-    "langchain-openai>=0.3.0,<1",
-    "langchain-community>=0.3.0,<0.4",
-    "langchain-anthropic>=0.3.0,<1",
-    "langchain-ollama>=0.3.0,<1",
+    "langchain-core>=0.3,<2",
+    "langchain-gigachat>=0.3.0,<1",
+    "langchain-openai>=0.3.0,<2",
+    "langchain-community>=0.3.0,<0.5",
+    "langchain-anthropic>=0.3.0,<2",
+    "langchain-ollama>=0.3.0,<2",
     "gigachat>=0.1",
     "PyTurboJPEG>=2.0",
     "hassil>=3.5.0",
     "home-assistant-intents>=2026.3.3",
     "jsonschema>=4.0",
     "mcp>=1.0,<2",
-    "chromadb>=0.5,<1",
-    "langchain-chroma>=0.1,<1",
+    "chromadb>=0.5,<2",
 ]

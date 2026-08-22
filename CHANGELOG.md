@@ -13,6 +13,31 @@ project follows [Semantic Versioning](https://semver.org/).
 ### Tests
 - 289 passing (unchanged).
 
+## [4.4.2] - 2026-05-28
+
+### Changed
+- **LangChain 1.x** — bumped all `langchain-*` constraints to allow the 1.x release line (`<2`):
+  - `langchain-core` — pinned via transitive graph, now 1.x
+  - `langchain-openai`, `langchain-anthropic`, `langchain-ollama` — `>=0.3,<2`
+  - `langchain-community` — `>=0.3,<0.5`
+  - `langchain-gigachat` — `>=0.3,<1` (0.5.x line now supports `langchain-core>=1`)
+- **GitHub Actions bumps** — `astral-sh/setup-uv@v5 → v7`, `sigstore/gh-action-sigstore-python@v3.0.1 → v3.3.0`.
+- `yandexcloud` pin changed from `==0.295.0` to `>=0.295.0` for pip flexibility.
+
+### Fixed
+- Two config-flow tests (`test_openai_full_flow`, `test_deepseek_full_flow`) leaked sockets on teardown because `langchain-openai 1.x` performs an eager HTTP check in the `ChatOpenAI` constructor. Both now use the `mock_get_client` fixture.
+
+### Tests
+- 289 passing (same count, updated for langchain 1.x behaviour). Closes stale dependabot PRs #1, #3, #4, #5, #6, #7, #8, #9.
+
+## [4.4.1] - 2026-05-28
+
+### Fixed
+- **Install fix** — `chromadb` and `langchain-chroma` were listed in `manifest.json` requirements, but HA's pip step cannot always resolve `chromadb` (native deps: sqlite ≥ 3.35, onnxruntime, etc.), which blocked the whole integration from loading. Both removed from the manifest:
+  - `langchain-chroma` was a dead requirement — nowhere in the codebase.
+  - `chromadb` remains a lazy import inside `MemoryStore._init_collection`. `ImportError` is now caught with a clear WARNING and install hint; the memory subsystem self-disables cleanly while the rest of the integration keeps working.
+- USAGE docs updated with the manual `pip install chromadb` step for users who want long-term memory.
+
 ## [4.4.0] - 2026-05-27
 
 ### Added

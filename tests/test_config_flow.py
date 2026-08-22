@@ -123,7 +123,11 @@ async def test_yandexgpt_full_flow(hass: HomeAssistant, mock_validate_client: As
     assert result["data"][CONF_ENGINE] == ID_YANDEX_GPT
 
 
-async def test_openai_full_flow(hass: HomeAssistant, mock_validate_client: AsyncMock) -> None:
+async def test_openai_full_flow(
+    hass: HomeAssistant,
+    mock_validate_client: AsyncMock,
+    mock_get_client: AsyncMock,
+) -> None:
     """Test full OpenAI config flow creates entry."""
     result = await hass.config_entries.flow.async_init(
         DOMAIN, context={"source": config_entries.SOURCE_USER}
@@ -276,7 +280,11 @@ async def test_ollama_full_flow(hass: HomeAssistant, mock_validate_client: Async
     assert result["data"][CONF_BASE_URL] == DEFAULT_OLLAMA_BASE_URL
 
 
-async def test_deepseek_full_flow(hass: HomeAssistant, mock_validate_client: AsyncMock) -> None:
+async def test_deepseek_full_flow(
+    hass: HomeAssistant,
+    mock_validate_client: AsyncMock,
+    mock_get_client: AsyncMock,
+) -> None:
     """Test full DeepSeek config flow creates entry."""
     result = await hass.config_entries.flow.async_init(
         DOMAIN, context={"source": config_entries.SOURCE_USER}
