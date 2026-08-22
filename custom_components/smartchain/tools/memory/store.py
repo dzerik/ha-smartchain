@@ -1,19 +1,22 @@
-"""MemoryStore (Chroma facade) + text-chunking helpers."""
+"""MemoryStore — embeddings, chunking and orchestration over a VectorBackend."""
 
+import asyncio
 import logging
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
-from pathlib import Path
 from typing import Any
 
 from homeassistant.core import HomeAssistant
 
 from ...const import (
+    MEMORY_BACKEND_TIMEOUT_SECONDS,
     MEMORY_CHUNK_OVERLAP,
     MEMORY_CHUNK_SIZE,
+    MEMORY_DIM_PROBE_TEXT,
     MEMORY_MAX_TEXT_LEN,
 )
+from .backends import BackendInitError, VectorBackend, VectorRecord
 
 LOGGER = logging.getLogger(__name__)
 
@@ -50,49 +53,50 @@ class MemorySnippet:
 
 
 class MemoryStore:
-    """Persistent vector store backed by ChromaDB.
+    """Owns embeddings and chunking; delegates vector storage to a backend."""
 
-    All Chroma calls are blocking; this class wraps them via
-    `hass.async_add_executor_job` to keep the HA loop responsive.
-    """
-
-    _COLLECTION = "smartchain_memory"
-
-    def __init__(self, hass: HomeAssistant, embeddings: Any, persist_dir: Path) -> None:
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        embeddings: Any,
+        backend: VectorBackend,
+    ) -> None:
         self.hass = hass
         self.embeddings = embeddings
-        self.persist_dir = persist_dir
-        self.persist_dir.mkdir(parents=True, exist_ok=True)
-        self._client = None
-        self._collection = None
+        self.backend = backend
         self.is_available = False
-        self._init_collection()
+        self.dim: int | None = None
 
-    def _init_collection(self) -> None:
+    async def async_setup(self) -> None:
+        """Probe the embedding dimension and initialise the backend.
+
+        Any failure here disables the store rather than raising: one broken
+        store must not prevent the others from starting.
+        """
         try:
-            import chromadb  # noqa: PLC0415
-            from chromadb.config import Settings  # noqa: PLC0415
-        except ImportError:
-            LOGGER.warning(
-                "chromadb is not installed; SmartChain memory subsystem disabled. "
-                "Install it with `pip install chromadb` in the Home Assistant "
-                "environment to enable long-term memory."
+            probe = await self.embeddings.embed_query(MEMORY_DIM_PROBE_TEXT)
+        except Exception:  # noqa: BLE001
+            LOGGER.exception(
+                "SmartChain memory: the embeddings provider did not answer the "
+                "dimension probe; this store is disabled"
             )
             self.is_available = False
             return
+
+        dim = len(probe)
         try:
-            self._client = chromadb.PersistentClient(
-                path=str(self.persist_dir),
-                settings=Settings(anonymized_telemetry=False),
-            )
-            self._collection = self._client.get_or_create_collection(self._COLLECTION)
-            self.is_available = True
-        except Exception:  # noqa: BLE001
-            LOGGER.exception(
-                "Failed to initialise Chroma persistent client at %s; memory subsystem disabled",
-                self.persist_dir,
-            )
+            await self.backend.initialize(dim)
+        except BackendInitError as err:
+            LOGGER.error("SmartChain memory backend %s disabled: %s", self.backend.name, err)
             self.is_available = False
+            return
+        except Exception:  # noqa: BLE001
+            LOGGER.exception("SmartChain memory backend %s failed to start", self.backend.name)
+            self.is_available = False
+            return
+
+        self.dim = dim
+        self.is_available = True
 
     async def add(
         self,
@@ -106,26 +110,31 @@ class MemoryStore:
         chunks = chunk_text(text)
         if not chunks:
             return []
-        embeddings = await self.embeddings.embed_documents(chunks)
-        ids: list[str] = []
-        metadatas: list[dict[str, Any]] = []
-        for index, _chunk in enumerate(chunks):
+
+        vectors = await self.embeddings.embed_documents(chunks)
+        records: list[VectorRecord] = []
+        for index, chunk in enumerate(chunks):
             this_id = (
                 doc_id
                 if doc_id is not None and len(chunks) == 1
                 else f"{doc_id or uuid.uuid4().hex}_chunk{index}"
             )
-            ids.append(this_id)
-            metadatas.append({**metadata, "chunk_index": index})
+            records.append(
+                VectorRecord(
+                    doc_id=this_id,
+                    vector=vectors[index],
+                    text=chunk,
+                    metadata={**metadata, "chunk_index": index},
+                )
+            )
 
-        await self.hass.async_add_executor_job(
-            self._collection.upsert,
-            ids,
-            embeddings,
-            metadatas,
-            chunks,
-        )
-        return ids
+        try:
+            async with asyncio.timeout(MEMORY_BACKEND_TIMEOUT_SECONDS):
+                await self.backend.upsert(records)
+        except Exception:  # noqa: BLE001 — runtime, store stays up
+            LOGGER.exception("memory upsert failed on backend %s", self.backend.name)
+            return []
+        return [r.doc_id for r in records]
 
     async def search(
         self,
@@ -135,55 +144,43 @@ class MemoryStore:
     ) -> list[MemorySnippet]:
         if not self.is_available:
             return []
-        query_vec = await self.embeddings.embed_query(query)
+        try:
+            vector = await self.embeddings.embed_query(query)
+            async with asyncio.timeout(MEMORY_BACKEND_TIMEOUT_SECONDS):
+                hits = await self.backend.query(vector, top_k, where)
+        except Exception:  # noqa: BLE001 — runtime, store stays up
+            LOGGER.exception("memory search failed on backend %s", self.backend.name)
+            return []
 
-        def _run() -> Any:
-            return self._collection.query(
-                query_embeddings=[query_vec],
-                n_results=top_k,
-                where=where,
+        return [
+            MemorySnippet(
+                text=hit.text,
+                score=1.0 - hit.distance,
+                metadata=hit.metadata,
             )
-
-        result = await self.hass.async_add_executor_job(_run)
-        snippets: list[MemorySnippet] = []
-        documents = (result.get("documents") or [[]])[0]
-        metadatas = (result.get("metadatas") or [[]])[0]
-        distances = (result.get("distances") or [[]])[0] or [0.0] * len(documents)
-        for text, meta, dist in zip(documents, metadatas, distances, strict=False):
-            snippets.append(
-                MemorySnippet(text=text, score=1.0 - float(dist), metadata=dict(meta or {}))
-            )
-        return snippets
+            for hit in hits
+        ]
 
     async def delete_older_than(self, cutoff: datetime) -> int:
         if not self.is_available:
             return 0
-        cutoff_iso = cutoff.isoformat()
-
-        def _run() -> int:
-            existing = self._collection.get(include=["metadatas"])
-            ids = existing.get("ids") or []
-            metas = existing.get("metadatas") or []
-            to_delete = [
-                ident
-                for ident, meta in zip(ids, metas, strict=False)
-                if (meta or {}).get("timestamp", "") < cutoff_iso
-            ]
-            if to_delete:
-                self._collection.delete(ids=to_delete)
-            return len(to_delete)
-
-        return await self.hass.async_add_executor_job(_run)
+        try:
+            async with asyncio.timeout(MEMORY_BACKEND_TIMEOUT_SECONDS):
+                return await self.backend.delete_older_than(cutoff.isoformat())
+        except Exception:  # noqa: BLE001
+            LOGGER.exception("memory retention failed on backend %s", self.backend.name)
+            return 0
 
     async def clear(self, where: dict[str, Any] | None = None) -> int:
         if not self.is_available:
             return 0
+        try:
+            async with asyncio.timeout(MEMORY_BACKEND_TIMEOUT_SECONDS):
+                return await self.backend.delete_where(where)
+        except Exception:  # noqa: BLE001
+            LOGGER.exception("memory clear failed on backend %s", self.backend.name)
+            return 0
 
-        def _run() -> int:
-            existing = self._collection.get(where=where, include=["metadatas"])
-            ids = existing.get("ids") or []
-            if ids:
-                self._collection.delete(ids=ids)
-            return len(ids)
-
-        return await self.hass.async_add_executor_job(_run)
+    async def close(self) -> None:
+        self.is_available = False
+        await self.backend.close()
