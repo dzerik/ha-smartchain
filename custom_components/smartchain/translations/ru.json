@@ -127,6 +127,34 @@
       "error": {
         "model_required": "Выберите модель из списка либо задайте свою"
       }
+    },
+    "embeddings": {
+      "entry_type": "Связка embeddings",
+      "initiate_flow": {
+        "user": "Добавить связку embeddings",
+        "reconfigure": "Изменить связку embeddings"
+      },
+      "step": {
+        "user": {
+          "title": "Добавить связку embeddings",
+          "data": {
+            "name": "Название",
+            "model": "Модель эмбеддингов",
+            "model_user": "Своё имя модели (оставьте пустым, чтобы взять из списка выше)"
+          }
+        },
+        "reconfigure": {
+          "title": "Изменить связку embeddings",
+          "data": {
+            "name": "Название",
+            "model": "Модель эмбеддингов",
+            "model_user": "Своё имя модели (оставьте пустым, чтобы взять из списка выше)"
+          }
+        }
+      },
+      "error": {
+        "model_required": "Выберите модель или введите своё имя"
+      }
     }
   }
 }

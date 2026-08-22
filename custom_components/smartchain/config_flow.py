@@ -25,8 +25,9 @@ from homeassistant.helpers.selector import (
 )
 from httpx import ConnectError
 
-from .client_util import async_fetch_models, validate_client
+from .client_util import async_fetch_models, supports, validate_client
 from .const import (
+    CAPABILITY_EMBEDDINGS,
     CONF_ALLOWED_TOOLS,
     CONF_API_KEY,
     CONF_BASE_URL,
@@ -66,6 +67,7 @@ from .const import (
     ID_OPENAI,
     ID_YANDEX_GPT,
     SUBENTRY_TYPE_CONVERSATION,
+    SUBENTRY_TYPE_EMBEDDINGS,
     UNIQUE_ID,
     UNIQUE_ID_GIGACHAT,
 )
@@ -217,8 +219,14 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     def async_get_supported_subentry_types(
         cls, config_entry: ConfigEntry
     ) -> dict[str, type[ConfigSubentryFlow]]:
-        """Return supported subentry types."""
-        return {SUBENTRY_TYPE_CONVERSATION: ConversationSubentryFlow}
+        """Return supported subentry types, filtered by provider capability."""
+        types: dict[str, type[ConfigSubentryFlow]] = {
+            SUBENTRY_TYPE_CONVERSATION: ConversationSubentryFlow,
+        }
+        engine = config_entry.data.get(CONF_ENGINE) or ID_GIGACHAT
+        if supports(engine, CAPABILITY_EMBEDDINGS):
+            types[SUBENTRY_TYPE_EMBEDDINGS] = EmbeddingsSubentryFlow
+        return types
 
 
 class ConversationSubentryFlow(ConfigSubentryFlow):
@@ -455,3 +463,101 @@ def _subentry_schema(
             }
         )
     return schema
+
+
+def _embeddings_subentry_schema(
+    models: list[str], defaults: dict[str, Any] | None = None
+) -> vol.Schema:
+    """Schema for an embeddings binding: a name and a model, nothing more.
+
+    An embeddings subentry has no prompt, no tools and no temperature — it
+    exists purely to bind provider credentials to one embedding model.
+    """
+    current = defaults or {}
+    return vol.Schema(
+        {
+            vol.Required(
+                "name",
+                description={"suggested_value": current.get("name", "")},
+            ): str,
+            vol.Optional(
+                "model",
+                description={"suggested_value": current.get("model")},
+                default="",
+            ): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    mode=SelectSelectorMode("dropdown"),
+                    options=models,
+                ),
+            ),
+            vol.Optional(
+                "model_user",
+                description={"suggested_value": current.get("model_user")},
+            ): str,
+        }
+    )
+
+
+class EmbeddingsSubentryFlow(ConfigSubentryFlow):
+    """Handle adding or reconfiguring an embeddings binding."""
+
+    async def async_step_user(self, user_input: dict[str, Any] | None = None) -> SubentryFlowResult:
+        """Add a new embeddings binding."""
+        entry = self._get_entry()
+        engine = entry.data.get(CONF_ENGINE, ID_GIGACHAT)
+        models = await async_fetch_models(
+            self.hass, engine, entry.data, purpose=CAPABILITY_EMBEDDINGS
+        )
+        schema = _embeddings_subentry_schema(models)
+
+        if user_input is not None:
+            return self._create(user_input, schema)
+        return self.async_show_form(step_id="user", data_schema=schema)
+
+    async def async_step_reconfigure(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Reconfigure an existing embeddings binding."""
+        entry = self._get_entry()
+        subentry = self._get_reconfigure_subentry()
+        engine = entry.data.get(CONF_ENGINE, ID_GIGACHAT)
+        models = await async_fetch_models(
+            self.hass, engine, entry.data, purpose=CAPABILITY_EMBEDDINGS
+        )
+        defaults = {**subentry.data, "name": subentry.title}
+        schema = _embeddings_subentry_schema(models, defaults)
+
+        if user_input is not None:
+            model = _resolve_embeddings_model(user_input)
+            if not model:
+                return self.async_show_form(
+                    step_id="reconfigure",
+                    data_schema=schema,
+                    errors={"base": "model_required"},
+                )
+            return self.async_update_and_abort(
+                entry,
+                subentry,
+                title=user_input["name"],
+                data={"model": model, "model_user": user_input.get("model_user", "")},
+            )
+        return self.async_show_form(step_id="reconfigure", data_schema=schema)
+
+    def _create(self, user_input: dict[str, Any], schema: vol.Schema) -> SubentryFlowResult:
+        model = _resolve_embeddings_model(user_input)
+        if not model:
+            return self.async_show_form(
+                step_id="user", data_schema=schema, errors={"base": "model_required"}
+            )
+        return self.async_create_entry(
+            title=user_input["name"],
+            data={"model": model, "model_user": user_input.get("model_user", "")},
+        )
+
+
+def _resolve_embeddings_model(user_input: dict[str, Any]) -> str:
+    """A non-empty custom name wins over the dropdown selection."""
+    custom = (user_input.get("model_user") or "").strip()
+    if custom:
+        return custom
+    return (user_input.get("model") or "").strip()

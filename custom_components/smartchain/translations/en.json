@@ -127,6 +127,34 @@
       "error": {
         "model_required": "Either Model or Custom Model required"
       }
+    },
+    "embeddings": {
+      "entry_type": "Embeddings binding",
+      "initiate_flow": {
+        "user": "Add embeddings binding",
+        "reconfigure": "Reconfigure embeddings binding"
+      },
+      "step": {
+        "user": {
+          "title": "Add embeddings binding",
+          "data": {
+            "name": "Name",
+            "model": "Embedding model",
+            "model_user": "Custom model name (leave empty to use the list above)"
+          }
+        },
+        "reconfigure": {
+          "title": "Reconfigure embeddings binding",
+          "data": {
+            "name": "Name",
+            "model": "Embedding model",
+            "model_user": "Custom model name (leave empty to use the list above)"
+          }
+        }
+      },
+      "error": {
+        "model_required": "Select a model or enter a custom name"
+      }
     }
   }
 }
