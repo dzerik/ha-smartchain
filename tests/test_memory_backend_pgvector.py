@@ -83,6 +83,18 @@ async def test_initialize_creates_extension_table_and_index(
     assert "USING hnsw" in statements
 
 
+async def test_initialize_creates_valid_json_default(
+    hass: HomeAssistant, fake_asyncpg, fake_pool
+) -> None:
+    _pool, conn = fake_pool
+    be = PgVectorBackend(hass, dsn="postgresql://x/y", table="t")
+    await be.initialize(3)
+
+    statements = " ".join(call.args[0] for call in conn.execute.call_args_list)
+    assert "DEFAULT '{}'::jsonb" in statements
+    assert "{{" not in statements
+
+
 async def test_initialize_falls_back_when_hnsw_unsupported(
     hass: HomeAssistant, fake_asyncpg, fake_pool
 ) -> None:
@@ -122,6 +134,7 @@ async def test_connection_failure_raises_without_leaking_dsn(
             await be.initialize(768)
     assert "hunter2" not in str(exc.value)
     assert "secret-host" not in str(exc.value)
+    assert exc.value.__cause__ is None
     assert be.is_available is False
 
 

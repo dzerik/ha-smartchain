@@ -60,13 +60,13 @@ class PgVectorBackend:
 
         try:
             self._pool = await asyncpg.create_pool(self._dsn, min_size=1, max_size=4)
-        except Exception as err:  # noqa: BLE001 — cause is logged, message is scrubbed
+        except Exception:  # noqa: BLE001 — cause is logged, message is scrubbed
             self.is_available = False
             LOGGER.exception("pgvector could not connect")
             raise BackendInitError(
                 "pgvector could not connect to the configured database; see the "
                 "Home Assistant log for details."
-            ) from err
+            ) from None
 
         try:
             async with self._pool.acquire() as conn:
@@ -90,7 +90,7 @@ class PgVectorBackend:
                     f"CREATE TABLE IF NOT EXISTS {self.table} ("
                     "doc_id text PRIMARY KEY, "
                     "text text NOT NULL, "
-                    "metadata jsonb NOT NULL DEFAULT '{{}}'::jsonb, "
+                    "metadata jsonb NOT NULL DEFAULT '{}'::jsonb, "
                     f"embedding vector({dim}), "
                     "timestamp timestamptz)"
                 )
@@ -107,13 +107,13 @@ class PgVectorBackend:
                     )
         except BackendInitError:
             raise
-        except Exception as err:  # noqa: BLE001
+        except Exception:  # noqa: BLE001
             self.is_available = False
             LOGGER.exception("pgvector schema setup failed")
             raise BackendInitError(
                 "pgvector could not create its table or extension. The database "
                 "user likely lacks privileges; see the Home Assistant log."
-            ) from err
+            ) from None
 
         self._dim = dim
         self.is_available = True
