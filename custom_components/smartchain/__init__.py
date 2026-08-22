@@ -24,6 +24,7 @@ from .tools.loader import LoaderError, load_tools_file
 from .tools.mcp import MCPManager
 from .tools.memory import create_embeddings
 from .tools.memory import store as _memory_store_mod
+from .tools.memory.backends import BackendInitError, create_backend
 from .tools.memory.embeddings import EmbeddingsConfigError
 from .tools.memory.ingest import MemoryLogbookPoller
 from .tools.memory.retention import RetentionTask
@@ -174,8 +175,8 @@ async def _build_memory(
 ) -> tuple[MemoryStore | None, RetentionTask | None, MemoryLogbookPoller | None]:
     """Construct MemoryStore + auxiliary tasks for a MemoryConfig.
 
-    Returns (None, None, None) when cfg is None/disabled or the embeddings
-    provider could not be constructed.
+    Returns (None, None, None) when cfg is None/disabled, the embeddings
+    provider could not be constructed, or the backend refused to start.
     """
     if cfg is None or not cfg.enabled:
         return None, None, None
@@ -185,9 +186,14 @@ async def _build_memory(
         LOGGER.error("SmartChain memory disabled: %s", err)
         return None, None, None
 
-    store = await hass.async_add_executor_job(
-        _memory_store_mod.MemoryStore, hass, embeddings, _memory_persist_dir(hass)
-    )
+    try:
+        backend = create_backend(hass, cfg.backend, "default", _memory_persist_dir(hass))
+    except BackendInitError as err:
+        LOGGER.error("SmartChain memory disabled: %s", err)
+        return None, None, None
+
+    store = _memory_store_mod.MemoryStore(hass, embeddings, backend)
+    await store.async_setup()
     if not store.is_available:
         return None, None, None
 

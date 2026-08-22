@@ -59,3 +59,23 @@ def test_tools_file_schema_accepts_memory_block() -> None:
 
 def test_tools_file_schema_without_memory_block_still_validates() -> None:
     TOOLS_FILE_SCHEMA({"tools": []})
+
+
+def test_memory_accepts_backend_block() -> None:
+    MEMORY_SCHEMA(
+        {
+            "provider": "ollama",
+            "model": "nomic-embed-text",
+            "backend": {"type": "pgvector", "dsn": "postgresql://x/y"},
+        }
+    )
+
+
+def test_memory_rejects_unknown_backend_type() -> None:
+    with pytest.raises(vol.Invalid):
+        MEMORY_SCHEMA({"provider": "ollama", "model": "x", "backend": {"type": "milvus"}})
+
+
+def test_memory_backend_defaults_to_sqlite_numpy() -> None:
+    result = MEMORY_SCHEMA({"provider": "ollama", "model": "x"})
+    assert result["backend"]["type"] == "sqlite_numpy"

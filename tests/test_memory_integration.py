@@ -25,6 +25,8 @@ def fake_memory_store():
     stub.search = AsyncMock(return_value=[])  # tests can override after setup
     stub.clear = AsyncMock(return_value=0)
     stub.delete_older_than = AsyncMock(return_value=0)
+    stub.async_setup = AsyncMock()
+    stub.close = AsyncMock()
     with patch(
         "custom_components.smartchain.tools.memory.store.MemoryStore",
         return_value=stub,

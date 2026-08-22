@@ -11,7 +11,7 @@ from homeassistant.util.yaml import load_yaml as ha_load_yaml
 
 from ..const import RESERVED_TOOL_NAMES
 from .mcp.config import HTTPConfig, MCPServerConfig, SSEConfig, StdioConfig
-from .memory.config import LogbookConfig, MemoryConfig
+from .memory.config import BackendConfig, LogbookConfig, MemoryConfig
 from .model import (
     CustomTool,
     RESTAction,
@@ -178,5 +178,15 @@ def _memory_from_validated(validated: dict) -> MemoryConfig | None:
             enabled=logbook_raw.get("enabled", False),
             domains=list(logbook_raw.get("domains") or []),
             poll_interval_minutes=logbook_raw.get("poll_interval_minutes", 60),
+        ),
+        backend=BackendConfig(
+            type=(raw.get("backend") or {}).get("type", "sqlite_numpy"),
+            path=(raw.get("backend") or {}).get("path"),
+            dsn=(raw.get("backend") or {}).get("dsn"),
+            table=(raw.get("backend") or {}).get("table"),
+            url=(raw.get("backend") or {}).get("url"),
+            api_key=(raw.get("backend") or {}).get("api_key"),
+            collection=(raw.get("backend") or {}).get("collection"),
+            verify_ssl=(raw.get("backend") or {}).get("verify_ssl", True),
         ),
     )

@@ -4,6 +4,7 @@ import voluptuous as vol
 
 from ..const import (
     MCP_NAME_PATTERN,
+    MEMORY_BACKEND_TYPES,
     MEMORY_DEFAULT_LOGBOOK_POLL_MINUTES,
     MEMORY_LOGBOOK_POLL_MAX_MINUTES,
     MEMORY_LOGBOOK_POLL_MIN_MINUTES,
@@ -167,6 +168,20 @@ _LOGBOOK_SCHEMA = vol.Schema(
 )
 
 
+_BACKEND_SCHEMA = vol.Schema(
+    {
+        vol.Optional("type", default="sqlite_numpy"): vol.In(MEMORY_BACKEND_TYPES),
+        vol.Optional("path"): vol.Any(None, str),
+        vol.Optional("dsn"): vol.Any(None, str),
+        vol.Optional("table"): vol.Any(None, str),
+        vol.Optional("url"): vol.Any(None, str),
+        vol.Optional("api_key"): vol.Any(None, str),
+        vol.Optional("collection"): vol.Any(None, str),
+        vol.Optional("verify_ssl", default=True): bool,
+    }
+)
+
+
 MEMORY_SCHEMA = vol.Schema(
     {
         vol.Required("provider"): vol.In(MEMORY_PROVIDERS),
@@ -177,6 +192,7 @@ MEMORY_SCHEMA = vol.Schema(
         vol.Optional("retention_days", default=90): vol.All(int, vol.Range(min=0, max=3650)),
         vol.Optional("ingest_conversation", default=True): bool,
         vol.Optional("ingest_logbook", default=dict): _LOGBOOK_SCHEMA,
+        vol.Optional("backend", default=dict): _BACKEND_SCHEMA,
     }
 )
 

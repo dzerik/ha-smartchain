@@ -43,6 +43,8 @@ async def test_clear_memory_fires_event(hass: HomeAssistant, tools_dir: Path, mo
     class _StubStore:
         is_available = True
         clear = AsyncMock(return_value=4)
+        async_setup = AsyncMock()
+        close = AsyncMock()
 
     monkeypatch.setattr(store_mod, "MemoryStore", lambda *a, **kw: _StubStore())
 
