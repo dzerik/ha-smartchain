@@ -215,3 +215,17 @@ MEMORY_DEFAULT_PG_TABLE = "smartchain_memory"
 CAPABILITY_CHAT = "chat"
 CAPABILITY_EMBEDDINGS = "embeddings"
 SUBENTRY_TYPE_EMBEDDINGS = "embeddings"
+
+# Static fallback embedding-model lists, used when a provider's API is
+# unreachable or has no list endpoint (YandexGPT).
+EMBEDDING_MODELS_GIGACHAT = ["", "Embeddings", "EmbeddingsGigaR"]
+EMBEDDING_MODELS_YANDEX_GPT = ["", "text-search-doc", "text-search-query"]
+EMBEDDING_MODELS_OPENAI = ["", "text-embedding-3-small", "text-embedding-3-large"]
+EMBEDDING_MODELS_OLLAMA = ["", "nomic-embed-text", "mxbai-embed-large", "bge-m3"]
+
+ENGINE_EMBEDDING_MODELS = {
+    UNIQUE_ID_GIGACHAT: EMBEDDING_MODELS_GIGACHAT,
+    UNIQUE_ID_YANDEX_GPT: EMBEDDING_MODELS_YANDEX_GPT,
+    UNIQUE_ID_OPENAI: EMBEDDING_MODELS_OPENAI,
+    UNIQUE_ID_OLLAMA: EMBEDDING_MODELS_OLLAMA,
+}

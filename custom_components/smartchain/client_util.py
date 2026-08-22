@@ -1,4 +1,5 @@
 import logging
+import re
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -166,17 +167,47 @@ async def get_client(
     return client
 
 
+# Ollama's /api/tags does not report purpose, so names are classified by a
+# heuristic covering the embedding families in common use.
+_OLLAMA_EMBEDDING_HINT = re.compile(r"embed|bge-|gte-|e5-|minilm", re.IGNORECASE)
+
+
+def is_embedding_model(engine: str, name: str) -> bool:
+    """Whether `name` is an embedding model for `engine`."""
+    if engine == ID_OPENAI:
+        return name.startswith("text-embedding-")
+    if engine == ID_GIGACHAT:
+        return name.startswith("Embeddings")
+    if engine == ID_OLLAMA:
+        return bool(_OLLAMA_EMBEDDING_HINT.search(name))
+    if engine == ID_YANDEX_GPT:
+        return name.startswith("text-search-")
+    return False
+
+
 async def async_fetch_models(
     hass: HomeAssistant,
     engine: str,
     data: dict,
+    purpose: str = CAPABILITY_CHAT,
 ) -> list[str]:
-    """Fetch available models from provider API.
+    """Fetch available models from provider API, filtered by purpose.
 
-    Returns a list of model names with empty string first (for 'custom' option).
-    Falls back to static ENGINE_MODELS on any error.
+    Returns a list of model names with an empty string first (the 'custom'
+    option). Falls back to the static list for `purpose` on any error.
     """
-    from .const import ENGINE_MODELS, UNIQUE_ID
+    from .const import (
+        ENGINE_EMBEDDING_MODELS,
+        ENGINE_MODELS,
+        UNIQUE_ID,
+    )
+
+    want_embeddings = purpose == CAPABILITY_EMBEDDINGS
+    static = (
+        ENGINE_EMBEDDING_MODELS.get(UNIQUE_ID.get(engine, ""), [""])
+        if want_embeddings
+        else ENGINE_MODELS.get(UNIQUE_ID.get(engine, ""), [""])
+    )
 
     try:
         if engine == ID_OLLAMA:
@@ -194,15 +225,16 @@ async def async_fetch_models(
         elif engine == ID_GIGACHAT:
             models = await _fetch_gigachat_models(hass, data)
         else:
-            # YandexGPT — no standard list API, use static
-            return ENGINE_MODELS.get(UNIQUE_ID.get(engine, ""), [""])
+            # YandexGPT has no list endpoint.
+            return static
 
+        models = [m for m in models if is_embedding_model(engine, m) == want_embeddings]
         if models:
             return [""] + models
         raise ValueError("Empty model list")
     except Exception:
-        LOGGER.debug("Failed to fetch models for %s, using static list", engine)
-        return ENGINE_MODELS.get(UNIQUE_ID.get(engine, ""), [""])
+        LOGGER.debug("Failed to fetch %s models for %s, using static list", purpose, engine)
+        return static
 
 
 async def _fetch_ollama_models(hass: HomeAssistant, data: dict) -> list[str]:
