@@ -104,7 +104,15 @@ class QdrantBackend:
                 .get("vectors", {})
                 .get("size")
             )
-            if existing is not None and int(existing) != dim:
+            if existing is None:
+                self.is_available = False
+                raise BackendInitError(
+                    f"Qdrant collection {self.collection} exists but has no "
+                    "readable vector size; the store may be corrupted. Clear this "
+                    "store with smartchain.clear_memory, then call "
+                    "smartchain.reload_tools."
+                )
+            if int(existing) != dim:
                 self.is_available = False
                 raise BackendInitError(
                     f"collection {self.collection} stores {existing}-dimensional "
@@ -112,9 +120,9 @@ class QdrantBackend:
                     "store with smartchain.clear_memory, then call "
                     "smartchain.reload_tools."
                 )
-        else:
+        elif status == 404:
             try:
-                await self._request(
+                create_status, _body = await self._request(
                     "PUT",
                     f"/collections/{self.collection}",
                     {"vectors": {"size": dim, "distance": "Cosine"}},
@@ -126,6 +134,19 @@ class QdrantBackend:
                     "Could not create the Qdrant collection; see the Home "
                     "Assistant log for details."
                 ) from err
+
+            if create_status < 200 or create_status >= 300:
+                self.is_available = False
+                raise BackendInitError(
+                    f"Qdrant collection creation failed with status {create_status}; "
+                    "see the Home Assistant log for details."
+                )
+        else:
+            self.is_available = False
+            raise BackendInitError(
+                f"Qdrant server returned status {status} when querying collection "
+                f"{self.collection}; see the Home Assistant log for details."
+            )
 
         self._dim = dim
         self.is_available = True

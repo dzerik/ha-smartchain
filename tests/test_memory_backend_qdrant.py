@@ -59,6 +59,15 @@ def session_and_calls():
 
     def _request(method, url, **kwargs):
         calls.append((method, url, kwargs.get("json")))
+        # Extract path from URL
+        if "http://q:6333" in url:
+            path = url.split("http://q:6333", 1)[1]
+        else:
+            path = url
+        # Try method+path first, then suffix-only
+        method_path = f"{method} {path}"
+        if method_path in responses:
+            return responses[method_path]
         for suffix, resp in responses.items():
             if url.endswith(suffix):
                 return resp
@@ -73,7 +82,8 @@ async def test_initialize_creates_collection_with_dimension(
     hass: HomeAssistant, session_and_calls
 ) -> None:
     session, calls, responses = session_and_calls
-    responses["/collections/mem"] = _response(404, {})
+    responses["GET /collections/mem"] = _response(404, {})
+    responses["PUT /collections/mem"] = _response(200, {"result": {}})
 
     with patch(
         "custom_components.smartchain.tools.memory.backends.qdrant.async_get_clientsession",
@@ -90,7 +100,7 @@ async def test_initialize_creates_collection_with_dimension(
 
 async def test_initialize_dimension_mismatch_raises(hass: HomeAssistant, session_and_calls) -> None:
     session, _calls, responses = session_and_calls
-    responses["/collections/mem"] = _response(
+    responses["GET /collections/mem"] = _response(
         200, {"result": {"config": {"params": {"vectors": {"size": 768}}}}}
     )
 
@@ -106,7 +116,8 @@ async def test_initialize_dimension_mismatch_raises(hass: HomeAssistant, session
 
 async def test_api_key_travels_in_header(hass: HomeAssistant, session_and_calls) -> None:
     session, _calls, responses = session_and_calls
-    responses["/collections/mem"] = _response(404, {})
+    responses["GET /collections/mem"] = _response(404, {})
+    responses["PUT /collections/mem"] = _response(200, {"result": {}})
 
     with patch(
         "custom_components.smartchain.tools.memory.backends.qdrant.async_get_clientsession",
@@ -123,7 +134,8 @@ async def test_upsert_maps_doc_id_and_keeps_original_in_payload(
     hass: HomeAssistant, session_and_calls
 ) -> None:
     session, calls, responses = session_and_calls
-    responses["/collections/mem"] = _response(404, {})
+    responses["GET /collections/mem"] = _response(404, {})
+    responses["PUT /collections/mem"] = _response(200, {"result": {}})
 
     with patch(
         "custom_components.smartchain.tools.memory.backends.qdrant.async_get_clientsession",
@@ -145,8 +157,9 @@ async def test_query_translates_filter_and_maps_score(
     hass: HomeAssistant, session_and_calls
 ) -> None:
     session, calls, responses = session_and_calls
-    responses["/collections/mem"] = _response(404, {})
-    responses["/points/search"] = _response(
+    responses["GET /collections/mem"] = _response(404, {})
+    responses["PUT /collections/mem"] = _response(200, {"result": {}})
+    responses["POST /collections/mem/points/search"] = _response(
         200,
         {
             "result": [
@@ -174,7 +187,7 @@ async def test_query_translates_filter_and_maps_score(
     # Qdrant returns cosine similarity; the Protocol wants distance.
     assert hits[0].distance == pytest.approx(0.25)
 
-    search = [c for c in calls if c[1].endswith("/points/search")][0]
+    search = [c for c in calls if c[1].endswith("/collections/mem/points/search")][0]
     assert search[2]["filter"] == {"must": [{"key": "kind", "match": {"value": "logbook"}}]}
 
 
@@ -194,3 +207,58 @@ async def test_unreachable_server_raises_without_leaking_api_key(
 
     assert "hunter2" not in str(exc.value)
     assert be.is_available is False
+
+
+async def test_initialize_raises_on_http_error_status(
+    hass: HomeAssistant, session_and_calls
+) -> None:
+    """Initialize must raise on HTTP error status (401/500), not silently continue."""
+    session, _calls, responses = session_and_calls
+    responses["GET /collections/mem"] = _response(401, {})
+
+    with patch(
+        "custom_components.smartchain.tools.memory.backends.qdrant.async_get_clientsession",
+        return_value=session,
+    ):
+        be = QdrantBackend(hass, "http://q:6333", "mem", "wrong-key", True)
+        with pytest.raises(BackendInitError) as exc:
+            await be.initialize(3)
+
+    assert "wrong-key" not in str(exc.value)
+    assert be.is_available is False
+
+
+async def test_runtime_failure_leaves_backend_available(
+    hass: HomeAssistant, session_and_calls
+) -> None:
+    """Runtime failures (query/upsert) must leave backend marked available."""
+    import aiohttp
+
+    session, _calls, responses = session_and_calls
+    responses["GET /collections/mem"] = _response(404, {})
+    responses["PUT /collections/mem"] = _response(200, {"result": {}})
+
+    # Store the original request function
+    original_request = session.request.side_effect
+
+    def _fail_on_search(method, url, **kwargs):
+        # Fail only on search requests
+        if url.endswith("/points/search"):
+            raise aiohttp.ClientError("network timeout")
+        # Use the original fixture logic for other requests
+        return original_request(method, url, **kwargs)
+
+    session.request = MagicMock(side_effect=_fail_on_search)
+
+    with patch(
+        "custom_components.smartchain.tools.memory.backends.qdrant.async_get_clientsession",
+        return_value=session,
+    ):
+        be = QdrantBackend(hass, "http://q:6333", "mem", None, True)
+        await be.initialize(3)
+        assert be.is_available is True
+
+        hits = await be.query([1.0, 0.0, 0.0], top_k=5, where=None)
+        assert hits == []
+        # Backend must remain available after a transient query failure
+        assert be.is_available is True
