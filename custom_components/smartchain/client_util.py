@@ -8,6 +8,8 @@ from langchain_gigachat import GigaChat
 from langchain_openai import ChatOpenAI
 
 from .const import (
+    CAPABILITY_CHAT,
+    CAPABILITY_EMBEDDINGS,
     CONF_API_KEY,
     CONF_BASE_URL,
     CONF_ENGINE,
@@ -29,6 +31,23 @@ from .const import (
 )
 
 LOGGER = logging.getLogger(__name__)
+
+# Which providers can serve which purpose. DeepSeek exposes no embeddings
+# endpoint; Anthropic directs users to Voyage. Neither offers the embeddings
+# subentry in the UI.
+PROVIDER_CAPABILITIES: dict[str, frozenset[str]] = {
+    ID_GIGACHAT: frozenset({CAPABILITY_CHAT, CAPABILITY_EMBEDDINGS}),
+    ID_YANDEX_GPT: frozenset({CAPABILITY_CHAT, CAPABILITY_EMBEDDINGS}),
+    ID_OPENAI: frozenset({CAPABILITY_CHAT, CAPABILITY_EMBEDDINGS}),
+    ID_OLLAMA: frozenset({CAPABILITY_CHAT, CAPABILITY_EMBEDDINGS}),
+    ID_DEEPSEEK: frozenset({CAPABILITY_CHAT}),
+    ID_ANTHROPIC: frozenset({CAPABILITY_CHAT}),
+}
+
+
+def supports(engine: str, capability: str) -> bool:
+    """Whether `engine` can serve `capability`. Unknown engines support nothing."""
+    return capability in PROVIDER_CAPABILITIES.get(engine, frozenset())
 
 
 async def validate_client(

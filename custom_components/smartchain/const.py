@@ -210,3 +210,8 @@ MEMORY_DIM_PROBE_TEXT = "smartchain dimension probe"
 MEMORY_SQLITE_SOFT_LIMIT = 50_000
 MEMORY_DEFAULT_QDRANT_COLLECTION = "smartchain_memory"
 MEMORY_DEFAULT_PG_TABLE = "smartchain_memory"
+
+# Provider capabilities (v4.5.0)
+CAPABILITY_CHAT = "chat"
+CAPABILITY_EMBEDDINGS = "embeddings"
+SUBENTRY_TYPE_EMBEDDINGS = "embeddings"
