@@ -166,7 +166,7 @@ def _tools_yaml_path(hass: HomeAssistant) -> Path:
 
 
 def _memory_persist_dir(hass: HomeAssistant) -> Path:
-    """Absolute path of the Chroma persist dir under .storage/."""
+    """Absolute path of the persist dir file-based backends write into."""
     return Path(hass.config.config_dir) / ".storage" / MEMORY_PERSIST_DIRNAME
 
 

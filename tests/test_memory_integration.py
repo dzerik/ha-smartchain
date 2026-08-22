@@ -18,7 +18,7 @@ pytestmark = pytest.mark.usefixtures("enable_custom_integrations")
 
 @pytest.fixture
 def fake_memory_store():
-    """Patch MemoryStore so we never actually open Chroma."""
+    """Patch MemoryStore so we never actually open a vector backend."""
     stub = MagicMock()
     stub.is_available = True
     stub.add = AsyncMock(return_value=["doc-1"])

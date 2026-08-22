@@ -37,7 +37,7 @@ async def test_clear_memory_fires_event(hass: HomeAssistant, tools_dir: Path, mo
         "tools: []\nmemory:\n  provider: ollama\n  model: nomic-embed-text\n"
     )
 
-    # Patch MemoryStore so we don't actually open Chroma in the test.
+    # Patch MemoryStore so we don't actually open a vector backend in the test.
     from custom_components.smartchain.tools.memory import store as store_mod
 
     class _StubStore:
