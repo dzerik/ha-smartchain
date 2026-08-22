@@ -69,7 +69,7 @@ class SqliteVecBackend:
                 )
                 conn.execute(
                     f"CREATE VIRTUAL TABLE IF NOT EXISTS vec_docs "
-                    f"USING vec0(embedding float[{dim}])"
+                    f"USING vec0(embedding float[{dim}] distance_metric=cosine)"
                 )
                 row = conn.execute("SELECT value FROM _meta WHERE key = 'dim'").fetchone()
                 if row is None:
