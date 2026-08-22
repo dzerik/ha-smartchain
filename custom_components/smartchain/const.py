@@ -201,3 +201,12 @@ DELEGATE_MANY_TOOL_NAME = "ask_agents"
 CRITIQUE_TOOL_NAME = "critique_response"
 MULTI_AGENT_MAX_PARALLEL = 5
 MULTI_AGENT_PER_CALL_TIMEOUT_SECONDS = 60
+
+# Vector backends (v4.5.0)
+MEMORY_BACKEND_TYPES = ["sqlite_numpy", "sqlite_vec", "pgvector", "qdrant"]
+MEMORY_DEFAULT_BACKEND = "sqlite_numpy"
+MEMORY_BACKEND_TIMEOUT_SECONDS = 30
+MEMORY_DIM_PROBE_TEXT = "smartchain dimension probe"
+MEMORY_SQLITE_SOFT_LIMIT = 50_000
+MEMORY_DEFAULT_QDRANT_COLLECTION = "smartchain_memory"
+MEMORY_DEFAULT_PG_TABLE = "smartchain_memory"
