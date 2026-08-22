@@ -86,7 +86,7 @@ flowchart TB
 | `tools/schema.py` | `memory:` becomes `memory.stores[]`; per-store `backend:` sub-schema |
 | `tools/loader.py` | Parses the new shape into `MemorySettings` |
 | `config_flow.py` | `EmbeddingsSubentryFlow`; capability-filtered `async_get_supported_subentry_types` |
-| `client_util.py` | `PROVIDER_CAPABILITIES`; `purpose` filter in `async_fetch_models`; `get_embeddings_client` |
+| `client_util.py` | `PROVIDER_CAPABILITIES`; `supports()`; `purpose` filter in `async_fetch_models`; `is_embedding_model()` |
 | `__init__.py` | `_build_memory` → builds the registry; `clear_memory` gains `store` |
 | `const.py` | New constants (§11) |
 | `manifest.json`, `pyproject.toml` | `chromadb` and `langchain-chroma` fully removed |
@@ -159,12 +159,14 @@ Ollama's `/api/show` requires one request per model. To avoid N requests on ever
 ### 5.5. Client construction
 
 ```python
-def get_embeddings_client(
+def create_embeddings_from_subentry(
     hass: HomeAssistant,
     entry: ConfigEntry,
     subentry: ConfigSubentry,
 ) -> EmbeddingsProvider: ...
 ```
+
+The name parallels the existing `create_embeddings` in the same module rather than `get_client` in `client_util`, so both constructors in `embeddings.py` read alike.
 
 Resolves `engine` from `entry.data`, credentials from `entry.data`, model from `subentry.data`. Returns the existing `_ExecutorBacked` wrapper — the timeout and executor-offload behaviour from v4.3.0 is unchanged. `EmbeddingsConfigError` is raised for an unsupported provider or a missing model.
 
@@ -374,7 +376,7 @@ MEMORY_DEFAULT_PG_TABLE = "smartchain_memory"
 The plan is sequenced so that a mid-cycle stop still leaves `main` green and shippable.
 
 1. **Backends first.** The Protocol and all four implementations are self-contained inside `tools/memory/backends/`. `MemoryStore` switches from Chroma to a backend while the YAML shape stays as it is in v4.4.2. At the end of this phase memory works out of the box on `sqlite_numpy` — a shippable improvement on its own.
-2. **Embeddings as a capability.** Capability matrix, purpose-filtered discovery, `EmbeddingsSubentryFlow`, `get_embeddings_client`. Nothing consumes it yet.
+2. **Embeddings as a capability.** Capability matrix, purpose-filtered discovery, `EmbeddingsSubentryFlow`, `create_embeddings_from_subentry`. Nothing consumes it yet.
 3. **Multi-store.** `MemorySettings`, `MemoryRegistry`, the new YAML shape, `store` parameters, per-store tasks. This is the step that rewrites the config plumbing, and it happens exactly once.
 
 The old flat `memory:` block stays valid through phases 1 and 2 — those phases change how vectors are stored and add an unused capability, neither of which touches the YAML contract. The breaking change and the `LoaderError` described in §9 land in phase 3, together with the version bump.
