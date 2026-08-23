@@ -34,10 +34,22 @@ def _store_returning(snippets: list[MemorySnippet]) -> MagicMock:
     return store
 
 
-def test_definition_has_no_store_enum_for_a_single_store() -> None:
+def test_definition_shape() -> None:
+    """The base parameters survive whatever the registry holds."""
     reg, _ = _registry({"only": "The one store"})
     spec = get_memory_tool_definition(reg)
     assert spec["name"] == MEMORY_TOOL_NAME
+    params = spec["parameters"]["properties"]
+    assert "query" in params
+    assert "top_k" in params
+    assert "kind" in params
+
+
+def test_definition_does_not_require_store_for_a_single_store() -> None:
+    """With one store the parameter is offered but inferable, so it stays optional."""
+    reg, _ = _registry({"only": "The one store"})
+    spec = get_memory_tool_definition(reg)
+    assert spec["parameters"]["properties"]["store"]["enum"] == ["only"]
     assert "store" not in spec["parameters"].get("required", [])
 
 
@@ -85,7 +97,8 @@ async def test_execute_rejects_unknown_store_by_name(hass: HomeAssistant) -> Non
 
     result = await execute_memory_search(hass, query="x", store="ghost")
     assert "ghost" in result
-    assert "a" in result  # the available names are listed back to the model
+    # The available names are listed back to the model.
+    assert "Configured stores: a" in result
 
 
 async def test_execute_asks_for_a_store_when_ambiguous(hass: HomeAssistant) -> None:
@@ -102,6 +115,46 @@ async def test_execute_returns_not_configured_for_empty_registry(
     reg, _ = _registry({})
     hass.data.setdefault(DOMAIN, {})["memory"] = reg
     assert "not configured" in (await execute_memory_search(hass, query="x")).lower()
+
+
+async def test_execute_returns_not_configured_when_registry_absent(
+    hass: HomeAssistant,
+) -> None:
+    """The other half of the guard: no registry at all, with or without the domain key."""
+    hass.data.setdefault(DOMAIN, {}).pop("memory", None)
+    assert "not configured" in (await execute_memory_search(hass, query="x")).lower()
+
+    hass.data.pop(DOMAIN, None)
+    assert "not configured" in (await execute_memory_search(hass, query="x")).lower()
+
+
+async def test_execute_returns_no_matches_when_search_is_empty(hass: HomeAssistant) -> None:
+    """An empty result set is reported as such, not as a failure or a blank string."""
+    store = _store_returning([])
+    reg, _ = _registry({"only": ""}, {"only": store})
+    hass.data.setdefault(DOMAIN, {})["memory"] = reg
+
+    result = await execute_memory_search(hass, query="x")
+    assert result == "No memories matched the query."
+
+
+async def test_execute_formats_snippets_with_timestamp_and_kind(hass: HomeAssistant) -> None:
+    """Each hit renders as `[timestamp, kind] text` on its own numbered line."""
+    store = _store_returning(
+        [
+            MemorySnippet(
+                text="User: hi\nAssistant: hello",
+                score=0.9,
+                metadata={"kind": "conversation", "timestamp": "2026-05-27T18:00:00+00:00"},
+            )
+        ]
+    )
+    reg, _ = _registry({"only": ""}, {"only": store})
+    hass.data.setdefault(DOMAIN, {})["memory"] = reg
+
+    result = await execute_memory_search(hass, query="greeting")
+    assert "1. [2026-05-27T18:00:00+00:00, conversation] User: hi Assistant: hello" in result
+    store.search.assert_awaited_once()
 
 
 async def test_execute_still_filters_by_kind_and_subentry(hass: HomeAssistant) -> None:
