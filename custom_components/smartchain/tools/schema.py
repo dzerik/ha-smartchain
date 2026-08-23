@@ -201,7 +201,7 @@ _STORE_SCHEMA = vol.Schema(
 
 
 def _validate_memory(value: object) -> dict:
-    """Validate the memory block and reject the pre-4.5.0 flat shape.
+    """Validate the memory block and reject the pre-5.0.0 flat shape.
 
     Credentials no longer live in YAML, so a block carrying `provider` or
     `api_key` cannot be migrated automatically — there is no subentry to point
@@ -213,7 +213,7 @@ def _validate_memory(value: object) -> dict:
     legacy_keys = {"provider", "model", "api_key", "base_url"} & set(value)
     if legacy_keys:
         raise vol.Invalid(
-            "the flat memory: block was replaced in v4.5.0. Create an embeddings "
+            "the flat memory: block was replaced in v5.0.0. Create an embeddings "
             "subentry on the provider's config entry, then rewrite the block as a "
             "stores: list referencing it by name, then call smartchain.reload_tools. "
             f"Offending keys: {sorted(legacy_keys)}"

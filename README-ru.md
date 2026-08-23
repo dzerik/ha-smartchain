@@ -43,7 +43,7 @@ SmartChain — кастомная интеграция Home Assistant, пред�
 - **Мульти-агент оркестрация** *(v4.4.0+)* — `ask_agents` параллельный fan-out до 5 sibling-агентов, `critique_response` ревью второго мнения, `ask_agent` одиночная делегация
 - **Свои tools в YAML** *(v4.1.0+)* — декларативные LLM-инструменты с четырьмя типами действий (`service`, `template`, `rest`, `script`); per-subentry фильтр `allowed_tools`
 - **MCP-клиент** *(v4.2.0+)* — подключение к удалённым MCP-серверам (`stdio` / `sse` / `http`) — filesystem, GitHub, brave-search и др.; автореконнект с exponential backoff
-- **Долговременная память / RAG** *(v4.3.0+, переработано в v4.5.0)* — именованные хранилища памяти на четырёх подключаемых векторных бэкендах (`sqlite_numpy` — по умолчанию, без доустановки — плюс `sqlite_vec`, `pgvector`, `qdrant`); эмбеддинги настраиваются как sub-entry провайдера (GigaChat / YandexGPT / OpenAI / Ollama), поэтому креды не живут в YAML; встроенный tool `search_memory`; ингест диалогов + (опционально) HA logbook
+- **Долговременная память / RAG** *(v4.3.0+, переработано в v5.0.0)* — именованные хранилища памяти на четырёх подключаемых векторных бэкендах (`sqlite_numpy` — по умолчанию, без доустановки — плюс `sqlite_vec`, `pgvector`, `qdrant`); эмбеддинги настраиваются как sub-entry провайдера (GigaChat / YandexGPT / OpenAI / Ollama), поэтому креды не живут в YAML; встроенный tool `search_memory`; ингест диалогов + (опционально) HA logbook
 - **История состояний** — tool `get_state_history` для прошлых состояний устройств
 - **Распознавание изображений** — анализ камер через мультимодальные модели
 - **Система навыков** — загружаемые YAML-файлы с дополнительными знаниями
@@ -118,9 +118,9 @@ SmartChain — кастомная интеграция Home Assistant, пред�
 
 | Версия | Что добавлено |
 |---|---|
-| **v4.5.0** | Подключаемые векторные бэкенды (sqlite_numpy / sqlite_vec / pgvector / qdrant), эмбеддинги как возможность провайдера, именованные хранилища |
+| **v5.0.0** | Подключаемые векторные бэкенды (sqlite_numpy / sqlite_vec / pgvector / qdrant), эмбеддинги как возможность провайдера, именованные хранилища |
 | v4.4.0 | Multi-agent оркестрация — `ask_agents` параллельный fan-out + `critique_response` ревью второго мнения |
-| v4.3.0 | Долговременная память / RAG — Chroma vector store *(заменено в v4.5.0)*, tool `search_memory`, ингест диалогов + logbook |
+| v4.3.0 | Долговременная память / RAG — Chroma vector store *(заменено в v5.0.0)*, tool `search_memory`, ингест диалогов + logbook |
 | v4.2.0 | MCP-клиент — подключение к удалённым MCP-серверам через stdio / SSE / HTTP с автореконнектом |
 | v4.1.0 | Свои tools в YAML — декларативные LLM-инструменты (service / template / rest / script) |
 | v4.0.2 | Security-фиксы, корректный `Last Analysis` SensorEntity, правильный `integration_type` |

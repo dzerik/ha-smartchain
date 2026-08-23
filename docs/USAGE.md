@@ -170,7 +170,7 @@ Delete stored memories with optional filters.
 ```yaml
 service: smartchain.clear_memory
 data:
-  store: conversations  # optional (v4.5.0+) — omit to clear every store
+  store: conversations  # optional (v5.0.0+) — omit to clear every store
   kind: conversation    # any | conversation | logbook (default: any)
   agent_id: conversation.smartchain_main   # optional — limit to one agent
 ```
@@ -381,7 +381,7 @@ The same `allowed_tools` filter from §7.5 applies — list MCP tools by their *
 
 Persist conversation turns and (opt-in) HA logbook entries as embeddings in a vector store. The LLM recalls them through the built-in `search_memory` tool.
 
-**v4.5.0 reshaped this feature.** Embeddings are now a **provider capability** configured as a sub-entry — credentials never appear in `tools.yaml`. The vector store is **pluggable**, and the default backend needs nothing installed beyond what Home Assistant already ships. If you are upgrading from v4.3.x / v4.4.x, read §9.8 first: the old flat `memory:` block is rejected on purpose.
+**v5.0.0 reshaped this feature.** Embeddings are now a **provider capability** configured as a sub-entry — credentials never appear in `tools.yaml`. The vector store is **pluggable**, and the default backend needs nothing installed beyond what Home Assistant already ships. If you are upgrading from v4.3.x / v4.4.x, read §9.8 first: the old flat `memory:` block is rejected on purpose.
 
 Setting it up is two steps: create an embeddings sub-entry (§9.1), then declare one or more stores that reference it (§9.2).
 
@@ -765,7 +765,7 @@ The `search_memory` tool was called but no store came up. Either `tools.yaml` ha
 ### Memory: a store references an embeddings sub-entry that doesn't exist
 The log names the missing title and lists the available ones. The `embeddings:` field matches the sub-entry **title**, exactly — check for a typo or a renamed sub-entry. A title claimed by two sub-entries is refused too; rename one.
 
-### Memory: "the flat memory: block was replaced in v4.5.0"
+### Memory: "the flat memory: block was replaced in v5.0.0"
 You are carrying a v4.3.x / v4.4.x `memory:` block with `provider` / `model` / `api_key`. Follow the three migration steps in §9.8.
 
 ### Memory: dimension mismatch on startup
