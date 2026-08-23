@@ -26,14 +26,18 @@ Migration:
 - **Dimension probing.** The embedding dimension is measured at startup and persisted per store. Changing to a model of a different dimension is detected and reported with exact remediation steps instead of corrupting the index.
 - **`!secret` now works in `tools.yaml`.** The loader was never given a `Secrets` object, so any `!secret` tag failed the whole file. It is wired through now, which matters most for a pgvector `dsn` — that belongs in `secrets.yaml`, not inline. A `secrets.yaml` beside `tools.yaml` takes precedence over the one in the config root.
 - `smartchain.clear_memory` and `smartchain.reload_tools` are declared in `services.yaml`, so they appear in the Home Assistant service picker with their fields.
+- **Entity indexing.** A memory store can carry `source: {type: entities}` and becomes a semantic index of the home, with four scope presets (`minimal` / `optimal` / `maximal` / `paranoid`), `include` / `exclude` overrides, and an optional state-tracking mode. The new `search_entities` tool merges lexical and vector matching, so it stays useful when the embeddings provider is unavailable. Sweeps are incremental — only entities whose catalogue text changed are re-embedded, so a restart costs nothing. Entity names, areas and aliases reach the embeddings provider, so the preset is a privacy decision: `optimal` includes `person`, `maximal` adds `device_tracker`, and `paranoid` sends the whole home including diagnostics. `minimal` plus `include` keeps it tight.
+- `smartchain.reindex_entities` forces a sweep; `full: true` re-embeds everything, for when the embedding model changed but the entities did not.
 
 ### Changed
 - `hass.data[DOMAIN]["memory"]` now holds a `MemoryRegistry` rather than a single `MemoryStore`.
 - `smartchain_memory_cleared` now carries `{"deleted": <int>, "stores": [<names>]}`.
 - The Chroma `$and` filter dialect is replaced by a flat backend-neutral filter, translated per backend.
+- `VectorBackend` gained `update_metadata` and `list_metadata`, letting a document's metadata be refreshed without re-embedding it.
+- `smartchain.clear_memory` on a store with an entity source now schedules a background sweep, so the index rebuilds itself from the live registries instead of staying empty until an unrelated registry event happens to trigger one. The deletion is therefore not permanent, and the rebuild re-embeds every entity.
 
 ### Tests
-- 467 passing, none skipped (was 289). The centrepiece is a conformance suite executed against every file-based backend; `sqlite-vec` is now a dev dependency so it runs in CI rather than skipping.
+- 591 passing, none skipped (was 289). The centrepiece is a conformance suite executed against every file-based backend; `sqlite-vec` is now a dev dependency so it runs in CI rather than skipping.
 
 ## [4.4.1] - 2026-05-28
 

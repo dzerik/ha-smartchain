@@ -177,6 +177,23 @@ data:
 
 Fires `smartchain_memory_cleared` with `{"deleted": <int>, "stores": [<names>]}`. Raises `HomeAssistantError` if the memory subsystem isn't configured, or if `store` names a store that isn't.
 
+> **Clearing an entity index rebuilds it** *(v5.0.0+)*. If the cleared store has a `source:` block (§9.10), a reconciling sweep is scheduled in the background straight after the delete, so the index comes back from the live registries. The deletion is not permanent, and the rebuild re-embeds everything. See §9.10.
+
+### 5.5. `smartchain.reindex_entities` *(v5.0.0+)*
+
+Force a sweep of an entity index (§9.10) instead of waiting for a registry change or a restart.
+
+```yaml
+service: smartchain.reindex_entities
+data:
+  store: entities   # optional — omit to sweep every entity index
+  full: false       # optional — true re-embeds everything
+```
+
+Only entities whose catalogue text changed are re-embedded, so an ordinary call is cheap. `full: true` ignores the fingerprints and re-embeds everything — needed only when the embedding model changed but the entities did not.
+
+Fires `smartchain_entities_reindexed` with `{"stores": [<names>], "new": <int>, "changed": <int>, "removed": <int>, "unchanged": <int>}`. Raises `HomeAssistantError` if no entity index is configured, or if `store` names one that isn't.
+
 ---
 
 ## 6. Built-in conversation tools
@@ -191,6 +208,7 @@ Every conversation turn that involves the LLM may call these tools. Each is gate
 | `ask_agents` *(v4.4.0+)* | `enable_multi_agent_tools: true` + ≥ 2 sub-entries | Parallel fan-out to several siblings (see §10) |
 | `critique_response` *(v4.4.0+)* | same | Ask a sibling to review a draft answer (see §10) |
 | `search_memory` *(v4.3.0+)* | at least one store in the `memory:` block | Semantic search over conversation + logbook embeddings (see §9) |
+| `search_entities` *(v5.0.0+)* | at least one store with a `source:` block | Find an entity by describing it, when the `entity_id` is unknown (see §9.10) |
 | Custom YAML tools | `tools:` block in YAML | User-declared tools (see §7) |
 | MCP tools | `mcp_servers:` block in YAML | Discovered automatically per server (see §8) |
 
@@ -385,6 +403,8 @@ Persist conversation turns and (opt-in) HA logbook entries as embeddings in a ve
 
 Setting it up is two steps: create an embeddings sub-entry (§9.1), then declare one or more stores that reference it (§9.2).
 
+**A store can also index the home itself** rather than the conversation. Give it a `source:` block and it becomes a semantic index of your entities, searchable by the LLM through `search_entities` — see §9.10.
+
 ### 9.1. Step 1 — create an embeddings sub-entry
 
 **Settings > Devices & Services > SmartChain > 3-dot menu > Add embeddings binding.**
@@ -467,6 +487,7 @@ memory:
 | `retention_days` | no | `90` | Daily cleanup horizon, 0–3650. `0` disables cleanup for that store. |
 | `ingest_conversation` | no | `true` | Whether conversation turns are written to this store. |
 | `ingest_logbook` | no | disabled | `enabled` (bool), `domains` (list), `poll_interval_minutes` (5–1440, default 60). |
+| `source` | no | absent | Turns the store into an entity index instead of a conversation store, see §9.10. Present means the three keys above are rejected. |
 
 Call `smartchain.reload_tools` after editing. Validation errors are raised there with a message naming the offending key, and the previous configuration stays live.
 
@@ -596,6 +617,8 @@ data:
 
 Omitting `store` clears every configured store. The `smartchain_memory_cleared` event carries `{"deleted": <int>, "stores": [<names>]}`.
 
+> **An entity index does not stay cleared.** A store with a `source:` block (§9.10) is swept again in the background immediately after the delete, so it rebuilds itself from the live registries and the rebuild re-embeds everything. The event still reports only the number deleted, so it will not hint at this. To actually switch an entity index off, remove its `source:` block — or the store — and call `smartchain.reload_tools`.
+
 File-based stores live at `<config>/.storage/smartchain_memory/<store name>.db` unless the store set `backend.path`.
 
 ### 9.8. Migrating from v4.4.x
@@ -625,6 +648,176 @@ Because credentials moved out of YAML, there is nothing to migrate it *to* until
 - A failing embeddings provider does not crash the conversation — the failure is logged at WARNING and the turn is not ingested.
 - A per-store daily retention task deletes entries older than `retention_days` (timestamps normalised to UTC). `retention_days: 0` disables it.
 - `smartchain.reload_tools` rebuilds the registry atomically: the new one is built first and only swapped in on success, so a bad edit leaves the running stores untouched.
+
+### 9.10. Entity index *(v5.0.0+)* — find a device by describing it
+
+A memory store can be pointed at the home itself instead of at conversations. Give it a `source:` block and it becomes a **semantic index of your entities**, which the LLM searches through the built-in `search_entities` tool.
+
+It exists for the queries that name matching cannot answer. *"What makes the coffee"* shares no word with `switch.kitchen_socket_3`, and *"what can I dry my hair with"* shares none with the socket the hair dryer is plugged into. What those queries do share is meaning with the entity's name, its area and — most valuable of all — the aliases you gave it yourself, and a vector search over that text finds them.
+
+```yaml
+memory:
+  stores:
+    - name: entities
+      description: "Devices and sensors in the home"
+      embeddings: "GigaChat Embeddings"
+      backend:
+        type: sqlite_numpy
+      source:
+        type: entities
+        preset: optimal
+        index_states: false
+        include: []
+        exclude: []
+```
+
+`source:` is optional and everything else about the store is unchanged, so a store without it stays an ordinary conversation store. Both kinds can coexist in the same `stores:` list — the entity index and the conversation memory usually want different backends anyway.
+
+Call `smartchain.reload_tools` after adding the block.
+
+#### Presets
+
+The preset decides which entities are indexed. Four are available, and they are **monotonic** — each is a superset of the one above it, so widening the scope never drops anything.
+
+| Preset | What it selects |
+|---|---|
+| `minimal` | Only what a person controls: `light`, `switch`, `cover`, `climate`, `lock`, `fan`, `media_player`, `scene`, `script`, `vacuum`, `water_heater`, `humidifier`, `valve`. Entities in the `config` or `diagnostic` entity category are left out. |
+| `optimal` **(default)** | `minimal` plus the whole of `button`, `input_boolean`, `input_select`, `input_number`, `select`, `number`, `alarm_control_panel`, `person` and `weather`; plus `sensor` and `binary_sensor` whose device class is one of `temperature`, `humidity`, `illuminance`, `pressure`, `motion`, `occupancy`, `presence`, `door`, `window`, `opening`, `garage_door`, `smoke`, `gas`, `moisture`, `carbon_monoxide`, `carbon_dioxide`, `power`, `energy`, `sound`, `vibration`, `problem`. `config` and `diagnostic` are left out here too. |
+| `maximal` | Every entity that is neither hidden nor disabled, whatever its domain, device class or entity category. Diagnostics, `update.*` and `device_tracker.*` are all in. |
+| `paranoid` | `maximal` plus hidden and disabled entities. |
+
+Battery levels, signal strengths and the rest of the housekeeping device classes are deliberately absent from `optimal`: they dominate a real home by count and nobody ever searches for them. Add them back with `include:` if you disagree.
+
+Two things that surprise people:
+
+- **`maximal` and `paranoid` index Home Assistant's own internal entities** — `conversation.home_assistant`, `zone.home`, `sun.sun` and the like. This is correct rather than a leak: the candidate set is the union of the entity registry *and* the state machine, because template sensors, groups and legacy YAML platform entities never reach the registry at all. Restricting the sweep to the registry would silently gut exactly what `maximal` promises. It still reads as noise the first time you look at the index.
+- **A disabled entity has no state at all.** Under `paranoid` it therefore contributes a catalogue entry and nothing else; `search_entities` reports its state as `unavailable`, because there is no state to report.
+
+#### `include` and `exclude`
+
+Both take a list whose entries are either a bare domain or a full `entity_id`. `include` is additive on top of the preset; `exclude` is applied last and **wins over both the preset and `include`**. Anything that is neither a valid domain nor a valid `entity_id` is a schema error, caught at reload.
+
+```yaml
+      source:
+        type: entities
+        preset: minimal
+        include:
+          - media_player
+          - sensor.washing_machine_power
+        exclude:
+          - scene
+          - switch.boiler_relay
+```
+
+That indexes the controllable domains, adds every `media_player` and one specific power sensor, then drops every `scene` and one specific switch.
+
+#### Keys that are rejected on an entity store
+
+Three keys that a conversation store accepts are **rejected outright** — not ignored — when `source.type: entities` is present, and the reload fails naming them:
+
+| Key | Why |
+|---|---|
+| `retention_days` | Retention deletes documents by age. An entity is not stale because it is old, and a retention pass would quietly eat the index. |
+| `ingest_conversation` | Conversation turns must not be written into an entity index. |
+| `ingest_logbook` | Nor logbook entries. |
+
+The check runs against the raw YAML before defaults are applied, so it only fires on a key you actually wrote — a store that simply omits `ingest_conversation` is fine even though the key defaults to `true`.
+
+#### `index_states`
+
+Off by default, and off is the right choice for most installations.
+
+**When off** no state listener is registered at all, and the stored metadata carries no `state` field.
+
+**When on** the indexer subscribes to state changes *for the indexed entities only*, coalesces them, and writes them into each document's metadata every 30 seconds. It issues **no embedding calls** — the state is never part of the embedded text, which is precisely why a restart is free.
+
+What it buys is **filtering**: `search_entities(query="…", state="open")` becomes a metadata filter evaluated inside the vector store. What it does not buy is better search. Cosine similarity over `"on"`, `"off"` and `"23.5"` is weak, and that is not what the mode is for.
+
+**Leaving it off costs nothing in freshness.** The state that `search_entities` reports is read live from `hass.states` at answer time in either mode, so it is never stale. Passing `state=` to a store with `index_states: false` is not an error either — the filter is simply applied after the live read instead of inside the store, and the caller gets the same answer.
+
+#### `search_entities`
+
+The tool is added to the LLM's tool list as soon as at least one store has an entity source.
+
+| Parameter | Required | Default | Meaning |
+|---|---|---|---|
+| `query` | yes | — | A description of the device — what it is, or what it does. |
+| `top_k` | no | `10` | How many results to return, 1–50. |
+| `domain` | no | — | Restrict to one domain, e.g. `light`. |
+| `area` | no | — | Restrict to one area, by name. |
+| `state` | no | — | Restrict to a current state, e.g. `on`. |
+| `store` | with 2+ entity indexes | — | Which index to search. Optional with exactly one. |
+
+> User: *"Turn off whatever makes the coffee."*
+>
+> Assistant calls `search_entities(query="coffee machine")` and gets:
+>
+> ```
+> Found 2 entities:
+> 1. switch.kitchen_socket_3 — Кофеварка [switch, Кухня] = on
+> 2. sensor.kitchen_socket_3_power — Кофеварка потребление [sensor, Кухня] = 812
+> ```
+>
+> …then calls the Assist API to turn `switch.kitchen_socket_3` off. The tool returns entity ids, so they can be used directly in a service call.
+
+Two passes run and merge. The **lexical** pass matches case- and accent-folded text against the friendly name, the aliases, the area and the `entity_id`, exactly and by prefix or substring. The **vector** pass searches the store, with `domain` / `area` / `state` translated into a metadata filter. Exact lexical hits rank first, then prefix hits, then vector hits by score, deduplicated by `entity_id` and truncated to `top_k`.
+
+Lexical matching is not a consolation prize: on *"свет на кухне"* a name match is both faster and more accurate than cosine similarity. It also reads the registries directly rather than the index, which is what makes the fallback real — **`search_entities` keeps working when the store is unavailable.** A down embeddings provider degrades it to name matching instead of silencing it.
+
+No match returns a sentence saying so and naming the filters that were applied, so the model can retry with fewer.
+
+#### `smartchain.reindex_entities`
+
+Forces a sweep now, rather than waiting for a registry change or a restart.
+
+```yaml
+service: smartchain.reindex_entities
+data:
+  store: entities   # optional — omit to sweep every entity index
+  full: false       # optional — true re-embeds everything
+```
+
+Fires `smartchain_entities_reindexed` with `{"stores": [<names>], "new": <int>, "changed": <int>, "removed": <int>, "unchanged": <int>}`. A `store` that does not exist, or that exists but has no entity source, raises `HomeAssistantError` naming the entity indexes that do — sweeping nothing silently would be indistinguishable from success.
+
+**`full: true` answers exactly one situation: the embedding model changed but the entities did not.** A normal sweep compares fingerprints of the catalogue *text*, so it would correctly report everything unchanged while every stored vector still came from the old model. `full: true` ignores the fingerprints and re-embeds the lot. Note that a change of embedding *dimension* is a different problem with a different fix — see §9.4.
+
+#### What it costs
+
+Sweeps are incremental. Every document stores a fingerprint of its catalogue text. A sweep fetches all stored fingerprints in **one** call, then embeds only the entities that are new or whose text changed, deletes the documents whose entity dropped out of scope, and skips everything else entirely.
+
+- The **first** sweep embeds every selected entity once.
+- Every later sweep — including the one after each Home Assistant restart — embeds only what actually changed. **A restart with an unchanged home costs zero embedding calls.**
+- Renaming an entity, moving it to another area, changing its device name or adding an alias re-embeds that one entity. Renaming an *area* re-embeds everything in it.
+- Narrowing the preset removes what dropped out of scope on the next sweep; no manual purge is needed.
+
+If you are paying per token, the first sweep is the only bill worth estimating. As rough magnitudes for a home whose state machine holds around 1 500 entities: a few dozen documents under `minimal`, roughly 200–400 under `optimal`, and all ~1 500 under `maximal` or `paranoid`. Each document is one short catalogue entry, capped at 900 characters so it never splits into several chunks.
+
+Sweeps run at Home Assistant startup as a background task — never inline, because a thousand embeddings must not delay startup — after registry changes with a 5-second debounce, and on `smartchain.reindex_entities`.
+
+#### Clearing an entity index rebuilds it
+
+`smartchain.clear_memory` on a store with an entity source deletes its documents and then **schedules a reconciling sweep in the background**, so the index comes back from the live registries within moments. That is deliberate: a cleared entity index that nothing rebuilt would read, from the outside, as *"`search_entities` finds nothing, permanently"*, until some unrelated registry event happened to trigger a sweep.
+
+Two consequences worth planning for. The rebuild **re-embeds everything**, because there are no stored fingerprints left to compare against — so on a paid provider, clearing an entity index costs as much as the first sweep did. And clearing is **not** a way to switch the index off: to do that, remove the store's `source:` block, or the store itself, and call `smartchain.reload_tools`.
+
+The `smartchain_memory_cleared` event reports only the number of documents deleted and will not tell you that the sweep happened; the sweep's own summary line in the log will.
+
+#### Privacy — read this before choosing a preset
+
+Indexing sends the catalogue text of every selected entity to your embeddings provider: the friendly name, the area name, the device name and **the aliases you wrote yourself**. If that provider is a cloud API, that is your home's layout and naming scheme leaving the house. This is inherent to how the feature works, not a defect in it, but it should be a decision rather than a surprise.
+
+Specifics worth knowing before you pick:
+
+- **`optimal`, the default, includes `person` entities** — the names of the people in your household.
+- **`maximal` and `paranoid` add `device_tracker`** — who is home and where, by device.
+- **`paranoid` sends the entire home**, diagnostics included, plus the hidden and disabled entities the UI deliberately keeps out of sight.
+
+To keep it tight, do one or both of these:
+
+- Use a **local embeddings provider**. Ollama with `nomic-embed-text` runs on your own hardware and nothing leaves the network.
+- Use **`preset: minimal` plus `include:`**, naming only the entities you actually want findable. `exclude:` drops specific entities or whole domains from any preset and always wins, so it works as a redaction list on top of a wider preset too.
+
+Nothing else about an entity is sent: **states are never embedded**, in any mode, and no credential ever enters a catalogue entry, an index log line, a tool result or the `smartchain_entities_reindexed` payload. Entity ids and area names do appear in log lines — they are not credentials.
 
 ---
 

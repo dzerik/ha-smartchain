@@ -10,7 +10,7 @@
 [![GitHub release](https://img.shields.io/github/v/release/dzerik/ha-smartchain)](https://github.com/dzerik/ha-smartchain/releases)
 [![Downloads](https://img.shields.io/github/downloads/dzerik/ha-smartchain/total?color=41BDF5&label=downloads)](https://github.com/dzerik/ha-smartchain/releases)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![tests](https://img.shields.io/badge/tests-467+-brightgreen)](tests/)
+[![tests](https://img.shields.io/badge/tests-591+-brightgreen)](tests/)
 [![CI](https://img.shields.io/github/actions/workflow/status/dzerik/ha-smartchain/ci.yml?label=CI&branch=main)](https://github.com/dzerik/ha-smartchain/actions/workflows/ci.yml)
 [![HACS validation](https://img.shields.io/github/actions/workflow/status/dzerik/ha-smartchain/hacs.yml?label=HACS&branch=main)](https://github.com/dzerik/ha-smartchain/actions/workflows/hacs.yml)
 [![Hassfest](https://img.shields.io/github/actions/workflow/status/dzerik/ha-smartchain/hassfest.yml?label=Hassfest&branch=main)](https://github.com/dzerik/ha-smartchain/actions/workflows/hassfest.yml)
@@ -42,6 +42,7 @@ Supported providers:
 - **Custom tools from YAML** *(v4.1.0+)* — declarative LLM-callable tools with four action types (`service`, `template`, `rest`, `script`); per-subentry `allowed_tools` filter
 - **MCP client** *(v4.2.0+)* — connect to remote MCP servers (`stdio` / `sse` / `http`) — filesystem, GitHub, brave-search, etc.; per-server auto-reconnect
 - **Long-term memory / RAG** *(v4.3.0+, reworked in v5.0.0)* — named memory stores over four pluggable vector backends (`sqlite_numpy` — the default, no extra install — plus `sqlite_vec`, `pgvector`, `qdrant`); embeddings configured as a provider sub-entry (GigaChat / YandexGPT / OpenAI / Ollama) so credentials stay out of YAML; `search_memory` LLM tool; conversation + (opt-in) HA logbook ingest
+- **Entity indexing** *(v5.0.0+)* — point a store at the home instead of the conversation and it becomes a semantic index of your entities, with four scope presets (`minimal` / `optimal` / `maximal` / `paranoid`) and `include` / `exclude` overrides; the `search_entities` tool finds a device from a description (*"what makes the coffee"*) by merging lexical and vector matching, so it keeps working when the embeddings provider is down; sweeps are incremental, so a restart re-embeds nothing
 - **State history** — `get_state_history` tool for past device states
 - **Vision** — camera image analysis via multimodal models
 - **Skill system** — loadable YAML files with additional knowledge
@@ -54,6 +55,7 @@ Supported providers:
 - **`smartchain.analyze_image`** — camera snapshot → multimodal LLM → response
 - **`smartchain.reload_tools`** *(v4.1.0+)* — re-read `tools.yaml`, restart MCP connections, rebuild memory subsystem atomically
 - **`smartchain.clear_memory`** *(v4.3.0+)* — delete stored memories filtered by `kind` and/or `agent_id`
+- **`smartchain.reindex_entities`** *(v5.0.0+)* — force a sweep of an entity index; `full: true` re-embeds everything
 - **AI Task entity** — structured data generation for automations
 
 **SmartChain AI Panel**
@@ -110,13 +112,13 @@ Full user guide with all features and running examples:
 - **English:** [docs/USAGE.md](docs/USAGE.md)
 - **Русский:** [docs/USAGE-ru.md](docs/USAGE-ru.md)
 
-Covers: providers and credentials · subentry options · all services with examples · built-in conversation tools (Assist API, history, delegate, multi-agent, search_memory) · custom tools from YAML (service / template / rest / script) · MCP client (stdio / SSE / HTTP) · long-term memory (4 vector backends + embeddings sub-entries) · AI Task entity · sidebar panel · skills system · troubleshooting.
+Covers: providers and credentials · subentry options · all services with examples · built-in conversation tools (Assist API, history, delegate, multi-agent, search_memory, search_entities) · custom tools from YAML (service / template / rest / script) · MCP client (stdio / SSE / HTTP) · long-term memory (4 vector backends + embeddings sub-entries) · entity indexing (presets, `include` / `exclude`, privacy) · AI Task entity · sidebar panel · skills system · troubleshooting.
 
 ## What's new
 
 | Version | Highlights |
 |---|---|
-| **v5.0.0** | Pluggable vector backends (sqlite_numpy / sqlite_vec / pgvector / qdrant), embeddings as a provider capability, named multi-stores |
+| **v5.0.0** | Pluggable vector backends (sqlite_numpy / sqlite_vec / pgvector / qdrant), embeddings as a provider capability, named multi-stores, entity indexing with the `search_entities` tool |
 | v4.4.0 | Multi-agent orchestration — `ask_agents` parallel fan-out + `critique_response` second-opinion review |
 | v4.3.0 | Long-term memory / RAG — Chroma vector store *(replaced in v5.0.0)*, `search_memory` tool, conversation + logbook ingest |
 | v4.2.0 | MCP client — connect to remote MCP servers via stdio / SSE / HTTP with auto-reconnect |

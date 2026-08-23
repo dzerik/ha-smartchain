@@ -10,7 +10,7 @@
 [![GitHub release](https://img.shields.io/github/v/release/dzerik/ha-smartchain)](https://github.com/dzerik/ha-smartchain/releases)
 [![Downloads](https://img.shields.io/github/downloads/dzerik/ha-smartchain/total?color=41BDF5&label=downloads)](https://github.com/dzerik/ha-smartchain/releases)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![tests](https://img.shields.io/badge/tests-467+-brightgreen)](tests/)
+[![tests](https://img.shields.io/badge/tests-591+-brightgreen)](tests/)
 [![CI](https://img.shields.io/github/actions/workflow/status/dzerik/ha-smartchain/ci.yml?label=CI&branch=main)](https://github.com/dzerik/ha-smartchain/actions/workflows/ci.yml)
 [![HACS validation](https://img.shields.io/github/actions/workflow/status/dzerik/ha-smartchain/hacs.yml?label=HACS&branch=main)](https://github.com/dzerik/ha-smartchain/actions/workflows/hacs.yml)
 [![Hassfest](https://img.shields.io/github/actions/workflow/status/dzerik/ha-smartchain/hassfest.yml?label=Hassfest&branch=main)](https://github.com/dzerik/ha-smartchain/actions/workflows/hassfest.yml)
@@ -44,6 +44,7 @@ SmartChain — кастомная интеграция Home Assistant, пред�
 - **Свои tools в YAML** *(v4.1.0+)* — декларативные LLM-инструменты с четырьмя типами действий (`service`, `template`, `rest`, `script`); per-subentry фильтр `allowed_tools`
 - **MCP-клиент** *(v4.2.0+)* — подключение к удалённым MCP-серверам (`stdio` / `sse` / `http`) — filesystem, GitHub, brave-search и др.; автореконнект с exponential backoff
 - **Долговременная память / RAG** *(v4.3.0+, переработано в v5.0.0)* — именованные хранилища памяти на четырёх подключаемых векторных бэкендах (`sqlite_numpy` — по умолчанию, без доустановки — плюс `sqlite_vec`, `pgvector`, `qdrant`); эмбеддинги настраиваются как sub-entry провайдера (GigaChat / YandexGPT / OpenAI / Ollama), поэтому креды не живут в YAML; встроенный tool `search_memory`; ингест диалогов + (опционально) HA logbook
+- **Индекс сущностей** *(v5.0.0+)* — нацельте хранилище на дом, а не на диалог, и оно станет семантическим индексом ваших сущностей: четыре пресета охвата (`minimal` / `optimal` / `maximal` / `paranoid`) плюс переопределения `include` / `exclude`; tool `search_entities` находит устройство по описанию (*«что варит кофе»*), сливая лексический и векторный поиск, поэтому продолжает работать при упавшем провайдере эмбеддингов; обходы инкрементальны, так что перезапуск не эмбеддит ничего заново
 - **История состояний** — tool `get_state_history` для прошлых состояний устройств
 - **Распознавание изображений** — анализ камер через мультимодальные модели
 - **Система навыков** — загружаемые YAML-файлы с дополнительными знаниями
@@ -56,6 +57,7 @@ SmartChain — кастомная интеграция Home Assistant, пред�
 - **`smartchain.analyze_image`** — снимок с камеры → мультимодальный LLM → ответ
 - **`smartchain.reload_tools`** *(v4.1.0+)* — перечитать `tools.yaml`, перезапустить MCP-соединения, атомарно пересобрать память
 - **`smartchain.clear_memory`** *(v4.3.0+)* — удалить сохранённые memories с фильтром по `kind` и/или `agent_id`
+- **`smartchain.reindex_entities`** *(v5.0.0+)* — принудительно обойти индекс сущностей; `full: true` эмбеддит всё заново
 - **AI Task** — генерация структурированных данных в автоматизациях
 
 **Панель SmartChain AI**
@@ -112,13 +114,13 @@ SmartChain — кастомная интеграция Home Assistant, пред�
 - **English:** [docs/USAGE.md](docs/USAGE.md)
 - **Русский:** [docs/USAGE-ru.md](docs/USAGE-ru.md)
 
-Темы: провайдеры и креды · опции subentries · все сервисы с примерами · встроенные tools для conversation (Assist API, history, delegate, multi-agent, search_memory) · свои tools в YAML (service / template / rest / script) · MCP-клиент (stdio / SSE / HTTP) · долговременная память (4 векторных бэкенда + sub-entry эмбеддингов) · AI Task · sidebar-панель · система навыков · troubleshooting.
+Темы: провайдеры и креды · опции subentries · все сервисы с примерами · встроенные tools для conversation (Assist API, history, delegate, multi-agent, search_memory, search_entities) · свои tools в YAML (service / template / rest / script) · MCP-клиент (stdio / SSE / HTTP) · долговременная память (4 векторных бэкенда + sub-entry эмбеддингов) · индекс сущностей (пресеты, `include` / `exclude`, приватность) · AI Task · sidebar-панель · система навыков · troubleshooting.
 
 ## Что нового
 
 | Версия | Что добавлено |
 |---|---|
-| **v5.0.0** | Подключаемые векторные бэкенды (sqlite_numpy / sqlite_vec / pgvector / qdrant), эмбеддинги как возможность провайдера, именованные хранилища |
+| **v5.0.0** | Подключаемые векторные бэкенды (sqlite_numpy / sqlite_vec / pgvector / qdrant), эмбеддинги как возможность провайдера, именованные хранилища, индекс сущностей с tool `search_entities` |
 | v4.4.0 | Multi-agent оркестрация — `ask_agents` параллельный fan-out + `critique_response` ревью второго мнения |
 | v4.3.0 | Долговременная память / RAG — Chroma vector store *(заменено в v5.0.0)*, tool `search_memory`, ингест диалогов + logbook |
 | v4.2.0 | MCP-клиент — подключение к удалённым MCP-серверам через stdio / SSE / HTTP с автореконнектом |

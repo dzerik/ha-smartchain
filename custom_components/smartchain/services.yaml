@@ -85,7 +85,10 @@ clear_memory:
       name: Memory Store
       description: >
         Name of the memory store to clear, as configured under memory.stores in
-        tools.yaml. Omit to clear every configured store.
+        tools.yaml. Omit to clear every configured store. Note: a store with a
+        source: block is an entity index, and clearing one schedules a
+        background sweep that rebuilds it from the live registries — the
+        deletion is not permanent, and the rebuild re-embeds every entity.
       required: false
       example: conversations
       selector:
