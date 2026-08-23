@@ -54,6 +54,8 @@ from .const import (
     DELEGATE_MANY_TOOL_NAME,
     DELEGATE_TOOL_NAME,
     DOMAIN,
+    ENTITY_SEARCH_DEFAULT_TOP_K,
+    ENTITY_TOOL_NAME,
     HISTORY_TOOL_NAME,
     MAX_TOOL_ITERATIONS,
     MEMORY_TOOL_NAME,
@@ -75,6 +77,10 @@ from .tools.delegate_many_tool import (
     get_delegate_many_tool_definition,
 )
 from .tools.dispatcher import dispatch as dispatch_custom_tool
+from .tools.memory.entity_tool import (
+    execute_entity_search,
+    get_entity_tool_definition,
+)
 from .tools.memory.ingest import ingest_conversation_turn
 from .tools.memory.registry import MemoryRegistry
 from .tools.memory.search_tool import (
@@ -307,6 +313,10 @@ class SmartChainConversationEntity(ConversationEntity):
         if memory_enabled:
             tools.append(get_memory_tool_definition(memory_registry))
 
+        entity_enabled = memory_registry is not None and bool(memory_registry.entity_store_names())
+        if entity_enabled:
+            tools.append(get_entity_tool_definition(memory_registry))
+
         registry: ToolRegistry | None = self.hass.data.get(DOMAIN, {}).get("tools")
         custom_tools = self._collect_custom_tools(registry) if registry else []
         if custom_tools:
@@ -335,6 +345,8 @@ class SmartChainConversationEntity(ConversationEntity):
                 _extra_external: frozenset[str] = (
                     frozenset({MEMORY_TOOL_NAME}) if memory_enabled else frozenset()
                 )
+                if entity_enabled:
+                    _extra_external |= {ENTITY_TOOL_NAME}
                 if multi_agent_enabled:
                     _extra_external |= {DELEGATE_MANY_TOOL_NAME, CRITIQUE_TOOL_NAME}
                 async for _content in chat_log.async_add_delta_content_stream(
@@ -385,6 +397,40 @@ class SmartChainConversationEntity(ConversationEntity):
                         except Exception:
                             LOGGER.exception("search_memory dispatch failed")
                             result_text = "Memory lookup failed; see logs."
+                        chat_log.async_add_assistant_content_without_tools(
+                            ToolResultContent(
+                                agent_id=user_input.agent_id,
+                                tool_call_id=tc.id,
+                                tool_name=tc.tool_name,
+                                tool_result=result_text,
+                            )
+                        )
+            if entity_enabled:
+                for content in list(chat_log.content):
+                    if not isinstance(content, AssistantContent) or not content.tool_calls:
+                        continue
+                    for tc in content.tool_calls:
+                        if tc.tool_name != ENTITY_TOOL_NAME or not tc.external:
+                            continue
+                        if any(
+                            isinstance(c, ToolResultContent) and c.tool_call_id == tc.id
+                            for c in chat_log.content
+                        ):
+                            continue
+                        args = tc.tool_args or {}
+                        try:
+                            result_text = await execute_entity_search(
+                                self.hass,
+                                query=args.get("query", ""),
+                                top_k=int(args.get("top_k", ENTITY_SEARCH_DEFAULT_TOP_K)),
+                                domain=args.get("domain"),
+                                area=args.get("area"),
+                                state=args.get("state"),
+                                store=args.get("store"),
+                            )
+                        except Exception:
+                            LOGGER.exception("search_entities dispatch failed")
+                            result_text = "Entity lookup failed; see logs."
                         chat_log.async_add_assistant_content_without_tools(
                             ToolResultContent(
                                 agent_id=user_input.agent_id,
