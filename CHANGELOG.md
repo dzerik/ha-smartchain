@@ -24,6 +24,8 @@ Migration:
 - **Purpose-filtered model discovery.** The existing provider model APIs are now split by purpose, so the embeddings form lists `text-embedding-*` for OpenAI, `Embeddings*` for GigaChat and the embedding families for Ollama, while chat forms stop offering embedding models by mistake.
 - **Named memory stores.** `memory.stores[]` binds one embeddings subentry to one backend, each with its own retention, logbook polling and conversation-ingest flag. `search_memory` and `smartchain.clear_memory` take a `store` parameter; with a single store it stays optional.
 - **Dimension probing.** The embedding dimension is measured at startup and persisted per store. Changing to a model of a different dimension is detected and reported with exact remediation steps instead of corrupting the index.
+- **`!secret` now works in `tools.yaml`.** The loader was never given a `Secrets` object, so any `!secret` tag failed the whole file. It is wired through now, which matters most for a pgvector `dsn` — that belongs in `secrets.yaml`, not inline. A `secrets.yaml` beside `tools.yaml` takes precedence over the one in the config root.
+- `smartchain.clear_memory` and `smartchain.reload_tools` are declared in `services.yaml`, so they appear in the Home Assistant service picker with their fields.
 
 ### Changed
 - `hass.data[DOMAIN]["memory"]` now holds a `MemoryRegistry` rather than a single `MemoryStore`.
@@ -31,7 +33,7 @@ Migration:
 - The Chroma `$and` filter dialect is replaced by a flat backend-neutral filter, translated per backend.
 
 ### Tests
-- 411 passing (was 289). The centrepiece is a conformance suite executed against every backend, so the Protocol cannot drift between implementations.
+- 467 passing, none skipped (was 289). The centrepiece is a conformance suite executed against every file-based backend; `sqlite-vec` is now a dev dependency so it runs in CI rather than skipping.
 
 ## [4.4.1] - 2026-05-28
 
