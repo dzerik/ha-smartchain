@@ -1,0 +1,106 @@
+"""Keeps an entity store in step with the home, embedding only what changed."""
+
+import asyncio
+import logging
+from dataclasses import dataclass
+
+from homeassistant.core import HomeAssistant
+
+from ...const import ENTITY_INDEX_BATCH_PAUSE_SECONDS, ENTITY_INDEX_BATCH_SIZE
+from .config import EntitySourceConfig
+from .entity_doc import build_metadata, doc_id_for, render_catalogue
+from .entity_filter import EntityCandidate, resolve_candidates
+from .store import MemoryStore
+
+LOGGER = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class SweepResult:
+    new: int = 0
+    changed: int = 0
+    removed: int = 0
+    unchanged: int = 0
+
+
+class EntityIndexer:
+    """One entity-source store's view of the home.
+
+    Failures are logged and swallowed: a broken sweep leaves the previous
+    index in place rather than emptying it.
+    """
+
+    def __init__(self, hass: HomeAssistant, store: MemoryStore, config: EntitySourceConfig) -> None:
+        self.hass = hass
+        self.store = store
+        self.config = config
+        self._lock = asyncio.Lock()
+
+    def _state_of(self, entity_id: str) -> str | None:
+        if not self.config.index_states:
+            return None
+        state = self.hass.states.get(entity_id)
+        return state.state if state else "unavailable"
+
+    async def reconcile(self, *, full: bool = False) -> SweepResult:
+        """Bring the store in line with the home. Never raises."""
+        if not self.store.is_available:
+            return SweepResult()
+
+        async with self._lock:
+            try:
+                return await self._reconcile(full)
+            except Exception:  # noqa: BLE001 — a sweep must never break setup
+                LOGGER.exception("entity index sweep failed")
+                return SweepResult()
+
+    async def _reconcile(self, full: bool = False) -> SweepResult:
+        candidates = resolve_candidates(self.hass, self.config)
+        stored = await self.store.list_metadata({"kind": "entity"})
+
+        pending: list[tuple[EntityCandidate, str, dict[str, str]]] = []
+        new = changed = unchanged = 0
+
+        for entity_id, cand in candidates.items():
+            text = render_catalogue(cand)
+            metadata = build_metadata(cand, text, state=self._state_of(entity_id))
+            existing = stored.get(doc_id_for(entity_id))
+            if existing is None:
+                new += 1
+            elif full or existing.get("fingerprint") != metadata["fingerprint"]:
+                changed += 1
+            else:
+                unchanged += 1
+                continue
+            pending.append((cand, text, metadata))
+
+        await self._write(pending)
+
+        removed = 0
+        for _doc_id, meta in stored.items():
+            entity_id = meta.get("entity_id", "")
+            if entity_id and entity_id not in candidates:
+                await self.store.delete_where({"kind": "entity", "entity_id": entity_id})
+                removed += 1
+
+        LOGGER.info(
+            "entity index: %d new, %d changed, %d removed, %d unchanged",
+            new,
+            changed,
+            removed,
+            unchanged,
+        )
+        return SweepResult(new=new, changed=changed, removed=removed, unchanged=unchanged)
+
+    async def _write(self, pending: list[tuple[EntityCandidate, str, dict[str, str]]]) -> None:
+        """Embed and store in batches, yielding between them.
+
+        A first sweep over a large home is hundreds of embedding calls; it must
+        not monopolise the executor while HA is still coming up.
+        """
+        for index in range(0, len(pending), ENTITY_INDEX_BATCH_SIZE):
+            batch = pending[index : index + ENTITY_INDEX_BATCH_SIZE]
+            for cand, text, metadata in batch:
+                await self.store.add(text, metadata, doc_id=doc_id_for(cand.entity_id))
+            if index + ENTITY_INDEX_BATCH_SIZE < len(pending):
+                await asyncio.sleep(ENTITY_INDEX_BATCH_PAUSE_SECONDS)
