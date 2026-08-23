@@ -244,6 +244,13 @@ SERVICE_REINDEX_ENTITIES = "reindex_entities"
 EVENT_ENTITIES_REINDEXED = f"{DOMAIN}_entities_reindexed"
 ENTITY_INDEX_BATCH_SIZE = 32
 ENTITY_INDEX_BATCH_PAUSE_SECONDS = 0.5
+# Comfortably under MemoryStore's chunking thresholds (MEMORY_CHUNK_SIZE /
+# MEMORY_MAX_TEXT_LEN) so a catalogue entry never splits into multiple
+# chunks. `MemoryStore.add` only honours the given doc_id verbatim when a
+# text yields exactly one chunk; a multi-chunk catalogue would be stored
+# under suffixed doc_ids the next sweep's fingerprint lookup can never find,
+# so it would re-embed every sweep, forever.
+ENTITY_CATALOGUE_MAX_CHARS = 900
 ENTITY_REGISTRY_DEBOUNCE_SECONDS = 5
 ENTITY_STATE_FLUSH_SECONDS = 30
 ENTITY_SEARCH_DEFAULT_TOP_K = 10

@@ -4,9 +4,11 @@ import hashlib
 
 from homeassistant.util import dt as dt_util
 
+from ...const import ENTITY_CATALOGUE_MAX_CHARS
 from .entity_filter import EntityCandidate
 
 _ABSENT = "—"
+_ALIASES_PREFIX = "Also known as: "
 
 
 def doc_id_for(entity_id: str) -> str:
@@ -22,6 +24,13 @@ def render_catalogue(cand: EntityCandidate) -> str:
 
     Structural labels stay in English; names, areas and aliases are whatever
     Home Assistant holds, in the user's own language.
+
+    Kept to `ENTITY_CATALOGUE_MAX_CHARS`: a catalogue that spilled into a
+    second embedding chunk would be stored under a doc_id the next sweep's
+    fingerprint lookup can never find, and would re-embed forever. Aliases
+    are appended one at a time only while the running total stays within
+    budget; a catalogue long enough to need trimming is dominated by alias
+    noise, so the rest are dropped rather than fought over.
     """
     lines = [
         f"{cand.entity_id} — {cand.name or cand.entity_id}",
@@ -30,9 +39,20 @@ def render_catalogue(cand: EntityCandidate) -> str:
             f"| Domain: {cand.domain} | Class: {cand.device_class or _ABSENT}"
         ),
     ]
-    if cand.aliases:
-        lines.append("Also known as: " + ", ".join(cand.aliases))
-    return "\n".join(lines)
+    text = "\n".join(lines)
+
+    kept: list[str] = []
+    for alias in cand.aliases:
+        alias_line = _ALIASES_PREFIX + ", ".join([*kept, alias])
+        if len(text) + 1 + len(alias_line) > ENTITY_CATALOGUE_MAX_CHARS:
+            break
+        kept.append(alias)
+    if kept:
+        text += "\n" + _ALIASES_PREFIX + ", ".join(kept)
+
+    # Hard backstop: the fixed lines alone should never exceed the budget,
+    # but never emit more than it regardless.
+    return text[:ENTITY_CATALOGUE_MAX_CHARS]
 
 
 def fingerprint(text: str) -> str:

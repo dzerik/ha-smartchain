@@ -7,6 +7,7 @@ from custom_components.smartchain.tools.memory.entity_doc import (
     render_catalogue,
 )
 from custom_components.smartchain.tools.memory.entity_filter import EntityCandidate
+from custom_components.smartchain.tools.memory.store import chunk_text
 
 
 def _cand(**kw) -> EntityCandidate:
@@ -57,6 +58,39 @@ def test_fingerprint_is_stable_and_short() -> None:
     text = render_catalogue(_cand())
     assert fingerprint(text) == fingerprint(text)
     assert len(fingerprint(text)) == 16
+
+
+def test_a_pathological_alias_set_still_fits_one_chunk() -> None:
+    """The invariant that actually matters: the real chunker sees one piece.
+
+    `MemoryStore.add` only honours a given doc_id verbatim when the text
+    chunks to exactly one piece; anything more and the next sweep's
+    fingerprint lookup can never find it again, re-embedding it forever.
+    Asserting against `chunk_text` itself — not a magic character count —
+    means a future change to the chunk size surfaces here.
+    """
+    many_long_aliases = tuple(f"alias-{i}-{'x' * 40}" for i in range(200))
+    cand = _cand(aliases=many_long_aliases)
+
+    text = render_catalogue(cand)
+
+    assert len(chunk_text(text)) == 1
+
+
+def test_truncation_is_deterministic() -> None:
+    """A truncated catalogue must fingerprint the same way every render.
+
+    Otherwise the entity would re-embed on every sweep for a different
+    reason than the one this whole design exists to eliminate.
+    """
+    many_long_aliases = tuple(f"alias-{i}-{'x' * 40}" for i in range(200))
+    cand = _cand(aliases=many_long_aliases)
+
+    first = render_catalogue(cand)
+    second = render_catalogue(cand)
+
+    assert first == second
+    assert fingerprint(first) == fingerprint(second)
 
 
 def test_metadata_shape_without_state() -> None:

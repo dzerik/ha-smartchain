@@ -76,12 +76,14 @@ class EntityIndexer:
 
         await self._write(pending)
 
-        removed = 0
-        for _doc_id, meta in stored.items():
+        orphans: list[str] = []
+        seen: set[str] = set()
+        for meta in stored.values():
             entity_id = meta.get("entity_id", "")
-            if entity_id and entity_id not in candidates:
-                await self.store.clear({"kind": "entity", "entity_id": entity_id})
-                removed += 1
+            if entity_id and entity_id not in candidates and entity_id not in seen:
+                seen.add(entity_id)
+                orphans.append(entity_id)
+        removed = await self._remove(orphans)
 
         LOGGER.info(
             "entity index: %d new, %d changed, %d removed, %d unchanged",
@@ -104,3 +106,23 @@ class EntityIndexer:
                 await self.store.add(text, metadata, doc_id=doc_id_for(cand.entity_id))
             if index + ENTITY_INDEX_BATCH_SIZE < len(pending):
                 await asyncio.sleep(ENTITY_INDEX_BATCH_PAUSE_SECONDS)
+
+    async def _remove(self, orphans: list[str]) -> int:
+        """Delete orphans in batches, yielding between them like `_write`.
+
+        A preset narrowed from `maximal` to `minimal` can orphan hundreds of
+        entities at once; that must not fire as one uninterrupted run of
+        backend round-trips while HA is still coming up.
+
+        Counts only what `MemoryStore.clear` reports as actually deleted —
+        it swallows backend failures and returns 0, so `removed` must never
+        claim more than that.
+        """
+        removed = 0
+        for index in range(0, len(orphans), ENTITY_INDEX_BATCH_SIZE):
+            batch = orphans[index : index + ENTITY_INDEX_BATCH_SIZE]
+            for entity_id in batch:
+                removed += await self.store.clear({"kind": "entity", "entity_id": entity_id})
+            if index + ENTITY_INDEX_BATCH_SIZE < len(orphans):
+                await asyncio.sleep(ENTITY_INDEX_BATCH_PAUSE_SECONDS)
+        return removed

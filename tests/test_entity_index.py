@@ -206,6 +206,29 @@ async def test_a_failing_sweep_never_raises(hass: HomeAssistant, caplog, indexer
 
     assert result.new == 0
     assert "entity index" in caplog.text.lower()
+    # The actual claim: the previous index survived untouched.
+    store.clear.assert_not_awaited()
+    store.add.assert_not_awaited()
+
+
+async def test_a_failed_write_never_reaches_delete(hass: HomeAssistant, indexer_factory) -> None:
+    """Write-before-delete ordering, pinned.
+
+    A failed write followed by a completed delete would leave the store
+    worse than before the sweep started; this must never happen.
+    """
+    store = _store()
+    store.list_metadata = AsyncMock(
+        return_value={
+            "entity:light.gone": {"kind": "entity", "entity_id": "light.gone", "fingerprint": "x"}
+        }
+    )
+    store.add = AsyncMock(side_effect=RuntimeError("boom"))
+    indexer = indexer_factory(hass, store, [_cand("light.a")])
+
+    await indexer.reconcile()
+
+    store.clear.assert_not_awaited()
 
 
 async def test_an_unavailable_store_is_skipped(hass: HomeAssistant, indexer_factory) -> None:
