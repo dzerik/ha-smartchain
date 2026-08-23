@@ -9,7 +9,19 @@ from langchain_gigachat import GigaChatEmbeddings
 from langchain_ollama import OllamaEmbeddings
 from langchain_openai import OpenAIEmbeddings
 
-from ...const import MEMORY_EMBED_TIMEOUT_SECONDS
+from ...client_util import supports
+from ...const import (
+    CAPABILITY_EMBEDDINGS,
+    CONF_API_KEY,
+    CONF_BASE_URL,
+    CONF_ENGINE,
+    CONF_FOLDER_ID,
+    ID_GIGACHAT,
+    ID_OLLAMA,
+    ID_OPENAI,
+    ID_YANDEX_GPT,
+    MEMORY_EMBED_TIMEOUT_SECONDS,
+)
 from .config import MemoryConfig
 
 LOGGER = logging.getLogger(__name__)
@@ -81,3 +93,63 @@ def create_embeddings(hass: HomeAssistant, config: MemoryConfig) -> EmbeddingsPr
             hass, YandexEmbeddingsAdapter(api_key=config.api_key, model=config.model)
         )
     raise EmbeddingsConfigError(f"unknown provider {provider!r}")
+
+
+def create_embeddings_from_subentry(
+    hass: HomeAssistant,
+    entry: Any,
+    subentry: Any,
+) -> EmbeddingsProvider:
+    """Build an embeddings provider from a config entry and its subentry.
+
+    Credentials come from the entry, the model from the subentry. This is what
+    removes the duplicate credential declaration the flat YAML block required.
+    """
+    engine = entry.data.get(CONF_ENGINE) or ID_GIGACHAT
+    if not supports(engine, CAPABILITY_EMBEDDINGS):
+        raise EmbeddingsConfigError(
+            f"provider {engine!r} does not provide embeddings; "
+            f"subentry {subentry.title!r} cannot be used for memory"
+        )
+
+    model = (subentry.data.get("model") or "").strip()
+    if not model:
+        raise EmbeddingsConfigError(
+            f"embeddings subentry {subentry.title!r} has no model configured"
+        )
+
+    if engine == ID_OLLAMA:
+        kwargs: dict[str, Any] = {"model": model}
+        base_url = entry.data.get(CONF_BASE_URL)
+        if base_url:
+            kwargs["base_url"] = base_url
+        return _ExecutorBacked(hass, OllamaEmbeddings(**kwargs))
+
+    if engine == ID_OPENAI:
+        return _ExecutorBacked(
+            hass, OpenAIEmbeddings(model=model, api_key=entry.data[CONF_API_KEY])
+        )
+
+    if engine == ID_GIGACHAT:
+        return _ExecutorBacked(
+            hass,
+            GigaChatEmbeddings(
+                credentials=entry.data[CONF_API_KEY],
+                model=model,
+                verify_ssl_certs=False,
+            ),
+        )
+
+    if engine == ID_YANDEX_GPT:
+        from .embeddings_yandex import YandexEmbeddingsAdapter
+
+        return _ExecutorBacked(
+            hass,
+            YandexEmbeddingsAdapter(
+                api_key=entry.data[CONF_API_KEY],
+                model=model,
+                folder_id=entry.data.get(CONF_FOLDER_ID, ""),
+            ),
+        )
+
+    raise EmbeddingsConfigError(f"unknown provider {engine!r}")

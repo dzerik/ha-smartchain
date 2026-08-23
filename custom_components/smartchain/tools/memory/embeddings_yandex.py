@@ -6,15 +6,16 @@ from typing import Any
 class YandexEmbeddingsAdapter:
     """Synchronous wrapper exposing `embed_query` / `embed_documents`."""
 
-    def __init__(self, api_key: str, model: str) -> None:
+    def __init__(self, api_key: str, model: str, folder_id: str = "") -> None:
         self._api_key = api_key
         self._model = model or "general"
+        self._folder_id = folder_id
         self._client = self._build_client()
 
     def _build_client(self) -> Any:
         from yandex_cloud_ml_sdk import YCloudML  # type: ignore[import-not-found]
 
-        return YCloudML(folder_id="", auth=self._api_key)
+        return YCloudML(folder_id=self._folder_id, auth=self._api_key)
 
     def embed_query(self, text: str) -> list[float]:
         result = self._client.models.text_embeddings(self._model).run(text)
