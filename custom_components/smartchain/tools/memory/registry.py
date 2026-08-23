@@ -10,6 +10,7 @@ from ...const import DOMAIN, SUBENTRY_TYPE_EMBEDDINGS
 from .backends import BackendInitError, create_backend
 from .config import MemorySettings, StoreConfig
 from .embeddings import EmbeddingsConfigError, create_embeddings_from_subentry
+from .entity_index import EntityIndexer
 from .ingest import MemoryLogbookPoller
 from .retention import RetentionTask
 from .store import MemoryStore
@@ -30,6 +31,7 @@ class MemoryRegistry:
         self._configs: dict[str, StoreConfig] = {}
         self._retention: dict[str, RetentionTask] = {}
         self._pollers: dict[str, MemoryLogbookPoller] = {}
+        self.indexers: dict[str, EntityIndexer] = {}
 
     # ----- construction -----
 
@@ -127,6 +129,22 @@ class MemoryRegistry:
             self.stores[config.name] = store
             self._configs[config.name] = config
 
+            if config.source is not None:
+                # An entity index has no conversation turns to retain and no
+                # logbook to poll; retention in particular would delete the
+                # index by age.
+                indexer = EntityIndexer(self.hass, store, config.source)
+                indexer.start()
+                self.indexers[config.name] = indexer
+                LOGGER.info(
+                    "Entity index %r ready on backend %s (preset %s, states %s)",
+                    config.name,
+                    backend.name,
+                    config.source.preset,
+                    "on" if config.source.index_states else "off",
+                )
+                continue
+
             retention = RetentionTask(self.hass, store, config.retention_days)
             retention.start()
             self._retention[config.name] = retention
@@ -139,6 +157,8 @@ class MemoryRegistry:
 
     async def shutdown(self) -> None:
         """Stop every task, then close every backend."""
+        for indexer in self.indexers.values():
+            await indexer.stop()
         for task in self._retention.values():
             await task.stop()
         for poller in self._pollers.values():
@@ -153,6 +173,7 @@ class MemoryRegistry:
         self._configs.clear()
         self._retention.clear()
         self._pollers.clear()
+        self.indexers.clear()
 
     # ----- lookup -----
 
@@ -173,11 +194,19 @@ class MemoryRegistry:
 
     def stores_for_conversation_ingest(self) -> list[MemoryStore]:
         return [
-            store for name, store in self.stores.items() if self._configs[name].ingest_conversation
+            store
+            for name, store in self.stores.items()
+            if self._configs[name].source is None and self._configs[name].ingest_conversation
         ]
 
     def config_for(self, name: str) -> StoreConfig | None:
         return self._configs.get(name)
+
+    def entity_store_names(self) -> list[str]:
+        return list(self.indexers)
+
+    def indexer_for(self, name: str) -> EntityIndexer | None:
+        return self.indexers.get(name)
 
     def __len__(self) -> int:
         return len(self.stores)

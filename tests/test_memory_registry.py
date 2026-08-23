@@ -18,6 +18,7 @@ from custom_components.smartchain.tools.memory.config import (
     StoreConfig,
 )
 from custom_components.smartchain.tools.memory.embeddings import EmbeddingsConfigError
+from custom_components.smartchain.tools.memory.entity_index import EntityIndexer
 from custom_components.smartchain.tools.memory.registry import MemoryRegistry
 
 pytestmark = pytest.mark.usefixtures("enable_custom_integrations")
@@ -365,6 +366,111 @@ async def test_bare_exception_from_embeddings_skips_only_that_store(
 
     assert registry.names() == ["good"]
     assert "bad" in caplog.text
+    await registry.shutdown()
+
+
+async def test_an_entity_source_gets_an_indexer_not_ingest_plumbing(
+    hass: HomeAssistant, tmp_path, patched_store
+) -> None:
+    from custom_components.smartchain.tools.memory.config import EntitySourceConfig
+
+    _entry_with_embeddings(hass, ["E"])
+    registry = MemoryRegistry(hass)
+    with patch(
+        "custom_components.smartchain.tools.memory.registry.EntityIndexer",
+        spec=EntityIndexer,
+    ) as indexer_cls:
+        await registry.build(
+            MemorySettings(
+                stores=[
+                    StoreConfig(name="entities", embeddings="E", source=EntitySourceConfig()),
+                    StoreConfig(name="talk", embeddings="E"),
+                ]
+            ),
+            tmp_path,
+        )
+
+    assert registry.entity_store_names() == ["entities"]
+    assert registry.indexer_for("entities") is not None
+    assert registry.indexer_for("talk") is None
+    indexer_cls.return_value.start.assert_called_once()
+    await registry.shutdown()
+
+
+async def test_an_entity_store_is_excluded_from_conversation_ingest(
+    hass: HomeAssistant, tmp_path, patched_store
+) -> None:
+    """Even if the flag defaulted true, an entity store must never take turns."""
+    from custom_components.smartchain.tools.memory.config import EntitySourceConfig
+
+    _entry_with_embeddings(hass, ["E"])
+    registry = MemoryRegistry(hass)
+    with patch(
+        "custom_components.smartchain.tools.memory.registry.EntityIndexer",
+        spec=EntityIndexer,
+    ):
+        await registry.build(
+            MemorySettings(
+                stores=[
+                    StoreConfig(name="entities", embeddings="E", source=EntitySourceConfig()),
+                    StoreConfig(name="talk", embeddings="E"),
+                ]
+            ),
+            tmp_path,
+        )
+
+    targets = registry.stores_for_conversation_ingest()
+    assert targets == [registry.get("talk")]
+    await registry.shutdown()
+
+
+async def test_shutdown_stops_every_indexer(hass: HomeAssistant, tmp_path, patched_store) -> None:
+    from custom_components.smartchain.tools.memory.config import EntitySourceConfig
+
+    _entry_with_embeddings(hass, ["E"])
+    registry = MemoryRegistry(hass)
+    with patch(
+        "custom_components.smartchain.tools.memory.registry.EntityIndexer",
+        spec=EntityIndexer,
+    ) as indexer_cls:
+        indexer_cls.return_value.stop = AsyncMock()
+        await registry.build(
+            MemorySettings(
+                stores=[StoreConfig(name="entities", embeddings="E", source=EntitySourceConfig())]
+            ),
+            tmp_path,
+        )
+        await registry.shutdown()
+
+    indexer_cls.return_value.stop.assert_awaited()
+    assert registry.entity_store_names() == []
+
+
+async def test_an_entity_store_gets_no_retention_or_poller(
+    hass: HomeAssistant, tmp_path, patched_store
+) -> None:
+    """Retention on an entity index would delete it by age."""
+    from custom_components.smartchain.tools.memory.config import EntitySourceConfig
+
+    _entry_with_embeddings(hass, ["E"])
+    registry = MemoryRegistry(hass)
+    with (
+        patch(
+            "custom_components.smartchain.tools.memory.registry.EntityIndexer",
+            spec=EntityIndexer,
+        ),
+        patch("custom_components.smartchain.tools.memory.registry.RetentionTask") as ret,
+        patch("custom_components.smartchain.tools.memory.registry.MemoryLogbookPoller") as poll,
+    ):
+        await registry.build(
+            MemorySettings(
+                stores=[StoreConfig(name="entities", embeddings="E", source=EntitySourceConfig())]
+            ),
+            tmp_path,
+        )
+
+    assert ret.call_count == 0
+    assert poll.call_count == 0
     await registry.shutdown()
 
 
