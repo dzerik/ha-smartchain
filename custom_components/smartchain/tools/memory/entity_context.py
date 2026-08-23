@@ -33,6 +33,11 @@ _NO_AREA = "No area"
 # line, or the inline note a single oversized area gets appended to itself.
 _NOTE_RESERVE = 120
 
+# The partial-area branch can emit BOTH notes on one render: its own inline
+# one, and the trailing one, because it spends the rest of the budget and so
+# every area after it is counted as omitted. It therefore reserves twice.
+_PARTIAL_RESERVE = _NOTE_RESERVE * 2
+
 
 def _partial_area_line(
     area: str, domains: dict[str, list[str]], budget: int
@@ -124,7 +129,7 @@ def render_skeleton(candidates: dict[str, EntityCandidate]) -> str:
         # rendering half of it. Half an area reads as though the rest of it does
         # not exist, which is the exact failure this design avoids.
         fits_whole_ever = len(line) + 1 <= ENTITY_SKELETON_MAX_CHARS - _NOTE_RESERVE
-        if fits_whole_ever or remaining <= _NOTE_RESERVE:
+        if fits_whole_ever or remaining <= _PARTIAL_RESERVE:
             omitted_areas += 1
             omitted_entities += area_entity_count
             continue
@@ -135,7 +140,17 @@ def render_skeleton(candidates: dict[str, EntityCandidate]) -> str:
         # here, because it carries its own inline note in the same voice as the
         # trailing one. Whatever budget is left goes entirely to this area, so
         # anything still to come after it is reported as omitted.
-        partial_line, kept, dropped = _partial_area_line(area, domains, remaining - _NOTE_RESERVE)
+        #
+        # Two notes, not one: this branch emits the inline "N more entities in
+        # {area}" line AND — because it zeroes `remaining`, forcing every later
+        # area into the omitted count — the trailing "N more area(s)" line.
+        # Reserving room for only one of them overruns the budget by the length
+        # of the other, and the defensive slice at the end then cuts it
+        # mid-word, which is exactly the silent mangling this renderer's
+        # omission notes exist to prevent.
+        partial_line, kept, dropped = _partial_area_line(
+            area, domains, remaining - _PARTIAL_RESERVE
+        )
         if kept:
             lines.append(partial_line)
         if dropped:
@@ -164,6 +179,14 @@ class SkeletonCache:
 
     Registry events are the real invalidation; the TTL is a backstop for a
     change that somehow raises none.
+
+    That backstop is load-bearing, not merely defensive. `resolve_candidates`
+    unions the entity registry with the **state machine**, so template
+    entities, YAML-platform entities and groups are in the candidate set — and
+    none of them are in any registry, so none of the three events below fire
+    when one appears, disappears or is renamed. For that whole class of entity
+    the 300-second TTL is the *only* thing that ever refreshes the map. Do not
+    read the three subscriptions as complete coverage.
     """
 
     def __init__(self, hass: HomeAssistant) -> None:
@@ -261,6 +284,13 @@ async def build_retrieved_context(hass: HomeAssistant, preset: str, query: str) 
             query,
             top_k=ENTITY_CONTEXT_MAX_ENTITIES,
             store_name=store_name,
+            # The query here is the user's raw sentence, not a phrase a model
+            # picked for a search tool. Matching it whole finds nothing:
+            # "включи свет на кухне" is not the name of anything. Per-token
+            # matching is what makes this work on an install with no vector
+            # index — which is the configuration the docs promote as fully
+            # operational.
+            tokenize=True,
         )
         return render_retrieved(hass, ranked)
     except Exception:  # noqa: BLE001 — never fail a turn over the retrieved block

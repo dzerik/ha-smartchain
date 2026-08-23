@@ -15,6 +15,7 @@ from custom_components.smartchain.const import (
     ID_GIGACHAT,
     SUBENTRY_TYPE_EMBEDDINGS,
 )
+from custom_components.smartchain.tools.loader import LoaderError
 from custom_components.smartchain.tools.memory.entity_filter import EntityCandidate
 from custom_components.smartchain.tools.memory.registry import MemoryRegistry
 
@@ -180,6 +181,54 @@ async def test_skeleton_cache_re_subscribes_after_an_entry_reload(
         cache.get("optimal")
 
     assert resolve.call_count == 2
+
+
+async def test_a_failed_reload_still_invalidates_the_skeleton_cache(
+    hass: HomeAssistant, mock_llm_client, tmp_path_factory, patched_store
+) -> None:
+    """The rebuild branch must invalidate even when `_reload_registry` throws.
+
+    The only `invalidate()` on the reload path used to live inside
+    `_reload_registry`, under the `try` whose `except LoaderError` the rebuild
+    branch swallows. A tools.yaml that fails to parse therefore skipped it,
+    and `start()` resubscribed a cache still holding the map it built before
+    the unload — during which window every registry event went unheard. The
+    result is a permanently stale map with no error anywhere.
+    """
+    entry = await _setup(hass, tmp_path_factory, mock_llm_client)
+    cache = hass.data[DOMAIN]["entity_skeleton"]
+
+    with patch(
+        "custom_components.smartchain.tools.memory.entity_context.resolve_candidates",
+        return_value={"light.a": _skeleton_cand("light.a")},
+    ) as warm:
+        cache.get("optimal")
+    assert warm.call_count == 1  # the map is now cached
+
+    await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+
+    with (
+        patch(
+            "custom_components.smartchain.get_client",
+            new_callable=AsyncMock,
+            return_value=mock_llm_client,
+        ),
+        patch(
+            "custom_components.smartchain._reload_registry",
+            new=AsyncMock(side_effect=LoaderError("tools.yaml parse error")),
+        ),
+    ):
+        await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    with patch(
+        "custom_components.smartchain.tools.memory.entity_context.resolve_candidates",
+        return_value={"light.a": _skeleton_cand("light.a")},
+    ) as resolve:
+        cache.get("optimal")
+
+    assert resolve.call_count == 1
 
 
 async def test_only_flagged_stores_receive_conversation_ingest(

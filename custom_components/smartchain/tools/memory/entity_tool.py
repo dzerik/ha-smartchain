@@ -6,6 +6,7 @@ than cosine similarity. The vector pass earns its keep on the semantic tail.
 """
 
 import logging
+import re
 import unicodedata
 from typing import Any
 
@@ -30,6 +31,21 @@ _EXACT, _PREFIX, _VECTOR = 0, 1, 2
 # to preserve candidates before filtering (see `execute_entity_search`) from
 # turning that into an unbounded store scan.
 _MAX_STORE_FETCH_K = 200
+
+# Runs of alphanumerics, Unicode-aware, with `_` deliberately excluded so
+# `light.kitchen_ceiling` yields "light", "kitchen" and "ceiling" rather than
+# one unusable "kitchen_ceiling".
+_TOKEN_RE = re.compile(r"[^\W_]+", re.UNICODE)
+
+# Tokens shorter than this are dropped before matching. Two-letter fragments
+# ("на", "то", "in", "on") are substrings of half a home's entity names and
+# would turn a token pass into "return everything".
+_TOKEN_MIN_LEN = 3
+
+# Score for a token hit. It shares the `_PREFIX` tier with a whole-needle
+# partial match but sorts after it, so a candidate that matched the entire
+# phrase still outranks one that only matched a word of it.
+_TOKEN_SCORE = 0.25
 
 
 def _fold(text: str) -> str:
@@ -74,11 +90,25 @@ def get_entity_tool_definition(registry: Any) -> dict[str, Any]:
 
 
 def _lexical(
-    candidates: dict[str, EntityCandidate], query: str
+    candidates: dict[str, EntityCandidate], query: str, tokenize: bool = False
 ) -> list[tuple[int, float, EntityCandidate]]:
+    """Fold the query and match it against every candidate's text.
+
+    `tokenize` decides what "the query" means. Off — the default, and what
+    `search_entities` uses — the whole query is one needle, which is right
+    when a model supplies a short descriptive phrase. On, the needle is
+    additionally split into words and a candidate is admitted when any word
+    of three characters or more occurs in one of its haystacks. That is what
+    the prompt context needs, because it passes the raw user utterance:
+    "включи свет на кухне" is nobody's entity name, and without the token
+    pass it matches nothing at all on an install with no vector index.
+    """
     needle = _fold(query)
     if not needle:
         return []
+    tokens: list[str] = []
+    if tokenize:
+        tokens = [t for t in _TOKEN_RE.findall(needle) if len(t) >= _TOKEN_MIN_LEN]
     ranked: list[tuple[int, float, EntityCandidate]] = []
     for cand in candidates.values():
         haystacks = [cand.name, cand.entity_id, cand.area, *cand.aliases]
@@ -87,6 +117,8 @@ def _lexical(
             ranked.append((_EXACT, 1.0, cand))
         elif any(h.startswith(needle) or needle in h for h in folded):
             ranked.append((_PREFIX, 0.5, cand))
+        elif tokens and any(t in h for h in folded for t in tokens):
+            ranked.append((_PREFIX, _TOKEN_SCORE, cand))
         if len(ranked) >= ENTITY_LEXICAL_CANDIDATES:
             break
     return ranked
@@ -102,6 +134,7 @@ async def rank_entities(
     where_extra: dict[str, Any] | None = None,
     degrade_on_store_failure: bool = True,
     fetch_k: int | None = None,
+    tokenize: bool = False,
 ) -> list[EntityCandidate]:
     """Candidates ranked lexical-first, then by vector score, deduplicated.
 
@@ -132,8 +165,13 @@ async def rank_entities(
     boundary) must see a fixed failure string rather than a partial result,
     and it keeps the try/except that produces that string around its call
     here.
+
+    `tokenize` is off by default so `search_entities`, whose `query` is a
+    short phrase a model chose deliberately, keeps matching exactly as it
+    always has. The prompt-context caller turns it on, because its query is
+    the raw user utterance — see `_lexical`.
     """
-    ranked = _lexical(candidates, query)
+    ranked = _lexical(candidates, query, tokenize=tokenize)
     seen = {cand.entity_id for _tier, _score, cand in ranked}
 
     target = registry.get(store_name) if store_name is not None else None

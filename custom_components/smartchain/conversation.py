@@ -286,7 +286,15 @@ class SmartChainConversationEntity(ConversationEntity):
         way `_build_system_prompt` trusts `build_entity_context`'s, rather
         than wrapping it in a second guard that would silently mask a
         regression in the callee's own.
+
+        Both switches must be on. `dynamic_entity_context` is the master
+        switch for the whole feature and is documented as the one checkbox
+        that restores the pre-v5.0.0 behaviour; an Assist extension that kept
+        injecting a retrieved block after it was unticked would make that
+        promise false on exactly the path the user is most likely to be on.
         """
+        if not options.get(CONF_DYNAMIC_ENTITY_CONTEXT, DEFAULT_DYNAMIC_ENTITY_CONTEXT):
+            return user_input.extra_system_prompt
         if not options.get(CONF_DYNAMIC_CONTEXT_ON_ASSIST, DEFAULT_DYNAMIC_CONTEXT_ON_ASSIST):
             return user_input.extra_system_prompt
 

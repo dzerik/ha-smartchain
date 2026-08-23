@@ -835,7 +835,7 @@ Now the prompt carries two much smaller blocks instead:
 
 The split is the whole idea. Retrieval on its own answers *"what state is X in"* well and *"what exists"* badly: *"включи свет"* matches a dozen lamps, *"выключи всё"* matches nothing in particular, and an entity the user happened to describe with unlucky words does not surface at all — whereupon the model, seeing no such entity in its context, answers that the device does not exist. Keeping the skeleton always present and always complete is what makes that failure impossible.
 
-**One checkbox restores the old behaviour.** Turn `dynamic_entity_context` off on the sub-entry and the agent renders the full device dump again, byte for byte, through the same cache it always used. Nothing else about the turn changes.
+**One checkbox restores the old behaviour.** Turn `dynamic_entity_context` off on the sub-entry and the agent renders the full device dump again, byte for byte, through the same cache it always used. Nothing else about the turn changes. It is the master switch for the whole feature, the Assist extension below included: with it off, `dynamic_context_on_assist` does nothing whatever its own checkbox says.
 
 | Option | Default | Effect |
 |---|---|---|
@@ -891,9 +891,13 @@ The skeleton covers whatever `dynamic_context_preset` selects, and the four pres
 
 One difference from §9.10 worth holding in mind: this preset decides what reaches the **chat** provider, in the prompt, on every turn — not what reaches the embeddings provider. `paranoid` here means the names of the hidden and disabled entities go to your LLM on every message.
 
+**It is also independent of Home Assistant's own "expose entities to Assist" setting.** Candidates come from `dynamic_context_preset` and nothing else, so with `dynamic_context_on_assist` on, the retrieved block can name entities you deliberately withheld from Assist — with their entity ids and their live states. Narrow `dynamic_context_preset` if that matters to you; SmartChain does not filter by exposure.
+
 #### No entity index is required
 
 This is the part most easily missed. **Dynamic entity context needs no memory store, no embeddings sub-entry and no vector backend.** The skeleton is built from the entity, device and area registries, and retrieval's lexical pass reads those same registries directly — case- and accent-folded matching against the friendly name, the aliases, the area and the `entity_id`. With nothing configured beyond the integration itself, the feature is fully operational.
+
+Note that here the query is a whole user sentence, not a phrase a model composed for a search tool, so it is matched **both whole and word by word**: nothing in your home is called *"включи свет на кухне"*, but *"свет"* is. Words shorter than three characters are ignored — *"на"*, *"in"*, *"on"* are substrings of half a home — and a whole-phrase hit still outranks a word hit, so a device whose name is the entire query comes first. `search_entities` (§9.10) keeps matching its `query` whole, because a model picks that one deliberately.
 
 A configured entity index (§9.10) adds a second pass on top: a vector search over the store, merged with the lexical hits by the same ranking `search_entities` uses — exact lexical first, then prefix, then vector by score, deduplicated by `entity_id`. That is what finds an entity whose name shares no word with the query. The vector pass runs only when there is **exactly one** entity index; with two or more there is no non-arbitrary choice and no user to ask, so retrieval stays lexical rather than silently preferring one index over another.
 
@@ -920,6 +924,8 @@ When `llm_hass_api` is set, Home Assistant injects its own list of exposed entit
 Turn `dynamic_context_on_assist` on and exactly one thing is added: the **retrieved block**, appended to `extra_system_prompt` after whatever it already held, which is preserved untouched. Never the skeleton — that would duplicate Home Assistant's list at full price.
 
 What it buys is the semantic hits a name-based exposure list does not surface, in a form the model can act on, since the block carries entity ids and the Assist tools take them. What it costs is tokens on every turn, on top of a prompt that already carries HA's own list. Hence: off by default.
+
+**Both switches must be on.** `dynamic_entity_context` gates this path too, so unticking the master switch silences the Assist extension whatever `dynamic_context_on_assist` says. And the block's candidates come from `dynamic_context_preset`, not from Home Assistant's exposed-entity list — see the scope note above for what that means for an entity you kept out of Assist on purpose.
 
 #### What it does not do
 

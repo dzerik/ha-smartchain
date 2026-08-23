@@ -479,8 +479,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             LOGGER.error("SmartChain tools.yaml load failed on entry setup: %s", err)
         # `stop()` cleared its registry subscriptions; without this the cache
         # would silently stop invalidating for the rest of the HA run.
+        #
+        # `invalidate()` here rather than only inside `_reload_registry`: that
+        # call sits under the `try` above, so a tools.yaml that fails to load
+        # skips it, and `start()` would then resubscribe a cache still holding
+        # a map built before the unload — during which window every registry
+        # event went unheard. The two belong together.
         skeleton: SkeletonCache | None = hass.data.get(DOMAIN, {}).get("entity_skeleton")
         if skeleton is not None:
+            skeleton.invalidate()
             skeleton.start()
 
     subentries = entry.subentries

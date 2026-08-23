@@ -126,3 +126,30 @@ def test_a_single_oversized_area_is_still_capped_and_announces_itself() -> None:
     assert len(text) <= ENTITY_SKELETON_MAX_CHARS
     assert text.startswith("Кухня — sensor:")
     assert "search_entities" in text
+
+
+def test_an_oversized_area_plus_others_still_ends_on_a_whole_sentence() -> None:
+    """The partial-area branch emits TWO notes and must reserve for both.
+
+    An area too big to ever fit whole is rendered partially with its own
+    inline note, and it spends the entire remaining budget — which forces
+    every area after it into the trailing "N more area(s)" note. A single
+    note's worth of headroom covers one of those two lines, not both, so the
+    render overruns and the defensive final slice cuts the trailing note
+    mid-word. The length assertion above stays green throughout, because the
+    slice is exactly what keeps it green; only the shape of the last line
+    shows the bug. "Nothing is ever silently truncated" is the rule this
+    protects.
+    """
+    cands = [_cand(f"sensor.s{i}", f"Датчик номер {i}", "Ангар") for i in range(600)]
+    cands += [
+        _cand("light.k", "Потолочный", "Кухня"),
+        _cand("light.s", "Бра", "Спальня"),
+    ]
+    text = _skeleton(*cands)
+
+    assert len(text) <= ENTITY_SKELETON_MAX_CHARS
+    assert text.startswith("Ангар — sensor:")
+    # Both notes are present and neither is a fragment.
+    assert "more entities in Ангар — use search_entities to look them up." in text
+    assert text.rstrip().endswith("use search_entities to look any of them up.")

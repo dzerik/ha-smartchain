@@ -51,6 +51,72 @@ async def test_lexical_only_without_a_store(hass: HomeAssistant) -> None:
     assert store.search.await_count == 0
 
 
+async def test_a_whole_sentence_matches_nothing_without_tokenize(
+    hass: HomeAssistant,
+) -> None:
+    """The gate. `search_entities` must keep matching the query whole.
+
+    Its `query` is a short phrase a model composed on purpose, so folding it
+    into one needle is right there. If this test ever starts finding
+    something, the token pass has leaked out of the prompt-context caller.
+    """
+    reg, _ = _registry([])
+    cands = {"light.a": _cand("light.a", "Свет")}
+
+    assert await rank_entities(hass, reg, cands, "включи свет на кухне", top_k=5) == []
+
+
+async def test_tokenize_finds_the_entity_a_russian_sentence_names(
+    hass: HomeAssistant,
+) -> None:
+    reg, _ = _registry([])
+    cands = {
+        "light.a": _cand("light.a", "Свет"),
+        "sensor.b": _cand("sensor.b", "Влажность"),
+    }
+
+    ranked = await rank_entities(hass, reg, cands, "включи свет на кухне", top_k=5, tokenize=True)
+
+    assert [c.entity_id for c in ranked] == ["light.a"]
+
+
+async def test_tokenize_finds_the_entity_an_english_sentence_names(
+    hass: HomeAssistant,
+) -> None:
+    reg, _ = _registry([])
+    cands = {
+        "light.a": _cand("light.a", "Kitchen Light", area="Kitchen"),
+        "sensor.b": _cand("sensor.b", "Humidity", area="Bedroom"),
+    }
+
+    ranked = await rank_entities(
+        hass, reg, cands, "turn off the kitchen light", top_k=5, tokenize=True
+    )
+
+    assert [c.entity_id for c in ranked] == ["light.a"]
+
+
+async def test_a_whole_phrase_match_outranks_a_token_match(hass: HomeAssistant) -> None:
+    """Tokens share the prefix tier but sort below a whole-needle hit."""
+    reg, _ = _registry([])
+    cands = {
+        "light.token": _cand("light.token", "Свет"),
+        "light.phrase": _cand("light.phrase", "Свет на кухне слева"),
+    }
+
+    ranked = await rank_entities(hass, reg, cands, "свет на кухне", top_k=5, tokenize=True)
+
+    assert [c.entity_id for c in ranked] == ["light.phrase", "light.token"]
+
+
+async def test_tokens_under_three_characters_are_dropped(hass: HomeAssistant) -> None:
+    """Otherwise "на" alone would drag in half the home — "Ванна" included."""
+    reg, _ = _registry([])
+    cands = {"light.bath": _cand("light.bath", "Ванна")}
+
+    assert await rank_entities(hass, reg, cands, "то на ты", top_k=5, tokenize=True) == []
+
+
 async def test_exact_lexical_outranks_a_higher_scored_vector_hit(
     hass: HomeAssistant,
 ) -> None:

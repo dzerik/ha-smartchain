@@ -21,6 +21,7 @@ from homeassistant.core import Context, HomeAssistant
 
 from custom_components.smartchain.const import (
     CONF_DYNAMIC_CONTEXT_ON_ASSIST,
+    CONF_DYNAMIC_ENTITY_CONTEXT,
     CONF_ENGINE,
     DOMAIN,
     ID_GIGACHAT,
@@ -98,6 +99,28 @@ async def test_off_by_default_none_stays_none(hass: HomeAssistant) -> None:
         result = await entity._build_extra_system_prompt(options, user_input)
 
     assert result is None
+
+
+async def test_the_master_switch_gates_the_assist_option(hass: HomeAssistant) -> None:
+    """`dynamic_entity_context` off must silence this path too.
+
+    It is documented as the one checkbox that restores the pre-v5.0.0
+    behaviour. A user who unticked it and left the Assist extension ticked
+    would still have been getting a retrieved block, so the promise held only
+    on the non-Assist path.
+    """
+    entity = _make_entity(hass)
+    options = {
+        CONF_DYNAMIC_ENTITY_CONTEXT: False,
+        CONF_DYNAMIC_CONTEXT_ON_ASSIST: True,
+    }
+    user_input = _make_input(extra_system_prompt="original text")
+
+    with patch(_BUILD_RETRIEVED, new=AsyncMock()) as mock_build:
+        result = await entity._build_extra_system_prompt(options, user_input)
+
+    assert result == "original text"
+    mock_build.assert_not_called()
 
 
 async def test_on_appends_the_retrieved_block(hass: HomeAssistant) -> None:

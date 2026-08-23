@@ -165,6 +165,64 @@ async def test_an_empty_home_is_not_a_failure(hass: HomeAssistant) -> None:
         assert await build_entity_context(hass, preset="optimal", query="x") == ""
 
 
+async def test_a_russian_sentence_retrieves_the_entity_it_names(
+    hass: HomeAssistant,
+) -> None:
+    """No store, no mocked ranking — the configuration the docs promote.
+
+    Every other retrieval test here either mocks `rank_entities` or hands it
+    a single word. Both hide the case that actually happens: the query this
+    caller passes is the user's raw utterance, and matching it whole finds
+    nothing, because no entity is called "включи свет на кухне".
+    """
+    hass.data.setdefault(DOMAIN, {}).pop("memory", None)
+    _install_cache(hass, "Кухня — light: Свет")
+    lamp = _cand("light.kitchen", "Свет")
+    fridge = _cand("sensor.fridge", "Температура холодильника")
+    hass.states.async_set("light.kitchen", "on", {})
+    hass.states.async_set("sensor.fridge", "4", {})
+
+    with _patch_candidates([lamp, fridge]):
+        text = await build_entity_context(hass, preset="optimal", query="включи свет на кухне")
+
+    assert _RETRIEVED_HEADING in text
+    assert "light.kitchen" in text
+    assert "sensor.fridge" not in text
+
+
+async def test_an_english_sentence_retrieves_the_entity_it_names(
+    hass: HomeAssistant,
+) -> None:
+    hass.data.setdefault(DOMAIN, {}).pop("memory", None)
+    _install_cache(hass, "Kitchen — light: Kitchen Light")
+    lamp = EntityCandidate(
+        entity_id="light.kitchen",
+        domain="light",
+        name="Kitchen Light",
+        area="Kitchen",
+        device="",
+        device_class="",
+        aliases=(),
+    )
+    humidity = EntityCandidate(
+        entity_id="sensor.humidity",
+        domain="sensor",
+        name="Humidity",
+        area="Bedroom",
+        device="",
+        device_class="",
+        aliases=(),
+    )
+    hass.states.async_set("light.kitchen", "on", {})
+    hass.states.async_set("sensor.humidity", "51", {})
+
+    with _patch_candidates([lamp, humidity]):
+        text = await build_entity_context(hass, preset="optimal", query="is the kitchen light on")
+
+    assert "light.kitchen" in text
+    assert "sensor.humidity" not in text
+
+
 async def test_the_vector_pass_is_used_only_with_exactly_one_entity_store(
     hass: HomeAssistant,
 ) -> None:
