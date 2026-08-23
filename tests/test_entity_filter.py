@@ -43,6 +43,22 @@ def _entry(
 @pytest.fixture
 async def home(hass: HomeAssistant):
     """A small home covering every branch the presets can take."""
+    entry_name_from_original = _entry("switch.name_from_original")
+    entry_name_from_original.name = None
+    entry_name_from_original.original_name = "Original switch name"
+
+    entry_name_from_entity_id = _entry("light.name_from_entity_id")
+    entry_name_from_entity_id.name = None
+    entry_name_from_entity_id.original_name = None
+
+    entry_device_class_from_original = _entry("sensor.device_class_from_original")
+    entry_device_class_from_original.device_class = None
+    entry_device_class_from_original.original_device_class = "temperature"
+
+    entry_device_derived_area = _entry(
+        "switch.device_derived_area", name="Device derived switch", device_id="device_with_area"
+    )
+
     entries = [
         _entry("light.ceiling", name="Потолок", area_id="kitchen", aliases={"люстра"}),
         _entry("switch.socket", name="Кофеварка", area_id="kitchen"),
@@ -52,6 +68,10 @@ async def home(hass: HomeAssistant):
         _entry("update.firmware", name="Прошивка"),
         _entry("light.hidden_one", name="Скрытый", hidden=True),
         _entry("light.disabled_one", name="Отключённый", disabled=True),
+        entry_name_from_original,
+        entry_name_from_entity_id,
+        entry_device_class_from_original,
+        entry_device_derived_area,
     ]
     ent_reg = MagicMock()
     ent_reg.entities = {e.entity_id: e for e in entries}
@@ -61,8 +81,16 @@ async def home(hass: HomeAssistant):
     area_reg = MagicMock()
     area_reg.async_get_area.side_effect = lambda aid: area if aid == "kitchen" else None
 
+    # One device, resolvable only for "device_with_area", to exercise the
+    # device-derived area and the name_by_user preference.
+    device = MagicMock()
+    device.area_id = "kitchen"
+    device.name = "Device name"
+    device.name_by_user = "User given name"
     dev_reg = MagicMock()
-    dev_reg.async_get.return_value = None
+    dev_reg.async_get.side_effect = lambda device_id: (
+        device if device_id == "device_with_area" else None
+    )
 
     # A template sensor that exists only in the state machine.
     hass.states.async_set(
@@ -71,6 +99,12 @@ async def home(hass: HomeAssistant):
     for e in entries:
         if not e.disabled_by:
             hass.states.async_set(e.entity_id, "on", {"friendly_name": e.original_name})
+
+    # Entities this fixture actually put in place. Kept separate from whatever
+    # else `hass.states` may hold (e.g. `conversation.home_assistant`, created
+    # by the autouse component setup in conftest.py) so the preset tests can
+    # assert exact set equality without coupling to unrelated test-env noise.
+    known_ids = {e.entity_id for e in entries} | {"sensor.template_only"}
 
     with (
         patch(
@@ -86,75 +120,105 @@ async def home(hass: HomeAssistant):
             return_value=dev_reg,
         ),
     ):
-        yield
+        yield known_ids
 
 
-def _ids(hass, **kwargs) -> set[str]:
-    return set(resolve_candidates(hass, EntitySourceConfig(**kwargs)))
+def _ids(hass, home, **kwargs) -> set[str]:
+    """Resolved candidate ids, restricted to this fixture's known entities."""
+    return set(resolve_candidates(hass, EntitySourceConfig(**kwargs))) & home
 
 
 def test_minimal_is_controllables_only(hass: HomeAssistant, home) -> None:
-    assert _ids(hass, preset="minimal") == {"light.ceiling", "switch.socket"}
+    assert _ids(hass, home, preset="minimal") == {
+        "light.ceiling",
+        "switch.socket",
+        "switch.name_from_original",
+        "light.name_from_entity_id",
+        "switch.device_derived_area",
+    }
 
 
 def test_optimal_adds_meaningful_sensors(hass: HomeAssistant, home) -> None:
-    assert _ids(hass, preset="optimal") == {
+    assert _ids(hass, home, preset="optimal") == {
         "light.ceiling",
         "switch.socket",
         "sensor.temp",
         "sensor.template_only",
+        "switch.name_from_original",
+        "light.name_from_entity_id",
+        "sensor.device_class_from_original",
+        "switch.device_derived_area",
     }
 
 
 def test_optimal_drops_noise_and_diagnostics(hass: HomeAssistant, home) -> None:
-    got = _ids(hass, preset="optimal")
+    got = _ids(hass, home, preset="optimal")
     assert "sensor.battery" not in got
     assert "sensor.uptime" not in got
     assert "update.firmware" not in got
 
 
 def test_maximal_takes_everything_visible(hass: HomeAssistant, home) -> None:
-    got = _ids(hass, preset="maximal")
-    assert "update.firmware" in got
-    assert "sensor.battery" in got
-    assert "sensor.uptime" in got
-    assert "light.hidden_one" not in got
-    assert "light.disabled_one" not in got
+    assert _ids(hass, home, preset="maximal") == {
+        "light.ceiling",
+        "switch.socket",
+        "sensor.temp",
+        "sensor.battery",
+        "sensor.uptime",
+        "update.firmware",
+        "sensor.template_only",
+        "switch.name_from_original",
+        "light.name_from_entity_id",
+        "sensor.device_class_from_original",
+        "switch.device_derived_area",
+    }
 
 
 def test_paranoid_takes_hidden_and_disabled_too(hass: HomeAssistant, home) -> None:
-    got = _ids(hass, preset="paranoid")
-    assert "light.hidden_one" in got
-    assert "light.disabled_one" in got
+    assert _ids(hass, home, preset="paranoid") == {
+        "light.ceiling",
+        "switch.socket",
+        "sensor.temp",
+        "sensor.battery",
+        "sensor.uptime",
+        "update.firmware",
+        "light.hidden_one",
+        "light.disabled_one",
+        "sensor.template_only",
+        "switch.name_from_original",
+        "light.name_from_entity_id",
+        "sensor.device_class_from_original",
+        "switch.device_derived_area",
+    }
 
 
 def test_state_only_entities_are_not_lost(hass: HomeAssistant, home) -> None:
     """Template sensors have no registry entry and would otherwise vanish."""
-    assert "sensor.template_only" in _ids(hass, preset="maximal")
+    assert "sensor.template_only" in _ids(hass, home, preset="maximal")
 
 
 def test_include_adds_on_top_of_the_preset(hass: HomeAssistant, home) -> None:
-    got = _ids(hass, preset="minimal", include=["sensor.battery"])
+    got = _ids(hass, home, preset="minimal", include=["sensor.battery"])
     assert "sensor.battery" in got
     assert "sensor.temp" not in got
 
 
 def test_include_accepts_a_bare_domain(hass: HomeAssistant, home) -> None:
-    assert "update.firmware" in _ids(hass, preset="minimal", include=["update"])
+    assert "update.firmware" in _ids(hass, home, preset="minimal", include=["update"])
 
 
 def test_exclude_wins_over_the_preset(hass: HomeAssistant, home) -> None:
-    assert "light.ceiling" not in _ids(hass, preset="minimal", exclude=["light.ceiling"])
+    assert "light.ceiling" not in _ids(hass, home, preset="minimal", exclude=["light.ceiling"])
 
 
 def test_exclude_wins_over_include(hass: HomeAssistant, home) -> None:
-    got = _ids(hass, preset="minimal", include=["sensor.battery"], exclude=["sensor.battery"])
+    got = _ids(hass, home, preset="minimal", include=["sensor.battery"], exclude=["sensor.battery"])
     assert "sensor.battery" not in got
 
 
 def test_exclude_accepts_a_bare_domain(hass: HomeAssistant, home) -> None:
     assert not [
-        e for e in _ids(hass, preset="maximal", exclude=["update"]) if e.startswith("update.")
+        e for e in _ids(hass, home, preset="maximal", exclude=["update"]) if e.startswith("update.")
     ]
 
 
@@ -165,3 +229,32 @@ def test_candidate_carries_the_searchable_fields(hass: HomeAssistant, home) -> N
     assert cand.name == "Потолок"
     assert cand.area == "Кухня"
     assert cand.aliases == ("люстра",)
+
+
+def test_name_falls_back_to_original_name(hass: HomeAssistant, home) -> None:
+    cand = resolve_candidates(hass, EntitySourceConfig(preset="paranoid"))[
+        "switch.name_from_original"
+    ]
+    assert cand.name == "Original switch name"
+
+
+def test_name_falls_back_to_entity_id(hass: HomeAssistant, home) -> None:
+    cand = resolve_candidates(hass, EntitySourceConfig(preset="paranoid"))[
+        "light.name_from_entity_id"
+    ]
+    assert cand.name == "light.name_from_entity_id"
+
+
+def test_device_class_falls_back_to_original_device_class(hass: HomeAssistant, home) -> None:
+    cand = resolve_candidates(hass, EntitySourceConfig(preset="paranoid"))[
+        "sensor.device_class_from_original"
+    ]
+    assert cand.device_class == "temperature"
+
+
+def test_area_and_device_are_derived_from_the_device_registry(hass: HomeAssistant, home) -> None:
+    cand = resolve_candidates(hass, EntitySourceConfig(preset="paranoid"))[
+        "switch.device_derived_area"
+    ]
+    assert cand.area == "Кухня"
+    assert cand.device == "User given name"
