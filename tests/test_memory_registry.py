@@ -474,6 +474,82 @@ async def test_an_entity_store_gets_no_retention_or_poller(
     await registry.shutdown()
 
 
+async def test_entity_indexer_construction_failure_skips_only_that_store(
+    hass: HomeAssistant, tmp_path, patched_store, caplog
+) -> None:
+    """EntityIndexer.start() does real work (registry subscriptions, and with
+    index_states on, resolve_candidates + a state listener) so it is far more
+    likely to raise than constructing a RetentionTask. A raise there must not
+    take the whole build() down with it.
+    """
+    from custom_components.smartchain.tools.memory.config import EntitySourceConfig
+
+    _entry_with_embeddings(hass, ["E"])
+    registry = MemoryRegistry(hass)
+    with patch(
+        "custom_components.smartchain.tools.memory.registry.EntityIndexer",
+        spec=EntityIndexer,
+        side_effect=RuntimeError("boom"),
+    ):
+        await registry.build(
+            MemorySettings(
+                stores=[
+                    StoreConfig(name="entities", embeddings="E", source=EntitySourceConfig()),
+                    StoreConfig(name="talk", embeddings="E"),
+                ]
+            ),
+            tmp_path,
+        )
+
+    assert registry.names() == ["talk"]
+    assert registry.entity_store_names() == []
+    assert registry.indexer_for("entities") is None
+    assert "entities" in caplog.text
+    assert "RuntimeError" in caplog.text
+    assert "boom" not in caplog.text  # type only — never the exception message
+    await registry.shutdown()
+
+
+async def test_registry_stays_consistent_after_an_entity_store_start_failure(
+    hass: HomeAssistant, tmp_path, patched_store
+) -> None:
+    """After a failed start, describe(), entity_store_names() and
+    stores_for_conversation_ingest() must all still work and none of them may
+    mention the store that failed — a KeyError here would mean the store was
+    left half-registered.
+    """
+    from custom_components.smartchain.tools.memory.config import EntitySourceConfig
+
+    _entry_with_embeddings(hass, ["E"])
+    registry = MemoryRegistry(hass)
+    with patch(
+        "custom_components.smartchain.tools.memory.registry.EntityIndexer",
+        spec=EntityIndexer,
+        side_effect=RuntimeError("boom"),
+    ):
+        await registry.build(
+            MemorySettings(
+                stores=[
+                    StoreConfig(
+                        name="entities",
+                        embeddings="E",
+                        description="Entities",
+                        source=EntitySourceConfig(),
+                    ),
+                    StoreConfig(name="talk", embeddings="E", description="Talk"),
+                ]
+            ),
+            tmp_path,
+        )
+
+    assert registry.describe() == [("talk", "Talk")]
+    assert registry.entity_store_names() == []
+    assert registry.indexer_for("entities") is None
+    targets = registry.stores_for_conversation_ingest()
+    assert targets == [registry.get("talk")]
+    await registry.shutdown()
+
+
 async def test_bare_exception_from_create_backend_skips_only_that_store(
     hass: HomeAssistant, tmp_path, caplog
 ) -> None:

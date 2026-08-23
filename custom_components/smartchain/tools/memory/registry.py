@@ -118,42 +118,70 @@ class MemoryRegistry:
                 continue
 
             store = MemoryStore(self.hass, embeddings, backend)
-            await store.async_setup()
-            if not store.is_available:
+            try:
+                await store.async_setup()
+                if not store.is_available:
+                    LOGGER.error(
+                        "Memory store %r did not come up; see earlier log lines.",
+                        config.name,
+                    )
+                    continue
+
+                self.stores[config.name] = store
+                self._configs[config.name] = config
+
+                if config.source is not None:
+                    # An entity index has no conversation turns to retain and no
+                    # logbook to poll; retention in particular would delete the
+                    # index by age.
+                    indexer = EntityIndexer(self.hass, store, config.source)
+                    indexer.start()
+                    self.indexers[config.name] = indexer
+                    LOGGER.info(
+                        "Entity index %r ready on backend %s (preset %s, states %s)",
+                        config.name,
+                        backend.name,
+                        config.source.preset,
+                        "on" if config.source.index_states else "off",
+                    )
+                    continue
+
+                retention = RetentionTask(self.hass, store, config.retention_days)
+                retention.start()
+                self._retention[config.name] = retention
+
+                poller = MemoryLogbookPoller(self.hass, store, config.logbook)
+                poller.start()
+                self._pollers[config.name] = poller
+
+                LOGGER.info("Memory store %r ready on backend %s", config.name, backend.name)
+            except Exception as err:  # noqa: BLE001 — per-store isolation
+                # Type only, for the same reason as the embeddings/backend
+                # steps above: an unexpected error here can be a pydantic
+                # ValidationError, and pydantic renders `input_value`, which on
+                # this call path can be the provider credential.
                 LOGGER.error(
-                    "Memory store %r did not come up; see earlier log lines.",
+                    "Memory store %r disabled: unexpected %s while starting it",
                     config.name,
+                    type(err).__name__,
                 )
+                # This store was registered (and may have come up) before the
+                # failure, so both the registration and any partially-started
+                # tasks must be unwound — a `KeyError` in describe() or
+                # stores_for_conversation_ingest() is not an acceptable outcome
+                # of a single store failing to start.
+                self.stores.pop(config.name, None)
+                self._configs.pop(config.name, None)
+                self.indexers.pop(config.name, None)
+                self._retention.pop(config.name, None)
+                self._pollers.pop(config.name, None)
+                try:
+                    await store.close()
+                except Exception:  # noqa: BLE001
+                    LOGGER.exception(
+                        "Error closing memory store %r after a failed start", config.name
+                    )
                 continue
-
-            self.stores[config.name] = store
-            self._configs[config.name] = config
-
-            if config.source is not None:
-                # An entity index has no conversation turns to retain and no
-                # logbook to poll; retention in particular would delete the
-                # index by age.
-                indexer = EntityIndexer(self.hass, store, config.source)
-                indexer.start()
-                self.indexers[config.name] = indexer
-                LOGGER.info(
-                    "Entity index %r ready on backend %s (preset %s, states %s)",
-                    config.name,
-                    backend.name,
-                    config.source.preset,
-                    "on" if config.source.index_states else "off",
-                )
-                continue
-
-            retention = RetentionTask(self.hass, store, config.retention_days)
-            retention.start()
-            self._retention[config.name] = retention
-
-            poller = MemoryLogbookPoller(self.hass, store, config.logbook)
-            poller.start()
-            self._pollers[config.name] = poller
-
-            LOGGER.info("Memory store %r ready on backend %s", config.name, backend.name)
 
     async def shutdown(self) -> None:
         """Stop every task, then close every backend."""
