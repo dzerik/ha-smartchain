@@ -189,17 +189,22 @@ class SqliteVecBackend:
         ]
 
     async def update_metadata(self, doc_id: str, metadata: dict[str, Any]) -> bool:
+        if not self.is_available:
+            return False
+
         def _run() -> bool:
             with closing(self._connect()) as conn, conn:
                 cur = conn.execute(
                     "UPDATE docs SET metadata = ? WHERE doc_id = ?",
-                    (json.dumps(metadata), doc_id),
+                    (json.dumps(metadata, ensure_ascii=False), doc_id),
                 )
                 return cur.rowcount > 0
 
         return await self.hass.async_add_executor_job(_run)
 
     async def list_metadata(self, where: Filter | None = None) -> dict[str, dict[str, Any]]:
+        if not self.is_available:
+            return {}
         clause, params = build_where_clause(where)
 
         def _run() -> dict[str, dict[str, Any]]:

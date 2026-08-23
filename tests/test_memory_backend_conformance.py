@@ -152,6 +152,14 @@ async def test_operations_are_noops_after_close(backend) -> None:
     assert backend.is_available is False
     assert await backend.query([1.0, 0.0, 0.0], top_k=5, where=None) == []
     assert await backend.delete_where(None) == 0
+    assert await backend.list_metadata() == {}
+    assert await backend.update_metadata("a", {"kind": "tampered"}) is False
+
+    # the attempted update after close must not have actually written:
+    # reopen and confirm the original metadata is still there.
+    backend.is_available = True
+    stored = await backend.list_metadata()
+    assert stored["a"]["kind"] == "conversation"
 
 
 async def test_list_metadata_returns_every_stored_doc(backend) -> None:
