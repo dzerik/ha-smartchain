@@ -3,6 +3,7 @@
 import base64
 import logging
 from pathlib import Path
+from typing import Any
 
 import voluptuous as vol
 from homeassistant.components.camera import async_get_image
@@ -22,13 +23,7 @@ from .helpers import async_generate_structured  # re-exported for downstream int
 from .tools import ToolRegistry
 from .tools.loader import LoaderError, load_tools_file
 from .tools.mcp import MCPManager
-from .tools.memory import create_embeddings
-from .tools.memory import store as _memory_store_mod
-from .tools.memory.backends import BackendInitError, create_backend
-from .tools.memory.embeddings import EmbeddingsConfigError
-from .tools.memory.ingest import MemoryLogbookPoller
-from .tools.memory.retention import RetentionTask
-from .tools.memory.store import MemoryStore
+from .tools.memory.registry import MemoryRegistry
 
 __all__ = ["async_generate_structured"]
 from .const import (
@@ -170,38 +165,6 @@ def _memory_persist_dir(hass: HomeAssistant) -> Path:
     return Path(hass.config.config_dir) / ".storage" / MEMORY_PERSIST_DIRNAME
 
 
-async def _build_memory(
-    hass: HomeAssistant, cfg
-) -> tuple[MemoryStore | None, RetentionTask | None, MemoryLogbookPoller | None]:
-    """Construct MemoryStore + auxiliary tasks for a MemoryConfig.
-
-    Returns (None, None, None) when cfg is None/disabled, the embeddings
-    provider could not be constructed, or the backend refused to start.
-    """
-    if cfg is None or not cfg.enabled:
-        return None, None, None
-    try:
-        embeddings = create_embeddings(hass, cfg)
-    except EmbeddingsConfigError as err:
-        LOGGER.error("SmartChain memory disabled: %s", err)
-        return None, None, None
-
-    try:
-        backend = create_backend(hass, cfg.backend, "default", _memory_persist_dir(hass))
-    except BackendInitError as err:
-        LOGGER.error("SmartChain memory disabled: %s", err)
-        return None, None, None
-
-    store = _memory_store_mod.MemoryStore(hass, embeddings, backend)
-    await store.async_setup()
-    if not store.is_available:
-        return None, None, None
-
-    retention = RetentionTask(hass, store, cfg.retention_days)
-    poller = MemoryLogbookPoller(hass, store, cfg.logbook)
-    return store, retention, poller
-
-
 async def _reload_registry(hass: HomeAssistant) -> int:
     """Re-read tools.yaml into the registry. Raises LoaderError on failure."""
     path = _tools_yaml_path(hass)
@@ -215,26 +178,17 @@ async def _reload_registry(hass: HomeAssistant) -> int:
         manager.configure(result.mcp_servers)
         await manager.start()
 
-    # --- Memory subsystem (re)build ---
+    # --- Memory subsystem: build first, swap only on success ---
     try:
-        new_store, new_retention, new_poller = await _build_memory(hass, result.memory_config)
+        new_memory = MemoryRegistry(hass)
+        await new_memory.build(result.memory_settings, _memory_persist_dir(hass))
     except Exception:  # noqa: BLE001
-        LOGGER.exception("memory rebuild failed; keeping previous subsystem")
+        LOGGER.exception("memory rebuild failed; keeping the previous registry")
     else:
-        old_retention: RetentionTask | None = hass.data[DOMAIN].get("memory_retention")
-        old_poller: MemoryLogbookPoller | None = hass.data[DOMAIN].get("memory_logbook")
-        if old_retention is not None:
-            await old_retention.stop()
-        if old_poller is not None:
-            await old_poller.stop()
-        hass.data[DOMAIN]["memory"] = new_store
-        hass.data[DOMAIN]["memory_retention"] = new_retention
-        hass.data[DOMAIN]["memory_logbook"] = new_poller
-        hass.data[DOMAIN]["memory_config"] = result.memory_config
-        if new_retention is not None:
-            new_retention.start()
-        if new_poller is not None:
-            new_poller.start()
+        old_memory: MemoryRegistry | None = hass.data[DOMAIN].get("memory")
+        if old_memory is not None:
+            await old_memory.shutdown()
+        hass.data[DOMAIN]["memory"] = new_memory
 
     # MCP tools arrive asynchronously after start(); the count fired in the
     # reload event therefore reflects only the synchronously-loaded YAML tools.
@@ -329,6 +283,8 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         hass.data[DOMAIN]["tools"] = ToolRegistry()
     if "mcp_manager" not in hass.data[DOMAIN]:
         hass.data[DOMAIN]["mcp_manager"] = MCPManager(hass, hass.data[DOMAIN]["tools"])
+    if "memory" not in hass.data[DOMAIN]:
+        hass.data[DOMAIN]["memory"] = MemoryRegistry(hass)
     try:
         initial = await _reload_registry(hass)
         LOGGER.info("SmartChain loaded %d custom tools", initial)
@@ -343,20 +299,32 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         hass.bus.async_fire(EVENT_TOOLS_RELOADED, {"count": count})
 
     async def _handle_clear_memory(call: ServiceCall) -> None:
-        store: MemoryStore | None = hass.data.get(DOMAIN, {}).get("memory")
-        if store is None or not store.is_available:
+        registry: MemoryRegistry | None = hass.data.get(DOMAIN, {}).get("memory")
+        if registry is None or not len(registry):
             raise HomeAssistantError("smartchain memory is not configured")
+
+        requested = call.data.get("store")
+        if requested is not None and requested not in registry.names():
+            raise HomeAssistantError(
+                f"unknown memory store {requested!r}; configured: {registry.names()}"
+            )
+        targets = [requested] if requested else registry.names()
+
         kind = call.data.get("kind", "any")
         agent_id = call.data.get("agent_id")
-        where: dict | None = {}
+        where: dict[str, Any] = {}
         if kind != "any":
             where["kind"] = kind
         if agent_id:
             where["agent_id"] = agent_id
-        if not where:
-            where = None
-        deleted = await store.clear(where)
-        hass.bus.async_fire(EVENT_MEMORY_CLEARED, {"deleted": deleted})
+
+        deleted = 0
+        for name in targets:
+            store = registry.get(name)
+            if store is not None:
+                deleted += await store.clear(where or None)
+
+        hass.bus.async_fire(EVENT_MEMORY_CLEARED, {"deleted": deleted, "stores": targets})
 
     # Register sidebar panel (graceful — skip if frontend not available).
     # Failures here aren't fatal but they do mean the user has no UI — bump from
@@ -422,6 +390,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
                 {
                     vol.Optional("kind", default="any"): vol.In(["any", "conversation", "logbook"]),
                     vol.Optional("agent_id"): str,
+                    vol.Optional("store"): str,
                 }
             ),
         )
@@ -467,11 +436,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         manager: MCPManager | None = hass.data.get(DOMAIN, {}).get("mcp_manager")
         if manager is not None:
             await manager.stop()
-        retention: RetentionTask | None = hass.data.get(DOMAIN, {}).get("memory_retention")
-        if retention is not None:
-            await retention.stop()
-        poller: MemoryLogbookPoller | None = hass.data.get(DOMAIN, {}).get("memory_logbook")
-        if poller is not None:
-            await poller.stop()
-        hass.data.get(DOMAIN, {}).pop("memory_config", None)
+        memory: MemoryRegistry | None = hass.data.get(DOMAIN, {}).get("memory")
+        if memory is not None:
+            await memory.shutdown()
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)

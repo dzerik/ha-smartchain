@@ -16,26 +16,28 @@ LOGGER = logging.getLogger(__name__)
 
 
 async def ingest_conversation_turn(
-    store: MemoryStore,
+    stores: list[MemoryStore],
     user_text: str,
     assistant_text: str,
     metadata: dict[str, Any],
 ) -> None:
-    """Embed and persist a single user+assistant exchange.
+    """Embed and persist one user+assistant exchange into every given store.
 
     Failures are logged at WARNING and never propagated — ingestion must not
-    affect the user-facing conversation response.
+    affect the user-facing conversation response. One failing store does not
+    prevent the others from being written.
     """
-    if not store.is_available:
-        return
-    if not assistant_text:
+    if not stores or not assistant_text:
         return
 
     combined = f"User: {user_text or ''}\n\nAssistant: {assistant_text}"
-    try:
-        await store.add(combined, metadata)
-    except Exception:  # noqa: BLE001
-        LOGGER.warning("smartchain memory ingest failed", exc_info=True)
+    for store in stores:
+        if not store.is_available:
+            continue
+        try:
+            await store.add(combined, metadata)
+        except Exception:  # noqa: BLE001
+            LOGGER.warning("smartchain memory ingest failed for a store", exc_info=True)
 
 
 def _logbook_doc_id(timestamp_iso: str, entity_id: str, message: str) -> str:

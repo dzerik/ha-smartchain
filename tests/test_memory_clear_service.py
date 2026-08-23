@@ -1,18 +1,26 @@
 """Tests for the smartchain.clear_memory service."""
 
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from homeassistant.config_entries import ConfigSubentryData
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.smartchain import async_setup
 from custom_components.smartchain.const import (
+    CONF_API_KEY,
+    CONF_ENGINE,
     DOMAIN,
     EVENT_MEMORY_CLEARED,
+    ID_GIGACHAT,
     SERVICE_CLEAR_MEMORY,
+    SUBENTRY_TYPE_EMBEDDINGS,
 )
+
+pytestmark = pytest.mark.usefixtures("enable_custom_integrations")
 
 
 @pytest.fixture
@@ -23,32 +31,77 @@ def tools_dir(hass: HomeAssistant, tmp_path_factory) -> Path:
     return cdir / "smartchain"
 
 
+@pytest.fixture
+def patched_store():
+    """Patch the registry's collaborators so no real backend is opened."""
+
+    def _factory(hass, embeddings, backend):
+        st = MagicMock()
+        st.is_available = True
+        st.async_setup = AsyncMock()
+        st.close = AsyncMock()
+        st.clear = AsyncMock(return_value=4)
+        return st
+
+    with (
+        patch(
+            "custom_components.smartchain.tools.memory.registry.MemoryStore",
+            side_effect=_factory,
+        ),
+        patch(
+            "custom_components.smartchain.tools.memory.registry.create_embeddings_from_subentry",
+            return_value=MagicMock(),
+        ),
+    ):
+        yield
+
+
+def _add_embeddings_entry(hass: HomeAssistant) -> MockConfigEntry:
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_ENGINE: ID_GIGACHAT, CONF_API_KEY: "k"},
+        options={},
+        unique_id="GigaChat",
+        subentries_data=[
+            ConfigSubentryData(
+                data={"model": "Embeddings"},
+                subentry_type=SUBENTRY_TYPE_EMBEDDINGS,
+                title="GigaChat Embeddings",
+                unique_id=None,
+            )
+        ],
+    )
+    entry.add_to_hass(hass)
+    return entry
+
+
 async def test_clear_memory_without_config_raises(hass: HomeAssistant, tools_dir: Path) -> None:
-    """When no memory: block in YAML, the service raises HomeAssistantError."""
+    """With no memory: block in YAML the registry is empty and the service raises."""
     (tools_dir / "tools.yaml").write_text("tools: []\n")
     await async_setup(hass, {})
+
+    registry = hass.data[DOMAIN]["memory"]
+    assert registry.names() == []
+
     with pytest.raises(HomeAssistantError):
         await hass.services.async_call(DOMAIN, SERVICE_CLEAR_MEMORY, {}, blocking=True)
 
 
-async def test_clear_memory_fires_event(hass: HomeAssistant, tools_dir: Path, monkeypatch) -> None:
-    """When memory is configured, clear fires EVENT_MEMORY_CLEARED with deleted count."""
+async def test_clear_memory_fires_event(
+    hass: HomeAssistant, tools_dir: Path, patched_store
+) -> None:
+    """When a store is configured, clear fires EVENT_MEMORY_CLEARED with the deleted count."""
     (tools_dir / "tools.yaml").write_text(
-        "tools: []\nmemory:\n  provider: ollama\n  model: nomic-embed-text\n"
+        "tools: []\n"
+        "memory:\n"
+        "  stores:\n"
+        "    - name: conversations\n"
+        '      embeddings: "GigaChat Embeddings"\n'
     )
-
-    # Patch MemoryStore so we don't actually open a vector backend in the test.
-    from custom_components.smartchain.tools.memory import store as store_mod
-
-    class _StubStore:
-        is_available = True
-        clear = AsyncMock(return_value=4)
-        async_setup = AsyncMock()
-        close = AsyncMock()
-
-    monkeypatch.setattr(store_mod, "MemoryStore", lambda *a, **kw: _StubStore())
+    _add_embeddings_entry(hass)
 
     await async_setup(hass, {})
+    assert hass.data[DOMAIN]["memory"].names() == ["conversations"]
 
     events: list = []
     hass.bus.async_listen(EVENT_MEMORY_CLEARED, lambda e: events.append(e))
@@ -60,62 +113,24 @@ async def test_clear_memory_fires_event(hass: HomeAssistant, tools_dir: Path, mo
 
     assert len(events) == 1
     assert events[0].data["deleted"] == 4
+    assert events[0].data["stores"] == ["conversations"]
 
 
-async def test_ingest_conversation_false_skips_ingest(hass: HomeAssistant) -> None:
-    """ingest_conversation: false in memory_config must prevent the ingest background task."""
-    from unittest.mock import MagicMock
-
-    from homeassistant.components.conversation.chat_log import AssistantContent, SystemContent
-
-    from custom_components.smartchain.conversation import SmartChainConversationEntity
-    from custom_components.smartchain.tools.memory.config import MemoryConfig
-
-    class _StubStore:
-        is_available = True
-
-    stub_store = _StubStore()
-    hass.data.setdefault(DOMAIN, {})
-    hass.data[DOMAIN]["memory"] = stub_store
-    hass.data[DOMAIN]["memory_config"] = MemoryConfig(
-        provider="ollama",
-        model="nomic-embed-text",
-        ingest_conversation=False,
+async def test_clear_memory_unknown_store_raises(
+    hass: HomeAssistant, tools_dir: Path, patched_store
+) -> None:
+    """Naming a store that is not configured is an error, not a silent no-op."""
+    (tools_dir / "tools.yaml").write_text(
+        "tools: []\n"
+        "memory:\n"
+        "  stores:\n"
+        "    - name: conversations\n"
+        '      embeddings: "GigaChat Embeddings"\n'
     )
+    _add_embeddings_entry(hass)
+    await async_setup(hass, {})
 
-    entry = MagicMock()
-    entry.entry_id = "entry1"
-    entry.subentries = {}
-    entry.options = {}
-    entry.runtime_data = MagicMock()
-
-    entity = SmartChainConversationEntity(entry)
-    entity.hass = hass
-
-    # Build a minimal fake ChatLog that looks like a completed conversation
-    chat_log = MagicMock()
-    chat_log.conversation_id = "conv-1"
-    chat_log.llm_api = None
-    chat_log.unresponded_tool_results = False
-    chat_log.content = [
-        SystemContent(content="system"),
-        AssistantContent(agent_id="test_agent", content="hi there", tool_calls=[]),
-    ]
-
-    with patch(
-        "custom_components.smartchain.conversation.ingest_conversation_turn",
-        new_callable=AsyncMock,
-    ) as mock_ingest:
-        with patch.object(entity, "_async_handle_message", wraps=None):
-            # Directly call the ingest gate logic as it appears in _async_handle_message
-            memory_store = hass.data.get(DOMAIN, {}).get("memory")
-            memory_enabled = memory_store is not None and memory_store.is_available
-            memory_config = hass.data.get(DOMAIN, {}).get("memory_config")
-            if memory_enabled and memory_config is not None and memory_config.ingest_conversation:
-                hass.async_create_background_task(
-                    mock_ingest(memory_store),
-                    name="smartchain_memory_ingest",
-                )
-
-    await hass.async_block_till_done()
-    mock_ingest.assert_not_awaited()
+    with pytest.raises(HomeAssistantError):
+        await hass.services.async_call(
+            DOMAIN, SERVICE_CLEAR_MEMORY, {"store": "nope"}, blocking=True
+        )

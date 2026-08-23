@@ -13,7 +13,7 @@ async def test_ingest_writes_combined_turn(hass: HomeAssistant) -> None:
     store.add = AsyncMock(return_value=["doc-1"])
 
     await ingest_conversation_turn(
-        store,
+        [store],
         user_text="what time is it?",
         assistant_text="it is 6 pm",
         metadata={"kind": "conversation", "timestamp": "2026-05-27T18:00:00+00:00"},
@@ -31,7 +31,7 @@ async def test_ingest_noop_when_store_unavailable(hass: HomeAssistant) -> None:
     store.is_available = False
     store.add = AsyncMock()
     await ingest_conversation_turn(
-        store,
+        [store],
         user_text="x",
         assistant_text="y",
         metadata={"kind": "conversation", "timestamp": "t"},
@@ -44,7 +44,7 @@ async def test_ingest_skips_empty_assistant_text(hass: HomeAssistant) -> None:
     store.is_available = True
     store.add = AsyncMock()
     await ingest_conversation_turn(
-        store,
+        [store],
         user_text="hi",
         assistant_text="",
         metadata={"kind": "conversation", "timestamp": "t"},
@@ -58,7 +58,7 @@ async def test_ingest_swallows_exceptions(hass: HomeAssistant, caplog) -> None:
     store.add = AsyncMock(side_effect=RuntimeError("boom"))
     # Must not raise — must log at warning.
     await ingest_conversation_turn(
-        store,
+        [store],
         user_text="hi",
         assistant_text="there",
         metadata={"kind": "conversation", "timestamp": "t"},

@@ -75,8 +75,8 @@ from .tools.delegate_many_tool import (
     get_delegate_many_tool_definition,
 )
 from .tools.dispatcher import dispatch as dispatch_custom_tool
-from .tools.memory import MemoryStore
 from .tools.memory.ingest import ingest_conversation_turn
+from .tools.memory.registry import MemoryRegistry
 from .tools.memory.search_tool import (
     execute_memory_search,
     get_memory_tool_definition,
@@ -302,8 +302,8 @@ class SmartChainConversationEntity(ConversationEntity):
             tools.append(get_delegate_many_tool_definition(sibling_agents))
             tools.append(get_critique_tool_definition(sibling_agents))
 
-        memory_store: MemoryStore | None = self.hass.data.get(DOMAIN, {}).get("memory")
-        memory_enabled = memory_store is not None and memory_store.is_available
+        memory_registry: MemoryRegistry | None = self.hass.data.get(DOMAIN, {}).get("memory")
+        memory_enabled = memory_registry is not None and len(memory_registry) > 0
         if memory_enabled:
             tools.append(get_memory_tool_definition())
 
@@ -434,17 +434,17 @@ class SmartChainConversationEntity(ConversationEntity):
             if not chat_log.unresponded_tool_results:
                 break
 
-        memory_config = self.hass.data.get(DOMAIN, {}).get("memory_config")
-        if memory_enabled and memory_config is not None and memory_config.ingest_conversation:
+        if memory_enabled:
+            ingest_targets = memory_registry.stores_for_conversation_ingest()
             assistant_text = ""
             for content in reversed(chat_log.content):
                 if isinstance(content, AssistantContent) and content.content:
                     assistant_text = content.content
                     break
-            if assistant_text:
+            if assistant_text and ingest_targets:
                 self.hass.async_create_background_task(
                     ingest_conversation_turn(
-                        memory_store,
+                        ingest_targets,
                         user_text=user_input.text or "",
                         assistant_text=assistant_text,
                         metadata={
