@@ -12,10 +12,12 @@ from custom_components.smartchain.const import (
     DOMAIN,
     ID_GIGACHAT,
 )
+from custom_components.smartchain.tools.memory.backends import BackendInitError
 from custom_components.smartchain.tools.memory.config import (
     MemorySettings,
     StoreConfig,
 )
+from custom_components.smartchain.tools.memory.embeddings import EmbeddingsConfigError
 from custom_components.smartchain.tools.memory.registry import MemoryRegistry
 
 pytestmark = pytest.mark.usefixtures("enable_custom_integrations")
@@ -172,6 +174,94 @@ async def test_unavailable_store_is_not_registered(hass: HomeAssistant, tmp_path
             MemorySettings(stores=[StoreConfig(name="s", embeddings="E")]), tmp_path
         )
     assert registry.names() == []
+    await registry.shutdown()
+
+
+async def test_embeddings_failure_skips_only_that_store(
+    hass: HomeAssistant, tmp_path, caplog
+) -> None:
+    _entry_with_embeddings(hass, ["Embed A", "Embed B"])
+
+    def _store_factory(hass_, embeddings, backend):
+        st = MagicMock()
+        st.is_available = True
+        st.async_setup = AsyncMock()
+        st.close = AsyncMock()
+        st.backend = backend
+        return st
+
+    def _embeddings_side_effect(hass_, entry, subentry):
+        if subentry.title == "Embed A":
+            raise EmbeddingsConfigError("boom")
+        return MagicMock()
+
+    with (
+        patch(
+            "custom_components.smartchain.tools.memory.registry.MemoryStore",
+            side_effect=_store_factory,
+        ),
+        patch(
+            "custom_components.smartchain.tools.memory.registry.create_embeddings_from_subentry",
+            side_effect=_embeddings_side_effect,
+        ),
+    ):
+        registry = MemoryRegistry(hass)
+        await registry.build(
+            MemorySettings(
+                stores=[
+                    StoreConfig(name="bad", embeddings="Embed A"),
+                    StoreConfig(name="good", embeddings="Embed B"),
+                ]
+            ),
+            tmp_path,
+        )
+    assert registry.names() == ["good"]
+    assert "bad" in caplog.text
+    await registry.shutdown()
+
+
+async def test_backend_failure_skips_only_that_store(hass: HomeAssistant, tmp_path, caplog) -> None:
+    _entry_with_embeddings(hass, ["Embed A", "Embed B"])
+
+    def _store_factory(hass_, embeddings, backend):
+        st = MagicMock()
+        st.is_available = True
+        st.async_setup = AsyncMock()
+        st.close = AsyncMock()
+        st.backend = backend
+        return st
+
+    def _backend_side_effect(hass_, config, store_name, storage_dir):
+        if store_name == "bad":
+            raise BackendInitError("boom")
+        return MagicMock()
+
+    with (
+        patch(
+            "custom_components.smartchain.tools.memory.registry.MemoryStore",
+            side_effect=_store_factory,
+        ),
+        patch(
+            "custom_components.smartchain.tools.memory.registry.create_embeddings_from_subentry",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "custom_components.smartchain.tools.memory.registry.create_backend",
+            side_effect=_backend_side_effect,
+        ),
+    ):
+        registry = MemoryRegistry(hass)
+        await registry.build(
+            MemorySettings(
+                stores=[
+                    StoreConfig(name="bad", embeddings="Embed A"),
+                    StoreConfig(name="good", embeddings="Embed B"),
+                ]
+            ),
+            tmp_path,
+        )
+    assert registry.names() == ["good"]
+    assert "bad" in caplog.text
     await registry.shutdown()
 
 
