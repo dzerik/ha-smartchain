@@ -15,9 +15,15 @@ from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 
-from ...const import ENTITY_SKELETON_CACHE_TTL, ENTITY_SKELETON_MAX_CHARS
+from ...const import (
+    DOMAIN,
+    ENTITY_CONTEXT_MAX_ENTITIES,
+    ENTITY_SKELETON_CACHE_TTL,
+    ENTITY_SKELETON_MAX_CHARS,
+)
 from .config import EntitySourceConfig
 from .entity_filter import EntityCandidate, resolve_candidates
+from .entity_tool import rank_entities
 
 LOGGER = logging.getLogger(__name__)
 
@@ -210,3 +216,71 @@ class SkeletonCache:
 
         self._cache[preset] = (rendered, now)
         return rendered
+
+
+_RETRIEVED_HEADING = "Mentioned in this request:"
+
+
+def render_retrieved(hass: HomeAssistant, ranked: list[EntityCandidate]) -> str:
+    """The matched entities in full: id, name, area and live state.
+
+    States come from `hass.states` at render time, never from stored index
+    metadata, which is stale by construction and absent entirely when the
+    store does not track states.
+    """
+    if not ranked:
+        return ""
+    lines = [_RETRIEVED_HEADING]
+    for cand in ranked:
+        live = hass.states.get(cand.entity_id)
+        state = live.state if live else "unavailable"
+        lines.append(f"- {cand.entity_id} — {cand.name} [{cand.area or '—'}] = {state}")
+    return "\n".join(lines)
+
+
+async def build_entity_context(hass: HomeAssistant, preset: str, query: str) -> str | None:
+    """The whole entity context for one turn. Never raises.
+
+    Returns None when the skeleton could not be built, which is the caller's
+    signal to fall back to the full devices dump. An empty string means the
+    home is genuinely empty, which is not a failure.
+
+    `resolve_candidates` is called a second time here rather than reusing the
+    skeleton cache's: the cache stores rendered text, not candidates, and
+    holding candidate objects for every preset would trade a real memory
+    cost for a registry read that is already cheap and synchronous.
+    """
+    cache: Any = (hass.data.get(DOMAIN) or {}).get("entity_skeleton")
+    if cache is None:
+        LOGGER.warning("entity skeleton cache is not installed; falling back")
+        return None
+
+    skeleton = cache.get(preset)
+    if skeleton is None:
+        return None
+
+    retrieved = ""
+    try:
+        registry = (hass.data.get(DOMAIN) or {}).get("memory")
+        names = registry.entity_store_names() if registry is not None else []
+        # Exactly one index, or no vector pass: with several there is no
+        # non-arbitrary choice and no user to ask. search_entities remains
+        # available for a deliberate one.
+        store_name = names[0] if len(names) == 1 else None
+
+        candidates = resolve_candidates(hass, EntitySourceConfig(preset=preset))
+        ranked = await rank_entities(
+            hass,
+            registry,
+            candidates,
+            query,
+            top_k=ENTITY_CONTEXT_MAX_ENTITIES,
+            store_name=store_name,
+        )
+        retrieved = render_retrieved(hass, ranked)
+    except Exception:  # noqa: BLE001 — degrade to the skeleton, never fail a turn
+        LOGGER.exception("entity retrieval failed; using the skeleton alone")
+
+    if skeleton and retrieved:
+        return f"{skeleton}\n\n{retrieved}"
+    return skeleton or retrieved
