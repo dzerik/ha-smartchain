@@ -90,10 +90,17 @@ when someone edited an unrelated store, which is worse than a second setting.
 One line per area, entities grouped by domain, names only:
 
 ```
-Кухня — свет: Потолочный, Подсветка; розетки: Кофеварка, Чайник; датчики: Температура, Влажность
-Спальня — свет: Бра, Люстра; климат: Кондиционер
-Без области — Пылесос, Входная дверь
+Кухня — light: Потолочный, Подсветка; sensor: Влажность, Температура; switch: Кофеварка, Чайник
+Спальня — climate: Кондиционер; light: Бра, Люстра
+No area — lock: Входная дверь; vacuum: Пылесос
 ```
+
+> Corrected during implementation. This example originally showed translated
+> domain labels (`свет:`, `розетки:`) and a Russian `Без области`, contradicting
+> the rule stated two paragraphs below it — that the structural vocabulary stays
+> English, as it already does in the catalogue documents. The code follows the
+> rule and emits the raw Home Assistant domain; the example above is captured
+> from the real renderer's output.
 
 Rules:
 
@@ -111,6 +118,15 @@ Rules:
 - No `entity_id`, no `device_class`, no state, no device grouping.
 
 Per entity this is roughly 12–20 characters against 60–90 in the current dump.
+
+**The saving is per entity, not necessarily overall.** `DEFAULT_DEVICES_PROMPT`
+iterates areas → devices in that area → that device's entities, so an entity with
+no device, a device with no area, and any device carrying an `entry_type` never
+appeared in it at all. The skeleton has no such gaps — that is what the `No area`
+line is for. Under `optimal` the net effect is still a large reduction, but under
+`maximal` or `paranoid` a home with many helpers or template entities can see the
+skeleton name things the old prompt never did. Say so in the documentation rather
+than promising a strict subset.
 
 **Bounded.** If the rendered skeleton exceeds `ENTITY_SKELETON_MAX_CHARS`, areas
 are emitted until the budget is spent and the remainder is replaced by a final
