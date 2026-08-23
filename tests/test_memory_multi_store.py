@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from homeassistant.config_entries import ConfigSubentryData
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.smartchain.const import (
@@ -14,6 +15,7 @@ from custom_components.smartchain.const import (
     ID_GIGACHAT,
     SUBENTRY_TYPE_EMBEDDINGS,
 )
+from custom_components.smartchain.tools.memory.entity_filter import EntityCandidate
 from custom_components.smartchain.tools.memory.registry import MemoryRegistry
 
 pytestmark = pytest.mark.usefixtures("enable_custom_integrations")
@@ -123,6 +125,61 @@ async def test_registry_is_rebuilt_after_an_entry_reload(
         await hass.async_block_till_done()
 
     assert sorted(hass.data[DOMAIN]["memory"].names()) == ["conversations", "entities"]
+
+
+def _skeleton_cand(entity_id: str) -> EntityCandidate:
+    return EntityCandidate(
+        entity_id=entity_id,
+        domain=entity_id.split(".")[0],
+        name="n",
+        area="",
+        device="",
+        device_class="",
+        aliases=(),
+    )
+
+
+async def test_skeleton_cache_re_subscribes_after_an_entry_reload(
+    hass: HomeAssistant, mock_llm_client, tmp_path_factory, patched_store
+) -> None:
+    """Unloading and re-setting-up the only entry must revive the skeleton
+    cache's registry subscriptions, not merely leave the object sitting in
+    hass.data.
+
+    `async_unload_entry` calls `SkeletonCache.stop()`, which empties its
+    `_unsubs` list but does not discard the object itself — unlike `memory`,
+    which is replaced wholesale on reload. If `async_setup_entry`'s rebuild
+    branch failed to call `start()` again, `get()` would keep working but the
+    cache would silently never react to a registry event again for the rest
+    of the HA run: a stale map indistinguishable from a correct one.
+    """
+    entry = await _setup(hass, tmp_path_factory, mock_llm_client)
+
+    await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+
+    with patch(
+        "custom_components.smartchain.get_client",
+        new_callable=AsyncMock,
+        return_value=mock_llm_client,
+    ):
+        await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    cache = hass.data[DOMAIN]["entity_skeleton"]
+
+    with patch(
+        "custom_components.smartchain.tools.memory.entity_context.resolve_candidates",
+        return_value={"light.a": _skeleton_cand("light.a")},
+    ) as resolve:
+        cache.get("optimal")
+        hass.bus.async_fire(
+            er.EVENT_ENTITY_REGISTRY_UPDATED, {"action": "update", "entity_id": "light.a"}
+        )
+        await hass.async_block_till_done()
+        cache.get("optimal")
+
+    assert resolve.call_count == 2
 
 
 async def test_only_flagged_stores_receive_conversation_ingest(
