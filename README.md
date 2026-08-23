@@ -118,7 +118,7 @@ Covers: providers and credentials · subentry options · all services with examp
 |---|---|
 | **v4.5.0** | Pluggable vector backends (sqlite_numpy / sqlite_vec / pgvector / qdrant), embeddings as a provider capability, named multi-stores |
 | v4.4.0 | Multi-agent orchestration — `ask_agents` parallel fan-out + `critique_response` second-opinion review |
-| v4.3.0 | Long-term memory / RAG — Chroma vector store, `search_memory` tool, conversation + logbook ingest |
+| v4.3.0 | Long-term memory / RAG — Chroma vector store *(replaced in v4.5.0)*, `search_memory` tool, conversation + logbook ingest |
 | v4.2.0 | MCP client — connect to remote MCP servers via stdio / SSE / HTTP with auto-reconnect |
 | v4.1.0 | Custom tools from YAML — declarative LLM tools (service / template / rest / script) |
 | v4.0.2 | Security fixes, proper `Last Analysis` SensorEntity, correct `integration_type` |

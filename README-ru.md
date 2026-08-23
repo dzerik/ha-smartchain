@@ -120,7 +120,7 @@ SmartChain — кастомная интеграция Home Assistant, пред�
 |---|---|
 | **v4.5.0** | Подключаемые векторные бэкенды (sqlite_numpy / sqlite_vec / pgvector / qdrant), эмбеддинги как возможность провайдера, именованные хранилища |
 | v4.4.0 | Multi-agent оркестрация — `ask_agents` параллельный fan-out + `critique_response` ревью второго мнения |
-| v4.3.0 | Долговременная память / RAG — Chroma vector store, tool `search_memory`, ингест диалогов + logbook |
+| v4.3.0 | Долговременная память / RAG — Chroma vector store *(заменено в v4.5.0)*, tool `search_memory`, ингест диалогов + logbook |
 | v4.2.0 | MCP-клиент — подключение к удалённым MCP-серверам через stdio / SSE / HTTP с автореконнектом |
 | v4.1.0 | Свои tools в YAML — декларативные LLM-инструменты (service / template / rest / script) |
 | v4.0.2 | Security-фиксы, корректный `Last Analysis` SensorEntity, правильный `integration_type` |

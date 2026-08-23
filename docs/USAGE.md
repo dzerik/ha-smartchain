@@ -377,16 +377,19 @@ Setting it up is two steps: create an embeddings sub-entry (§9.1), then declare
 
 ### 9.1. Step 1 — create an embeddings sub-entry
 
-**Settings > Devices & Services > SmartChain > 3-dot menu > Add sub-entry > Embeddings.**
+**Settings > Devices & Services > SmartChain > 3-dot menu > Add embeddings binding.**
 
-The form asks for two things:
+The form asks for three fields, of which you fill in two:
 
 - **Name** — the sub-entry title. This is the handle `tools.yaml` refers to, so pick something stable and unique across *all* SmartChain config entries. If two sub-entries share a title, SmartChain refuses to bind either rather than guessing, and logs an error naming the clash.
-- **Model** — a dropdown of the provider's embedding models, plus a free-text field if you run a model the API doesn't advertise (a local Ollama pull, for example). The free-text value wins when both are filled.
+- **Embedding model** — a dropdown of the provider's embedding models.
+- **Custom model name** — a free-text field for a model the provider's API doesn't advertise (a local Ollama pull, for example). Leave it empty to use the dropdown.
 
-Credentials are inherited from the config entry. There is nothing else to fill in — an embeddings sub-entry has no prompt, no tools and no temperature.
+**A model is mandatory.** Fill in exactly one of the two model fields: leaving both empty is rejected with *"Either Model or Custom Model required"* and the form is redisplayed. When both are filled the non-empty custom name wins over the dropdown selection.
 
-> **Capability caveat.** The **Embeddings** sub-entry type is only offered by providers that actually expose an embeddings API. **DeepSeek and Anthropic do not**, so the option is absent on their config entries. If those are your only providers, add a second config entry for a provider that does — a local Ollama entry costs nothing and can serve embeddings only.
+Credentials are inherited from the config entry. There is nothing else to fill in — an embeddings binding has no prompt, no tools and no temperature.
+
+> **Capability caveat.** The **Add embeddings binding** option is only offered by providers that actually expose an embeddings API. **DeepSeek and Anthropic do not**, so the menu entry is absent on their config entries. If those are your only providers, add a second config entry for a provider that does — a local Ollama entry costs nothing and can serve embeddings only.
 
 | Provider | Embedding models offered |
 |---|---|
@@ -519,7 +522,7 @@ That store is disabled and the others keep running. Vectors of different widths 
 To change a store's embedding model deliberately — there is no automatic re-embedding, so the old vectors have to go:
 
 1. `smartchain.clear_memory` with `store: <name>`.
-2. Reconfigure the embeddings sub-entry (**3-dot menu > Reconfigure** on the sub-entry) to the new model.
+2. Point the binding at the new model (**3-dot menu > Reconfigure embeddings binding**).
 3. `smartchain.reload_tools`.
 
 ### 9.5. How it surfaces to the LLM
