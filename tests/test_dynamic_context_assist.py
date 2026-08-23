@@ -164,11 +164,20 @@ async def test_the_skeleton_is_not_added_on_this_path(hass: HomeAssistant) -> No
 
 
 async def test_a_retrieval_failure_leaves_the_extra_prompt_untouched(hass: HomeAssistant) -> None:
+    """`build_retrieved_context` is documented to never raise: it signals an
+
+    internal failure by returning "" rather than propagating an exception
+    (see `tests/test_entity_context.py::test_a_failing_retrieval_leaves_the_skeleton`
+    for the same contract on the sibling path). This exercises the composer
+    against that real contract — not against a mock that violates it — the
+    same way `_build_system_prompt`'s failure test drives `build_entity_context`
+    through a `None`/"" return rather than a raise.
+    """
     entity = _make_entity(hass)
     options = {CONF_DYNAMIC_CONTEXT_ON_ASSIST: True}
     user_input = _make_input(text="потолок", extra_system_prompt="Будь краток.")
 
-    with patch(_BUILD_RETRIEVED, new=AsyncMock(side_effect=RuntimeError("boom"))):
+    with patch(_BUILD_RETRIEVED, new=AsyncMock(return_value="")):
         result = await entity._build_extra_system_prompt(options, user_input)
 
     assert result == "Будь краток."

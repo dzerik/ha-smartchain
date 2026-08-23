@@ -280,20 +280,21 @@ class SmartChainConversationEntity(ConversationEntity):
         return it completely unchanged — not "", not None coerced to
         something else — since it is handed straight to
         `async_provide_llm_data` as the fourth argument.
+
+        `build_retrieved_context` is documented to never raise — it returns
+        "" on any internal failure — so this trusts that contract the same
+        way `_build_system_prompt` trusts `build_entity_context`'s, rather
+        than wrapping it in a second guard that would silently mask a
+        regression in the callee's own.
         """
         if not options.get(CONF_DYNAMIC_CONTEXT_ON_ASSIST, DEFAULT_DYNAMIC_CONTEXT_ON_ASSIST):
             return user_input.extra_system_prompt
 
-        try:
-            block = await build_retrieved_context(
-                self.hass,
-                preset=options.get(CONF_DYNAMIC_CONTEXT_PRESET, ENTITY_DEFAULT_PRESET),
-                query=user_input.text or "",
-            )
-        except Exception:  # noqa: BLE001 — never fail a turn over the retrieved block
-            LOGGER.exception("retrieved context failed on the Assist path")
-            return user_input.extra_system_prompt
-
+        block = await build_retrieved_context(
+            self.hass,
+            preset=options.get(CONF_DYNAMIC_CONTEXT_PRESET, ENTITY_DEFAULT_PRESET),
+            query=user_input.text or "",
+        )
         if not block:
             return user_input.extra_system_prompt
 
