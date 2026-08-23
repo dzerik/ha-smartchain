@@ -7,9 +7,9 @@ from homeassistant.config_entries import ConfigEntry, ConfigSubentry
 from homeassistant.core import HomeAssistant
 
 from ...const import DOMAIN, SUBENTRY_TYPE_EMBEDDINGS
-from .backends import create_backend
+from .backends import BackendInitError, create_backend
 from .config import MemorySettings, StoreConfig
-from .embeddings import create_embeddings_from_subentry
+from .embeddings import EmbeddingsConfigError, create_embeddings_from_subentry
 from .ingest import MemoryLogbookPoller
 from .retention import RetentionTask
 from .store import MemoryStore
@@ -76,22 +76,43 @@ class MemoryRegistry:
                 continue
 
             entry, subentry = binding
-            # Deliberately broad: create_embeddings_from_subentry indexes
-            # entry.data[CONF_API_KEY] directly and constructs pydantic models,
-            # so a malformed entry raises KeyError / ValidationError rather than
-            # EmbeddingsConfigError. Anything escaping here would propagate out
-            # of build() into _reload_registry, whose handler discards the whole
-            # new registry — one bad entry would kill every configured store.
+            # Two handlers, not one. The expected errors carry messages that
+            # earlier tasks scrubbed of credentials, so those are logged in full.
+            # But create_embeddings_from_subentry indexes entry.data[CONF_API_KEY]
+            # directly and constructs pydantic models, so a malformed entry can
+            # raise KeyError / ValidationError instead — and anything escaping
+            # here would propagate out of build() into _reload_registry, whose
+            # handler discards the whole new registry, letting one bad entry kill
+            # every configured store. Hence a catch-all that logs the type only.
             try:
                 embeddings = create_embeddings_from_subentry(self.hass, entry, subentry)
-            except Exception as err:  # noqa: BLE001 — per-store isolation
+            except EmbeddingsConfigError as err:
                 LOGGER.error("Memory store %r disabled: %s", config.name, err)
+                continue
+            except Exception as err:  # noqa: BLE001 — per-store isolation
+                # Type only. An unexpected error here can be a pydantic
+                # ValidationError, and pydantic renders `input_value` — which on
+                # this call path is the provider credential.
+                LOGGER.error(
+                    "Memory store %r disabled: unexpected %s while building embeddings",
+                    config.name,
+                    type(err).__name__,
+                )
                 continue
 
             try:
                 backend = create_backend(self.hass, config.backend, config.name, storage_dir)
-            except Exception as err:  # noqa: BLE001 — per-store isolation
+            except BackendInitError as err:
                 LOGGER.error("Memory store %r disabled: %s", config.name, err)
+                continue
+            except Exception as err:  # noqa: BLE001 — per-store isolation
+                # Type only, for the same reason: BackendConfig carries `dsn`
+                # and `api_key`, and an unexpected error may render them.
+                LOGGER.error(
+                    "Memory store %r disabled: unexpected %s while building the backend",
+                    config.name,
+                    type(err).__name__,
+                )
                 continue
 
             store = MemoryStore(self.hass, embeddings, backend)
