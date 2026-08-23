@@ -238,28 +238,13 @@ def render_retrieved(hass: HomeAssistant, ranked: list[EntityCandidate]) -> str:
     return "\n".join(lines)
 
 
-async def build_entity_context(hass: HomeAssistant, preset: str, query: str) -> str | None:
-    """The whole entity context for one turn. Never raises.
+async def build_retrieved_context(hass: HomeAssistant, preset: str, query: str) -> str:
+    """The retrieved block alone, no skeleton. Returns "" on any failure — never raises.
 
-    Returns None when the skeleton could not be built, which is the caller's
-    signal to fall back to the full devices dump. An empty string means the
-    home is genuinely empty, which is not a failure.
-
-    `resolve_candidates` is called a second time here rather than reusing the
-    skeleton cache's: the cache stores rendered text, not candidates, and
-    holding candidate objects for every preset would trade a real memory
-    cost for a registry read that is already cheap and synchronous.
+    Shared by `build_entity_context` (which prepends the skeleton) and the
+    Assist path (which never adds the skeleton — Home Assistant already
+    injects its own exposed-entity list there).
     """
-    cache: Any = (hass.data.get(DOMAIN) or {}).get("entity_skeleton")
-    if cache is None:
-        LOGGER.warning("entity skeleton cache is not installed; falling back")
-        return None
-
-    skeleton = cache.get(preset)
-    if skeleton is None:
-        return None
-
-    retrieved = ""
     try:
         registry = (hass.data.get(DOMAIN) or {}).get("memory")
         names = registry.entity_store_names() if registry is not None else []
@@ -277,9 +262,29 @@ async def build_entity_context(hass: HomeAssistant, preset: str, query: str) -> 
             top_k=ENTITY_CONTEXT_MAX_ENTITIES,
             store_name=store_name,
         )
-        retrieved = render_retrieved(hass, ranked)
-    except Exception:  # noqa: BLE001 — degrade to the skeleton, never fail a turn
-        LOGGER.exception("entity retrieval failed; using the skeleton alone")
+        return render_retrieved(hass, ranked)
+    except Exception:  # noqa: BLE001 — never fail a turn over the retrieved block
+        LOGGER.exception("entity retrieval failed")
+        return ""
+
+
+async def build_entity_context(hass: HomeAssistant, preset: str, query: str) -> str | None:
+    """The whole entity context for one turn. Never raises.
+
+    Returns None when the skeleton could not be built, which is the caller's
+    signal to fall back to the full devices dump. An empty string means the
+    home is genuinely empty, which is not a failure.
+    """
+    cache: Any = (hass.data.get(DOMAIN) or {}).get("entity_skeleton")
+    if cache is None:
+        LOGGER.warning("entity skeleton cache is not installed; falling back")
+        return None
+
+    skeleton = cache.get(preset)
+    if skeleton is None:
+        return None
+
+    retrieved = await build_retrieved_context(hass, preset, query)
 
     if skeleton and retrieved:
         return f"{skeleton}\n\n{retrieved}"

@@ -39,6 +39,7 @@ from langchain_core.messages import (
 from .const import (
     CONF_ALLOWED_TOOLS,
     CONF_CHAT_HISTORY,
+    CONF_DYNAMIC_CONTEXT_ON_ASSIST,
     CONF_DYNAMIC_CONTEXT_PRESET,
     CONF_DYNAMIC_ENTITY_CONTEXT,
     CONF_ENABLE_HISTORY_TOOL,
@@ -49,6 +50,7 @@ from .const import (
     CRITIQUE_TOOL_NAME,
     DEFAULT_CHAT_HISTORY,
     DEFAULT_DEVICES_PROMPT,
+    DEFAULT_DYNAMIC_CONTEXT_ON_ASSIST,
     DEFAULT_DYNAMIC_ENTITY_CONTEXT,
     DEFAULT_ENABLE_HISTORY_TOOL,
     DEFAULT_ENABLE_MULTI_AGENT_TOOLS,
@@ -81,7 +83,7 @@ from .tools.delegate_many_tool import (
     get_delegate_many_tool_definition,
 )
 from .tools.dispatcher import dispatch as dispatch_custom_tool
-from .tools.memory.entity_context import build_entity_context
+from .tools.memory.entity_context import build_entity_context, build_retrieved_context
 from .tools.memory.entity_tool import (
     execute_entity_search,
     get_entity_tool_definition,
@@ -262,6 +264,42 @@ class SmartChainConversationEntity(ConversationEntity):
             prompt = f"{prompt}\n\n{context}"
         return prompt
 
+    async def _build_extra_system_prompt(
+        self, options: dict[str, Any], user_input: ConversationInput
+    ) -> str | None:
+        """Compose `extra_system_prompt` for a turn that goes through Assist.
+
+        With the Assist API, Home Assistant already injects its own exposed-
+        entity list and control tools; adding our skeleton on top would
+        duplicate it and grow a prompt we have no way to shrink. So this path
+        adds only the retrieved block — the semantic hits a name-based
+        exposure list does not surface — and only when the option is on.
+
+        `user_input.extra_system_prompt` may already hold the user's own
+        text. Off, or a retrieval that yields (or fails into) nothing, must
+        return it completely unchanged — not "", not None coerced to
+        something else — since it is handed straight to
+        `async_provide_llm_data` as the fourth argument.
+        """
+        if not options.get(CONF_DYNAMIC_CONTEXT_ON_ASSIST, DEFAULT_DYNAMIC_CONTEXT_ON_ASSIST):
+            return user_input.extra_system_prompt
+
+        try:
+            block = await build_retrieved_context(
+                self.hass,
+                preset=options.get(CONF_DYNAMIC_CONTEXT_PRESET, ENTITY_DEFAULT_PRESET),
+                query=user_input.text or "",
+            )
+        except Exception:  # noqa: BLE001 — never fail a turn over the retrieved block
+            LOGGER.exception("retrieved context failed on the Assist path")
+            return user_input.extra_system_prompt
+
+        if not block:
+            return user_input.extra_system_prompt
+
+        extra = user_input.extra_system_prompt or ""
+        return f"{extra}\n\n{block}" if extra else block
+
     async def _async_get_skills_prompt(self) -> str:
         """Return cached skills prompt text. First call reads YAML files in executor."""
         if self._skills_prompt is None:
@@ -287,12 +325,13 @@ class SmartChainConversationEntity(ConversationEntity):
         user_prompt = options.get(CONF_PROMPT, DEFAULT_PROMPT)
 
         if llm_hass_api:
+            extra_system_prompt = await self._build_extra_system_prompt(options, user_input)
             try:
                 await chat_log.async_provide_llm_data(
                     user_input.as_llm_context(DOMAIN),
                     llm_hass_api,
                     user_prompt,
-                    user_input.extra_system_prompt,
+                    extra_system_prompt,
                 )
             except conversation.ConverseError as err:
                 return err.as_conversation_result()
