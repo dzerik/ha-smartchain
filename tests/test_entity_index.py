@@ -8,6 +8,7 @@ from homeassistant.core import HomeAssistant
 from custom_components.smartchain.tools.memory.config import EntitySourceConfig
 from custom_components.smartchain.tools.memory.entity_filter import EntityCandidate
 from custom_components.smartchain.tools.memory.entity_index import EntityIndexer
+from custom_components.smartchain.tools.memory.store import MemoryStore
 
 pytestmark = pytest.mark.usefixtures("enable_custom_integrations")
 
@@ -25,10 +26,17 @@ def _cand(entity_id: str, name: str = "Name", area: str = "Кухня") -> Entit
 
 
 def _store() -> MagicMock:
-    store = MagicMock()
+    """A `MemoryStore` stand-in that only answers to attributes the real class has.
+
+    `spec=MemoryStore` makes a call to a method the store does not actually
+    expose (e.g. a since-removed `delete_where`) raise `AttributeError` right
+    here, instead of a bare `MagicMock` quietly answering to anything and
+    letting the bug reach production.
+    """
+    store = MagicMock(spec=MemoryStore)
     store.is_available = True
     store.add = AsyncMock(return_value=["id"])
-    store.delete_where = AsyncMock(return_value=1)
+    store.clear = AsyncMock(return_value=1)
     store.list_metadata = AsyncMock(return_value={})
     store.update_metadata = AsyncMock(return_value=True)
     return store
@@ -139,7 +147,7 @@ async def test_a_vanished_entity_is_deleted(hass: HomeAssistant, indexer_factory
     result = await indexer.reconcile()
 
     assert result.removed == 1
-    store.delete_where.assert_awaited_once_with({"kind": "entity", "entity_id": "light.gone"})
+    store.clear.assert_awaited_once_with({"kind": "entity", "entity_id": "light.gone"})
 
 
 async def test_a_narrowed_preset_removes_what_dropped_out(

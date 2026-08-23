@@ -80,7 +80,7 @@ class EntityIndexer:
         for _doc_id, meta in stored.items():
             entity_id = meta.get("entity_id", "")
             if entity_id and entity_id not in candidates:
-                await self.store.delete_where({"kind": "entity", "entity_id": entity_id})
+                await self.store.clear({"kind": "entity", "entity_id": entity_id})
                 removed += 1
 
         LOGGER.info(
