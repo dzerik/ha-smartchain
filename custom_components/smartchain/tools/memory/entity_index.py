@@ -3,6 +3,7 @@
 import asyncio
 import logging
 from dataclasses import dataclass
+from datetime import datetime
 
 from homeassistant.const import EVENT_HOMEASSISTANT_STARTED
 from homeassistant.core import CoreState, Event, HomeAssistant, callback
@@ -47,6 +48,7 @@ class EntityIndexer:
         self._unsubs: list = []
         self._task: asyncio.Task | None = None
         self._unsub_debounce = None
+        self._removal_tasks: set[asyncio.Task] = set()
 
     def _state_of(self, entity_id: str) -> str | None:
         if not self.config.index_states:
@@ -169,6 +171,15 @@ class EntityIndexer:
             except (asyncio.CancelledError, Exception):  # noqa: BLE001
                 pass
             self._task = None
+        pending_removals = list(self._removal_tasks)
+        for task in pending_removals:
+            task.cancel()
+        for task in pending_removals:
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                pass
+        self._removal_tasks.clear()
 
     @callback
     def _on_hass_started(self, _event: Event) -> None:
@@ -186,10 +197,12 @@ class EntityIndexer:
         if data.get("action") == "remove":
             entity_id = data.get("entity_id")
             if entity_id:
-                self.hass.async_create_background_task(
+                task = self.hass.async_create_background_task(
                     self.store.clear({"kind": "entity", "entity_id": entity_id}),
                     name="smartchain_entity_index_remove",
                 )
+                self._removal_tasks.add(task)
+                task.add_done_callback(self._removal_tasks.discard)
             return
         self._debounce()
 
@@ -207,7 +220,7 @@ class EntityIndexer:
         )
 
     @callback
-    def _on_debounce_elapsed(self, _now) -> None:
+    def _on_debounce_elapsed(self, _now: datetime) -> None:
         self._schedule_sweep()
 
     @callback

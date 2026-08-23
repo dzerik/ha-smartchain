@@ -1,5 +1,7 @@
 """Startup timing and registry-driven refreshes."""
 
+import asyncio
+from datetime import timedelta
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -8,7 +10,10 @@ from homeassistant.core import CoreState, HomeAssistant
 from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
+from homeassistant.util import dt as dt_util
+from pytest_homeassistant_custom_component.common import async_fire_time_changed
 
+from custom_components.smartchain.const import ENTITY_REGISTRY_DEBOUNCE_SECONDS
 from custom_components.smartchain.tools.memory.config import EntitySourceConfig
 from custom_components.smartchain.tools.memory.entity_index import EntityIndexer
 from custom_components.smartchain.tools.memory.store import MemoryStore
@@ -88,6 +93,27 @@ async def test_registry_changes_are_debounced_into_one_sweep(hass: HomeAssistant
     await indexer.stop()
 
 
+async def test_debounced_sweep_fires_on_its_own_after_the_window_elapses(
+    hass: HomeAssistant,
+) -> None:
+    """The real timer, not just the `_flush_debounce` test seam, must fire the sweep."""
+    indexer, sweep = _indexer(hass)
+    indexer.start()
+    await hass.async_block_till_done()
+    sweep.reset_mock()
+
+    hass.bus.async_fire(
+        er.EVENT_ENTITY_REGISTRY_UPDATED, {"action": "update", "entity_id": "light.a"}
+    )
+    async_fire_time_changed(
+        hass, dt_util.utcnow() + timedelta(seconds=ENTITY_REGISTRY_DEBOUNCE_SECONDS + 1)
+    )
+    await hass.async_block_till_done()
+
+    assert sweep.await_count == 1
+    await indexer.stop()
+
+
 @pytest.mark.parametrize(
     "event",
     [dr.EVENT_DEVICE_REGISTRY_UPDATED, ar.EVENT_AREA_REGISTRY_UPDATED],
@@ -109,6 +135,13 @@ async def test_device_and_area_changes_schedule_a_sweep(hass: HomeAssistant, eve
 
 
 async def test_stop_cancels_pending_work(hass: HomeAssistant) -> None:
+    """A debounce timer that outlives `stop()` would sweep against a closed store.
+
+    Real time must actually elapse past the debounce window for this to prove
+    anything — `ENTITY_REGISTRY_DEBOUNCE_SECONDS` never passes on its own during
+    a test, so without `async_fire_time_changed` this assertion would hold
+    whether or not `stop()` cancels the timer at all.
+    """
     indexer, sweep = _indexer(hass)
     indexer.start()
     await hass.async_block_till_done()
@@ -118,9 +151,63 @@ async def test_stop_cancels_pending_work(hass: HomeAssistant) -> None:
         er.EVENT_ENTITY_REGISTRY_UPDATED, {"action": "update", "entity_id": "light.a"}
     )
     await indexer.stop()
+
+    async_fire_time_changed(
+        hass, dt_util.utcnow() + timedelta(seconds=ENTITY_REGISTRY_DEBOUNCE_SECONDS + 1)
+    )
     await hass.async_block_till_done()
 
     assert sweep.await_count == 0
+
+
+async def test_stop_cancels_a_sweep_in_flight(hass: HomeAssistant) -> None:
+    """A shutdown must not wait on a sweep that could take minutes."""
+    indexer, _ = _indexer(hass)
+    blocker = asyncio.Event()
+
+    async def _blocking_sweep(*, full: bool = False):
+        await blocker.wait()
+
+    indexer.reconcile = _blocking_sweep
+    indexer.start()
+    await hass.async_block_till_done()
+
+    task = indexer._task
+    assert task is not None
+    assert not task.done()
+
+    await indexer.stop()
+
+    assert task.cancelled()
+    assert indexer._task is None
+
+
+async def test_stop_cancels_an_in_flight_removal(hass: HomeAssistant) -> None:
+    """A removal still running when `stop()` is called must not outlive it."""
+    indexer, _ = _indexer(hass)
+    blocker = asyncio.Event()
+
+    async def _blocking_clear(_where):
+        await blocker.wait()
+        return 1
+
+    indexer.store.clear = AsyncMock(side_effect=_blocking_clear)
+    indexer.start()
+    await hass.async_block_till_done()
+
+    hass.bus.async_fire(
+        er.EVENT_ENTITY_REGISTRY_UPDATED,
+        {"action": "remove", "entity_id": "light.gone"},
+    )
+
+    assert len(indexer._removal_tasks) == 1
+    task = next(iter(indexer._removal_tasks))
+    assert not task.done()
+
+    await indexer.stop()
+
+    assert task.cancelled()
+    assert indexer._removal_tasks == set()
 
 
 async def test_stop_is_idempotent(hass: HomeAssistant) -> None:
