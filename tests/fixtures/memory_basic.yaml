@@ -1,9 +1,24 @@
 tools: []
 memory:
-  provider: ollama
-  model: nomic-embed-text
-  retention_days: 30
-  ingest_logbook:
-    enabled: true
-    domains: [light, lock]
-    poll_interval_minutes: 30
+  stores:
+    - name: conversations
+      description: "Past conversations"
+      embeddings: "GigaChat Embeddings"
+      backend:
+        type: sqlite_numpy
+      retention_days: 30
+      ingest_conversation: true
+      ingest_logbook:
+        enabled: true
+        domains: [light, lock]
+        poll_interval_minutes: 30
+
+    - name: entities
+      description: "Devices and sensors"
+      embeddings: "Ollama nomic"
+      backend:
+        type: pgvector
+        dsn: "postgresql://user:pass@host/db"
+        table: smartchain_entities
+      retention_days: 0
+      ingest_conversation: false

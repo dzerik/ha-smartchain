@@ -8,7 +8,7 @@ from ..const import (
     MEMORY_DEFAULT_LOGBOOK_POLL_MINUTES,
     MEMORY_LOGBOOK_POLL_MAX_MINUTES,
     MEMORY_LOGBOOK_POLL_MIN_MINUTES,
-    MEMORY_PROVIDERS,
+    MEMORY_STORE_NAME_PATTERN,
     TOOL_NAME_PATTERN,
 )
 
@@ -182,19 +182,49 @@ _BACKEND_SCHEMA = vol.Schema(
 )
 
 
-MEMORY_SCHEMA = vol.Schema(
+_STORE_SCHEMA = vol.Schema(
     {
-        vol.Required("provider"): vol.In(MEMORY_PROVIDERS),
-        vol.Required("model"): _NON_EMPTY_STR,
-        vol.Optional("enabled", default=True): bool,
-        vol.Optional("base_url"): vol.Any(None, str),
-        vol.Optional("api_key"): vol.Any(None, str),
+        vol.Required("name"): vol.All(str, vol.Match(MEMORY_STORE_NAME_PATTERN)),
+        vol.Required("embeddings"): _NON_EMPTY_STR,
+        vol.Optional("description", default=""): str,
+        vol.Optional("backend", default=dict): _BACKEND_SCHEMA,
         vol.Optional("retention_days", default=90): vol.All(int, vol.Range(min=0, max=3650)),
         vol.Optional("ingest_conversation", default=True): bool,
         vol.Optional("ingest_logbook", default=dict): _LOGBOOK_SCHEMA,
-        vol.Optional("backend", default=dict): _BACKEND_SCHEMA,
     }
 )
+
+
+def _validate_memory(value: object) -> dict:
+    """Validate the memory block and reject the pre-4.5.0 flat shape.
+
+    Credentials no longer live in YAML, so a block carrying `provider` or
+    `api_key` cannot be migrated automatically — there is no subentry to point
+    at until the user creates one. Fail loudly with the exact steps.
+    """
+    if not isinstance(value, dict):
+        raise vol.Invalid("memory must be a mapping")
+
+    legacy_keys = {"provider", "model", "api_key", "base_url"} & set(value)
+    if legacy_keys:
+        raise vol.Invalid(
+            "the flat memory: block was replaced in v4.5.0. Create an embeddings "
+            "subentry on the provider's config entry, then rewrite the block as a "
+            "stores: list referencing it by name, then call smartchain.reload_tools. "
+            f"Offending keys: {sorted(legacy_keys)}"
+        )
+
+    validated = vol.Schema({vol.Optional("stores", default=list): [_STORE_SCHEMA]})(value)
+
+    seen: set[str] = set()
+    for store in validated["stores"]:
+        if store["name"] in seen:
+            raise vol.Invalid(f"duplicate store name {store['name']!r}")
+        seen.add(store["name"])
+    return validated
+
+
+MEMORY_SCHEMA = _validate_memory
 
 TOOLS_FILE_SCHEMA = vol.Schema(
     {

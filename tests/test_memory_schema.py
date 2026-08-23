@@ -9,73 +9,46 @@ from custom_components.smartchain.tools.schema import (
 )
 
 
-def test_minimal_memory_block_validates() -> None:
-    MEMORY_SCHEMA({"provider": "ollama", "model": "nomic-embed-text"})
-
-
-def test_memory_with_logbook_validates() -> None:
-    MEMORY_SCHEMA(
-        {
-            "provider": "ollama",
-            "model": "nomic-embed-text",
-            "retention_days": 30,
-            "ingest_logbook": {
-                "enabled": True,
-                "domains": ["light", "lock"],
-                "poll_interval_minutes": 15,
-            },
-        }
+def test_stores_block_validates() -> None:
+    TOOLS_FILE_SCHEMA(
+        {"memory": {"stores": [{"name": "conversations", "embeddings": "GigaChat Embeddings"}]}}
     )
 
 
-def test_unknown_provider_rejected() -> None:
+def test_store_requires_name_and_embeddings() -> None:
     with pytest.raises(vol.Invalid):
-        MEMORY_SCHEMA({"provider": "bogus", "model": "x"})
-
-
-def test_negative_retention_rejected() -> None:
+        MEMORY_SCHEMA({"stores": [{"name": "a"}]})
     with pytest.raises(vol.Invalid):
-        MEMORY_SCHEMA({"provider": "ollama", "model": "x", "retention_days": -1})
+        MEMORY_SCHEMA({"stores": [{"embeddings": "E"}]})
 
 
-def test_too_fast_poll_interval_rejected() -> None:
+def test_store_name_pattern_is_enforced() -> None:
     with pytest.raises(vol.Invalid):
+        MEMORY_SCHEMA({"stores": [{"name": "Bad Name", "embeddings": "E"}]})
+
+
+def test_duplicate_store_names_rejected() -> None:
+    with pytest.raises(vol.Invalid, match="duplicate"):
         MEMORY_SCHEMA(
             {
-                "provider": "ollama",
-                "model": "x",
-                "ingest_logbook": {"enabled": True, "poll_interval_minutes": 1},
+                "stores": [
+                    {"name": "a", "embeddings": "E1"},
+                    {"name": "a", "embeddings": "E2"},
+                ]
             }
         )
 
 
-def test_tools_file_schema_accepts_memory_block() -> None:
-    TOOLS_FILE_SCHEMA(
-        {
-            "memory": {"provider": "ollama", "model": "nomic-embed-text"},
-        }
-    )
+def test_store_backend_defaults_to_sqlite_numpy() -> None:
+    result = MEMORY_SCHEMA({"stores": [{"name": "a", "embeddings": "E"}]})
+    assert result["stores"][0]["backend"]["type"] == "sqlite_numpy"
 
 
-def test_tools_file_schema_without_memory_block_still_validates() -> None:
-    TOOLS_FILE_SCHEMA({"tools": []})
-
-
-def test_memory_accepts_backend_block() -> None:
-    MEMORY_SCHEMA(
-        {
-            "provider": "ollama",
-            "model": "nomic-embed-text",
-            "backend": {"type": "pgvector", "dsn": "postgresql://x/y"},
-        }
-    )
-
-
-def test_memory_rejects_unknown_backend_type() -> None:
+def test_store_rejects_unknown_backend_type() -> None:
     with pytest.raises(vol.Invalid):
-        MEMORY_SCHEMA({"provider": "ollama", "model": "x", "backend": {"type": "milvus"}})
+        MEMORY_SCHEMA({"stores": [{"name": "a", "embeddings": "E", "backend": {"type": "milvus"}}]})
 
 
-def test_memory_backend_defaults_to_sqlite_numpy() -> None:
-    result = MEMORY_SCHEMA({"provider": "ollama", "model": "x"})
-    assert result["backend"]["type"] == "sqlite_numpy"
+def test_legacy_flat_block_is_rejected() -> None:
+    with pytest.raises(vol.Invalid):
+        MEMORY_SCHEMA({"provider": "ollama", "model": "nomic-embed-text"})

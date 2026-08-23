@@ -11,7 +11,7 @@ from homeassistant.util.yaml import load_yaml as ha_load_yaml
 
 from ..const import RESERVED_TOOL_NAMES
 from .mcp.config import HTTPConfig, MCPServerConfig, SSEConfig, StdioConfig
-from .memory.config import BackendConfig, LogbookConfig, MemoryConfig
+from .memory.config import BackendConfig, LogbookConfig, MemorySettings, StoreConfig
 from .model import (
     CustomTool,
     RESTAction,
@@ -35,7 +35,7 @@ class LoaderResult:
 
     yaml_tools: list[CustomTool] = field(default_factory=list)
     mcp_servers: list[MCPServerConfig] = field(default_factory=list)
-    memory_config: MemoryConfig | None = None
+    memory_settings: MemorySettings = field(default_factory=MemorySettings)
 
 
 def load_tools_file(path: Path) -> LoaderResult:
@@ -84,7 +84,7 @@ def load_tools_file(path: Path) -> LoaderResult:
     return LoaderResult(
         yaml_tools=out,
         mcp_servers=_servers_from_validated(validated),
-        memory_config=_memory_from_validated(validated),
+        memory_settings=_memory_from_validated(validated),
     )
 
 
@@ -161,32 +161,35 @@ def _server_from_dict(d: dict) -> MCPServerConfig:
     raise LoaderError(f"unsupported transport {transport!r}")
 
 
-def _memory_from_validated(validated: dict) -> MemoryConfig | None:
-    raw = validated.get("memory")
-    if not raw:
-        return None
-    logbook_raw = raw.get("ingest_logbook") or {}
-    return MemoryConfig(
-        provider=raw["provider"],
-        model=raw["model"],
-        enabled=raw.get("enabled", True),
-        base_url=raw.get("base_url"),
-        api_key=raw.get("api_key"),
-        retention_days=raw.get("retention_days", 90),
-        ingest_conversation=raw.get("ingest_conversation", True),
-        logbook=LogbookConfig(
-            enabled=logbook_raw.get("enabled", False),
-            domains=list(logbook_raw.get("domains") or []),
-            poll_interval_minutes=logbook_raw.get("poll_interval_minutes", 60),
-        ),
-        backend=BackendConfig(
-            type=(raw.get("backend") or {}).get("type", "sqlite_numpy"),
-            path=(raw.get("backend") or {}).get("path"),
-            dsn=(raw.get("backend") or {}).get("dsn"),
-            table=(raw.get("backend") or {}).get("table"),
-            url=(raw.get("backend") or {}).get("url"),
-            api_key=(raw.get("backend") or {}).get("api_key"),
-            collection=(raw.get("backend") or {}).get("collection"),
-            verify_ssl=(raw.get("backend") or {}).get("verify_ssl", True),
-        ),
-    )
+def _memory_from_validated(validated: dict) -> MemorySettings:
+    """Build MemorySettings from the validated `memory:` block."""
+    raw = validated.get("memory") or {}
+    stores: list[StoreConfig] = []
+    for entry in raw.get("stores") or []:
+        backend_raw = entry.get("backend") or {}
+        logbook_raw = entry.get("ingest_logbook") or {}
+        stores.append(
+            StoreConfig(
+                name=entry["name"],
+                embeddings=entry["embeddings"],
+                description=entry.get("description", ""),
+                backend=BackendConfig(
+                    type=backend_raw.get("type", "sqlite_numpy"),
+                    path=backend_raw.get("path"),
+                    dsn=backend_raw.get("dsn"),
+                    table=backend_raw.get("table"),
+                    url=backend_raw.get("url"),
+                    api_key=backend_raw.get("api_key"),
+                    collection=backend_raw.get("collection"),
+                    verify_ssl=backend_raw.get("verify_ssl", True),
+                ),
+                retention_days=entry.get("retention_days", 90),
+                ingest_conversation=entry.get("ingest_conversation", True),
+                logbook=LogbookConfig(
+                    enabled=logbook_raw.get("enabled", False),
+                    domains=list(logbook_raw.get("domains") or []),
+                    poll_interval_minutes=logbook_raw.get("poll_interval_minutes", 60),
+                ),
+            )
+        )
+    return MemorySettings(stores=stores)
