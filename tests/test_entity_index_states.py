@@ -1,10 +1,14 @@
 """State tracking must cost embeddings nothing at all."""
 
+from datetime import timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from homeassistant.core import HomeAssistant
+from homeassistant.util import dt as dt_util
+from pytest_homeassistant_custom_component.common import async_fire_time_changed
 
+from custom_components.smartchain.const import ENTITY_STATE_FLUSH_SECONDS
 from custom_components.smartchain.tools.memory.config import EntitySourceConfig
 from custom_components.smartchain.tools.memory.entity_filter import EntityCandidate
 from custom_components.smartchain.tools.memory.entity_index import EntityIndexer
@@ -110,4 +114,29 @@ async def test_a_failing_flush_does_not_raise(hass: HomeAssistant, caplog) -> No
     await indexer._flush_states()
 
     await indexer.stop()
+    patcher.stop()
+
+
+async def test_stop_cancels_the_flush_timer(hass: HomeAssistant) -> None:
+    """A flush timer that outlives `stop()` would write into a closing store.
+
+    Real time must actually elapse past the flush interval for this to prove
+    anything — without `async_fire_time_changed` this assertion would hold
+    whether or not `stop()` cancels the timer at all.
+    """
+    indexer, store, patcher = _make(hass, index_states=True)
+    indexer.start()
+    await hass.async_block_till_done()
+
+    hass.states.async_set("light.a", "on", {})
+    await hass.async_block_till_done()
+
+    await indexer.stop()
+
+    async_fire_time_changed(
+        hass, dt_util.utcnow() + timedelta(seconds=ENTITY_STATE_FLUSH_SECONDS + 1)
+    )
+    await hass.async_block_till_done()
+
+    assert store.update_metadata.await_count == 0
     patcher.stop()

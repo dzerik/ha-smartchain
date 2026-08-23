@@ -79,6 +79,7 @@ class EntityIndexer:
     async def _reconcile(self, full: bool = False) -> SweepResult:
         candidates = resolve_candidates(self.hass, self.config)
         stored = await self.store.list_metadata({"kind": "entity"})
+        self._indexed_metadata = dict(stored)
 
         pending: list[tuple[EntityCandidate, str, dict[str, str]]] = []
         new = changed = unchanged = 0
@@ -277,29 +278,30 @@ class EntityIndexer:
         )
 
     async def _flush_states(self) -> None:
-        """Write coalesced states as metadata. Issues no embedding call at all.
+        """Write coalesced states as metadata. Issues no embedding call — and
+        no store scan either.
 
-        An entity is only known to have a document once this indexer has swept
-        it: `list_metadata` is the source of truth, but a store double used in
-        tests (or a backend with eventual consistency) may not yet reflect a
-        write this same process just made, so the sweep's own record of what
-        it wrote (`_indexed_metadata`) is consulted as a fallback rather than
-        writing blind.
+        `_indexed_metadata` is the authoritative record of what this indexer
+        believes is in the store: seeded wholesale from `list_metadata` at the
+        start of every sweep, then kept in step by `_write` (adds/updates) and
+        both removal paths (pops) as they happen. A flush that scanned the
+        store on its own timer would defeat the entire point of this mode —
+        it must only ever read that cache.
         """
         if not self._pending_states or not self.store.is_available:
             return
         batch, self._pending_states = self._pending_states, {}
 
-        stored = await self.store.list_metadata({"kind": "entity"})
         now = dt_util.utcnow().isoformat()
         for entity_id, state in batch.items():
             doc_id = doc_id_for(entity_id)
-            metadata = stored.get(doc_id) or self._indexed_metadata.get(doc_id)
+            metadata = self._indexed_metadata.get(doc_id)
             if metadata is None:
                 continue
+            new_metadata = {**metadata, "state": state, "state_updated": now}
             try:
-                await self.store.update_metadata(
-                    doc_id, {**metadata, "state": state, "state_updated": now}
-                )
+                await self.store.update_metadata(doc_id, new_metadata)
             except Exception:  # noqa: BLE001 — one entity must not stop the flush
                 LOGGER.exception("entity state flush failed for %s", entity_id)
+                continue
+            self._indexed_metadata[doc_id] = new_metadata
