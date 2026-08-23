@@ -5,6 +5,34 @@ All notable changes to this project are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 project follows [Semantic Versioning](https://semver.org/).
 
+## [4.5.0] - 2026-08-23
+
+### ⚠ BREAKING CHANGES
+
+**Chroma is removed.** `chromadb` and `langchain-chroma` are gone from the manifest and the codebase. If `<config>/.storage/smartchain_memory/` exists from an earlier version it is now orphaned and can be deleted — no data is converted. In practice the directory is empty on most installations, because HA's pip step could not install `chromadb` (which is why v4.4.1 had to make it optional).
+
+**The `memory:` block has a new shape.** Credentials no longer live in `tools.yaml`, so the flat block with `provider` / `model` / `api_key` is rejected with an error naming the migration steps. There is no automatic migration: until you create an embeddings subentry there is nothing for the config to point at.
+
+Migration:
+1. Open the provider's config entry and add an **embeddings** subentry, giving it a name and choosing an embedding model.
+2. Replace the `memory:` block with a `stores:` list whose `embeddings:` field holds that name.
+3. Call `smartchain.reload_tools`.
+
+### Added
+- **Four pluggable vector backends** behind one `VectorBackend` Protocol: `sqlite_numpy` (default), `sqlite_vec`, `pgvector` and `qdrant`. The default needs **no dependency beyond what Home Assistant already ships** — stdlib `sqlite3` for storage and numpy for cosine similarity — so long-term memory now works out of the box on every installation. `qdrant` also adds no dependency: it speaks REST over HA's shared aiohttp session.
+- **Embeddings as a provider capability.** A new `embeddings` subentry type sits alongside `conversation` and reuses the config entry's credentials, ending the duplicate credential declaration the flat YAML block required. It is offered only where the provider supports it — DeepSeek and Anthropic expose no embeddings API and do not show the option.
+- **Purpose-filtered model discovery.** The existing provider model APIs are now split by purpose, so the embeddings form lists `text-embedding-*` for OpenAI, `Embeddings*` for GigaChat and the embedding families for Ollama, while chat forms stop offering embedding models by mistake.
+- **Named memory stores.** `memory.stores[]` binds one embeddings subentry to one backend, each with its own retention, logbook polling and conversation-ingest flag. `search_memory` and `smartchain.clear_memory` take a `store` parameter; with a single store it stays optional.
+- **Dimension probing.** The embedding dimension is measured at startup and persisted per store. Changing to a model of a different dimension is detected and reported with exact remediation steps instead of corrupting the index.
+
+### Changed
+- `hass.data[DOMAIN]["memory"]` now holds a `MemoryRegistry` rather than a single `MemoryStore`.
+- `smartchain_memory_cleared` now carries `{"deleted": <int>, "stores": [<names>]}`.
+- The Chroma `$and` filter dialect is replaced by a flat backend-neutral filter, translated per backend.
+
+### Tests
+- 411 passing (was 289). The centrepiece is a conformance suite executed against every backend, so the Protocol cannot drift between implementations.
+
 ## [4.4.1] - 2026-05-28
 
 ### Fixed

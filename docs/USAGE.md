@@ -170,11 +170,12 @@ Delete stored memories with optional filters.
 ```yaml
 service: smartchain.clear_memory
 data:
+  store: conversations  # optional (v4.5.0+) — omit to clear every store
   kind: conversation    # any | conversation | logbook (default: any)
   agent_id: conversation.smartchain_main   # optional — limit to one agent
 ```
 
-Fires `smartchain_memory_cleared` with `{"deleted": <int>}`. Raises `HomeAssistantError` if the memory subsystem isn't configured.
+Fires `smartchain_memory_cleared` with `{"deleted": <int>, "stores": [<names>]}`. Raises `HomeAssistantError` if the memory subsystem isn't configured, or if `store` names a store that isn't.
 
 ---
 
@@ -189,7 +190,7 @@ Every conversation turn that involves the LLM may call these tools. Each is gate
 | `ask_agent` | ≥ 2 sub-entries | Delegate the question to a specific sibling |
 | `ask_agents` *(v4.4.0+)* | `enable_multi_agent_tools: true` + ≥ 2 sub-entries | Parallel fan-out to several siblings (see §10) |
 | `critique_response` *(v4.4.0+)* | same | Ask a sibling to review a draft answer (see §10) |
-| `search_memory` *(v4.3.0+)* | `memory:` block in YAML | Semantic search over conversation + logbook embeddings (see §9) |
+| `search_memory` *(v4.3.0+)* | at least one store in the `memory:` block | Semantic search over conversation + logbook embeddings (see §9) |
 | Custom YAML tools | `tools:` block in YAML | User-declared tools (see §7) |
 | MCP tools | `mcp_servers:` block in YAML | Discovered automatically per server (see §8) |
 
@@ -368,60 +369,223 @@ The same `allowed_tools` filter from §7.5 applies — list MCP tools by their *
 
 ## 9. Long-term memory / RAG
 
-Persist conversation turns and (opt-in) HA logbook entries as embeddings in a local Chroma vector database. The LLM can recall them through a built-in `search_memory` tool.
+Persist conversation turns and (opt-in) HA logbook entries as embeddings in a vector store. The LLM recalls them through the built-in `search_memory` tool.
 
-> **Optional install required.** `chromadb` is NOT declared in `manifest.json` because it has native dependencies (sqlite ≥ 3.35, onnxruntime) that HA's pip step cannot always resolve. To use memory you must install it manually inside the HA Python environment:
->
-> - **HA Container / Core:** `docker exec homeassistant pip install chromadb`
-> - **HA OS / Supervised:** add a custom requirement via SSH add-on or use a [Pyscript](https://github.com/custom-components/pyscript) shell, then restart HA
-> - **venv install:** `<venv>/bin/pip install chromadb`
->
-> Without `chromadb` installed, the `memory:` block in `tools.yaml` is silently no-op'd (a single WARNING log line at startup). All other features keep working.
+**v4.5.0 reshaped this feature.** Embeddings are now a **provider capability** configured as a sub-entry — credentials never appear in `tools.yaml`. The vector store is **pluggable**, and the default backend needs nothing installed beyond what Home Assistant already ships. If you are upgrading from v4.3.x / v4.4.x, read §9.8 first: the old flat `memory:` block is rejected on purpose.
 
-### 9.1. Enable in `tools.yaml`
+Setting it up is two steps: create an embeddings sub-entry (§9.1), then declare one or more stores that reference it (§9.2).
+
+### 9.1. Step 1 — create an embeddings sub-entry
+
+**Settings > Devices & Services > SmartChain > 3-dot menu > Add sub-entry > Embeddings.**
+
+The form asks for two things:
+
+- **Name** — the sub-entry title. This is the handle `tools.yaml` refers to, so pick something stable and unique across *all* SmartChain config entries. If two sub-entries share a title, SmartChain refuses to bind either rather than guessing, and logs an error naming the clash.
+- **Model** — a dropdown of the provider's embedding models, plus a free-text field if you run a model the API doesn't advertise (a local Ollama pull, for example). The free-text value wins when both are filled.
+
+Credentials are inherited from the config entry. There is nothing else to fill in — an embeddings sub-entry has no prompt, no tools and no temperature.
+
+> **Capability caveat.** The **Embeddings** sub-entry type is only offered by providers that actually expose an embeddings API. **DeepSeek and Anthropic do not**, so the option is absent on their config entries. If those are your only providers, add a second config entry for a provider that does — a local Ollama entry costs nothing and can serve embeddings only.
+
+| Provider | Embedding models offered |
+|---|---|
+| GigaChat | `Embeddings`, `EmbeddingsGigaR` |
+| YandexGPT | `text-search-doc`, `text-search-query` |
+| OpenAI | `text-embedding-3-small`, `text-embedding-3-large` |
+| Ollama | `nomic-embed-text`, `mxbai-embed-large`, `bge-m3` |
+| DeepSeek, Anthropic | — no embeddings API |
+
+Model lists are fetched live from the provider where possible and filtered by purpose, so chat forms no longer offer embedding models and vice versa. The table above is the built-in fallback used when the provider's API is unreachable.
+
+Recommended starting point: **Ollama + `nomic-embed-text`** — local, free, privacy-friendly. Cloud providers receive the full text of everything you embed.
+
+### 9.2. Step 2 — declare stores in `tools.yaml`
+
+A **store** binds one embeddings sub-entry to one vector backend and carries its own retention and ingest settings. The smallest working configuration is two lines:
+
+```yaml
+memory:
+  stores:
+    - name: conversations
+      embeddings: "Ollama nomic"
+```
+
+That gives you the `sqlite_numpy` backend, 90-day retention, conversation ingest on and logbook ingest off.
+
+A fuller, two-store example:
+
+```yaml
+memory:
+  stores:
+    - name: conversations
+      description: "Past conversations with the household"
+      embeddings: "Ollama nomic"
+      backend:
+        type: sqlite_numpy
+      retention_days: 30
+      ingest_conversation: true
+      ingest_logbook:
+        enabled: true
+        domains: [light, climate, lock, alarm_control_panel]
+        poll_interval_minutes: 60
+
+    - name: house_events
+      description: "Long-lived history of device events"
+      embeddings: "OpenAI embeddings"
+      backend:
+        type: pgvector
+        dsn: "postgresql://smartchain:CHANGE_ME@db.example.local:5432/smartchain"
+        table: smartchain_memory
+      retention_days: 0
+      ingest_conversation: false
+      ingest_logbook:
+        enabled: true
+        domains: [binary_sensor, lock, cover]
+        poll_interval_minutes: 120
+```
+
+| Field | Required | Default | Meaning |
+|---|---|---|---|
+| `name` | yes | — | Store identifier, must match `^[a-z_][a-z0-9_]*$` and be unique in the list. Also names the SQLite file for file-based backends. |
+| `embeddings` | yes | — | Title of the embeddings sub-entry to bind (§9.1). |
+| `description` | no | `""` | Shown to the LLM in the `search_memory` schema — write it so the model can pick the right store. |
+| `backend` | no | `{type: sqlite_numpy}` | Vector backend selection, see §9.3. |
+| `retention_days` | no | `90` | Daily cleanup horizon, 0–3650. `0` disables cleanup for that store. |
+| `ingest_conversation` | no | `true` | Whether conversation turns are written to this store. |
+| `ingest_logbook` | no | disabled | `enabled` (bool), `domains` (list), `poll_interval_minutes` (5–1440, default 60). |
+
+Call `smartchain.reload_tools` after editing. Validation errors are raised there with a message naming the offending key, and the previous configuration stays live.
+
+> **`!secret` does not work in `tools.yaml`.** SmartChain reads the file without a secrets store, so a `!secret` tag fails the whole file with *"Secrets not supported in this YAML file"*. Put connection strings in the file directly and protect it with filesystem permissions.
+
+### 9.3. Vector backends
+
+Every store picks its own backend. All four implement the same contract, so you can start on the default and move a store later without changing anything else.
+
+| Backend | Extra install | When to use |
+|---|---|---|
+| `sqlite_numpy` | none | Default. Every installation. Up to ~50 000 records per store. |
+| `sqlite_vec` | `pip install sqlite-vec` | Same file layout, native KNN. Needs a Python build with extension loading. |
+| `pgvector` | `pip install asyncpg` + PostgreSQL | Large stores; natural if HA's recorder already runs on PostgreSQL. |
+| `qdrant` | a Qdrant server | Large stores without PostgreSQL. No Python dependency. |
+
+**`sqlite_numpy` (default) — no installation step at all.** Storage is stdlib `sqlite3`, similarity is a numpy cosine over the candidate rows, and both ship with Home Assistant. Long-term memory therefore works out of the box on every install.
+
+```yaml
+      backend:
+        type: sqlite_numpy
+        path: /config/smartchain/conversations.db   # optional
+```
+
+Without `path` the database lands at `<config>/.storage/smartchain_memory/<store name>.db`, so several stores coexist without colliding. Past ~50 000 records the backend logs a one-off warning suggesting `pgvector` or `qdrant`; it keeps working, just more slowly.
+
+**`sqlite_vec`** — same file layout and same `path` option, but the search runs in the `vec0` virtual table instead of numpy. It needs `pip install sqlite-vec` **and** a Python build compiled with `enable_load_extension`, which is not universally true. If either is missing the store is disabled with a log line naming `sqlite_numpy` as the drop-in replacement.
+
+**`pgvector`** — needs `pip install asyncpg` in Home Assistant's Python environment and a PostgreSQL database whose user is allowed to run `CREATE EXTENSION`: SmartChain issues `CREATE EXTENSION IF NOT EXISTS vector` at startup. If your user is not a superuser, have an administrator run that statement once against the database beforehand, and the startup call then becomes a no-op. An HNSW cosine index is created when the server supports it.
+
+```yaml
+      backend:
+        type: pgvector
+        dsn: "postgresql://smartchain:CHANGE_ME@db.example.local:5432/smartchain"
+        table: smartchain_memory
+```
+
+`table` defaults to `smartchain_memory`; give each store its own table when they share a database. Connection failures are logged in full but reported without the DSN, so credentials never reach the LLM or a service response.
+
+**`qdrant`** — no Python dependency: SmartChain speaks Qdrant's REST API over Home Assistant's shared aiohttp session. You only need a reachable Qdrant server. The collection is created on first start with cosine distance.
+
+```yaml
+      backend:
+        type: qdrant
+        url: "https://qdrant.example.local:6333"
+        api_key: "CHANGE_ME"
+        collection: smartchain_memory
+        verify_ssl: true
+```
+
+`collection` defaults to `smartchain_memory`; `api_key` is optional for an unauthenticated server; set `verify_ssl: false` for a self-signed certificate.
+
+Every backend operation is bounded by a 30 s timeout, and a backend that fails to start disables only its own store.
+
+### 9.4. Embedding dimension is pinned per store
+
+At startup SmartChain embeds a short probe string, measures the vector length and hands that width to the backend, which records it. If the store's embeddings sub-entry later points at a model of a different width, the mismatch is detected *before* anything is written:
+
+> `stored embedding dimension is 768 but the configured model produces 1536. Clear this store with smartchain.clear_memory, then call smartchain.reload_tools.`
+
+That store is disabled and the others keep running. Vectors of different widths are never mixed, so the index cannot be silently corrupted.
+
+To change a store's embedding model deliberately — there is no automatic re-embedding, so the old vectors have to go:
+
+1. `smartchain.clear_memory` with `store: <name>`.
+2. Reconfigure the embeddings sub-entry (**3-dot menu > Reconfigure** on the sub-entry) to the new model.
+3. `smartchain.reload_tools`.
+
+### 9.5. How it surfaces to the LLM
+
+Every conversation turn schedules a background task per store that has `ingest_conversation: true`. Each task embeds and stores `User: <q>\n\nAssistant: <a>` with metadata `{kind: conversation, timestamp, agent_id, subentry_id, conversation_id}`. One slow provider cannot hold up another store.
+
+The `search_memory` tool is added to the LLM's tool list whenever at least one store came up. Its schema lists the store names and their descriptions, so the model can choose:
+
+> User: *"Remind me what I said yesterday evening about the dishwasher."*
+>
+> Assistant calls `search_memory(query="dishwasher", kind="conversation", store="conversations")`, gets back the relevant past turns, and answers using them.
+
+- `store` is **required when two or more stores are configured** and optional with exactly one — with a single store there is nothing to disambiguate.
+- The tool also filters by the calling agent's `subentry_id`, so agents retrieve only their own memories (privacy guard).
+- `kind` is `conversation`, `logbook` or `any` (default); `top_k` defaults to 5 and is capped at 20.
+
+### 9.6. Logbook ingest (opt-in)
+
+Set `ingest_logbook.enabled: true` on a store and SmartChain periodically imports HA logbook entries — filtered to the configured `domains` — as `kind: logbook` memories. The LLM can then ask `search_memory(query="…", kind="logbook")`, or leave `kind` at `any` to search both.
+
+Polling is per store, so one store can follow the logbook while another stays conversation-only.
+
+> **Note:** logbook ingest depends on HA logbook internals (`logbook.humanify` / `_get_events`). On HA versions where those names are absent the poller silently imports nothing. Conversation ingest is unaffected.
+
+### 9.7. Clearing memory
+
+Use the `smartchain.clear_memory` service (§5.4). It filters by `kind` and/or `agent_id`, and takes an optional `store`:
+
+```yaml
+service: smartchain.clear_memory
+data:
+  store: conversations   # optional — omit to clear every store
+  kind: conversation     # any | conversation | logbook (default: any)
+```
+
+Omitting `store` clears every configured store. The `smartchain_memory_cleared` event carries `{"deleted": <int>, "stores": [<names>]}`.
+
+File-based stores live at `<config>/.storage/smartchain_memory/<store name>.db` unless the store set `backend.path`.
+
+### 9.8. Migrating from v4.4.x
+
+The v4.3.0 / v4.4.x block looked like this and is **no longer accepted**:
 
 ```yaml
 memory:
   enabled: true
-  provider: ollama                    # ollama | openai | gigachat | yandex
+  provider: ollama
   model: nomic-embed-text
-  base_url: http://localhost:11434    # for ollama; ignored otherwise
-  api_key: "!secret openai_embed_key" # required for openai / gigachat / yandex
-  retention_days: 90                  # 0 disables daily cleanup
-  ingest_conversation: true
-  ingest_logbook:
-    enabled: false
-    domains: [light, climate, lock, alarm_control_panel]
-    poll_interval_minutes: 60
+  api_key: "…"
 ```
 
-Recommended starting point: `provider: ollama` with `nomic-embed-text` — local, free, privacy-friendly. Cloud providers send embedded text to the provider's servers.
+Because credentials moved out of YAML, there is nothing to migrate it *to* until an embeddings sub-entry exists, so SmartChain rejects the old shape loudly instead of guessing. `smartchain.reload_tools` fails with a message naming the offending keys and the three steps:
 
-### 9.2. How it surfaces to the LLM
+1. Create an embeddings sub-entry on the provider's config entry (§9.1), giving it a name and an embedding model.
+2. Replace the `memory:` block with a `stores:` list whose `embeddings:` field holds that name (§9.2).
+3. Call `smartchain.reload_tools`.
 
-After enabling, every conversation turn fires a background task that embeds and stores `User: <q>\n\nAssistant: <a>` with metadata `{kind: conversation, timestamp, agent_id, subentry_id, conversation_id}`. The `search_memory` tool definition is added to the LLM's tool list.
+**Chroma is gone.** `chromadb` and `langchain-chroma` are removed from the manifest and from the codebase — the `pip install chromadb` step older versions of this guide described no longer applies, and is exactly the failure v4.4.1 had to work around. If `<config>/.storage/smartchain_memory/` holds a Chroma directory from an earlier version it is now orphaned and can be deleted; no data is converted. On most installations it is empty anyway, because HA's pip step could not install `chromadb`.
 
-> User: *"Remind me what I said yesterday evening about the dishwasher."*
->
-> Assistant calls `search_memory(query="dishwasher", kind="conversation")`, gets back the relevant past turns, and answers using them.
+### 9.9. Persistence and resilience
 
-The tool also filters by current `subentry_id` — agents only retrieve their own memories by default (privacy guard).
-
-### 9.3. Logbook ingest (opt-in)
-
-Set `ingest_logbook.enabled: true` and SmartChain will periodically import HA logbook entries (filtered by the configured domains) as `kind: logbook` memories. The LLM can ask `search_memory(query="…", kind="logbook")` or `kind="any"` to combine both kinds.
-
-> **Note:** Logbook ingest depends on HA logbook internals (`logbook.humanify` / `_get_events`) — on some HA versions these are absent and ingest silently no-ops. Conversation ingest is unaffected.
-
-### 9.4. Clearing memory
-
-Use the `smartchain.clear_memory` service (§5.4) to wipe stored memories. Filter by `kind` and/or `agent_id`. The full Chroma DB lives at `<config>/.storage/smartchain_memory/`.
-
-### 9.5. Persistence and resilience
-
-- Embeddings are computed via `hass.async_add_executor_job` (no event-loop blocking) with a 30 s timeout per call.
-- A failing embeddings provider doesn't crash the conversation — the failure is logged at WARNING and the turn isn't ingested.
-- Daily retention task deletes entries older than `retention_days` (timezone-normalised to UTC).
+- Embeddings are computed via `hass.async_add_executor_job` (no event-loop blocking) with a 30 s timeout per call; backend operations get their own 30 s bound.
+- A failure is contained to one store: a missing sub-entry title, a duplicated title, an unreachable backend or a dimension clash disables that store, logs the reason, and lets every other store start.
+- A failing embeddings provider does not crash the conversation — the failure is logged at WARNING and the turn is not ingested.
+- A per-store daily retention task deletes entries older than `retention_days` (timestamps normalised to UTC). `retention_days: 0` disables it.
+- `smartchain.reload_tools` rebuilds the registry atomically: the new one is built first and only swapped in on success, so a bad edit leaves the running stores untouched.
 
 ---
 
@@ -557,11 +721,21 @@ The `smartchain.ask` service couldn't find any agent. Check **Settings > Devices
 - Failures are isolated per server — other MCP servers and YAML tools keep working.
 
 ### Memory: "Memory is not configured for this installation."
-The `search_memory` tool was called but no `memory:` block is in `tools.yaml`. Either add one or stop telling the LLM to use it.
+The `search_memory` tool was called but no store came up. Either `tools.yaml` has no `memory.stores[]` entry, or every store failed to start — check the log for the per-store reason (see §9.9).
+
+### Memory: a store references an embeddings sub-entry that doesn't exist
+The log names the missing title and lists the available ones. The `embeddings:` field matches the sub-entry **title**, exactly — check for a typo or a renamed sub-entry. A title claimed by two sub-entries is refused too; rename one.
+
+### Memory: "the flat memory: block was replaced in v4.5.0"
+You are carrying a v4.3.x / v4.4.x `memory:` block with `provider` / `model` / `api_key`. Follow the three migration steps in §9.8.
+
+### Memory: dimension mismatch on startup
+The store's embeddings sub-entry now points at a model of a different width than the one already stored. Clear that store and reload — see §9.4.
 
 ### Embeddings provider unreachable
-- `ollama`: check it's running and reachable at `base_url`; pull the model (`ollama pull nomic-embed-text`).
-- Cloud providers: verify `api_key` and that the model name matches the provider's spelling.
+- The embeddings sub-entry is offered only by providers that have an embeddings API — not DeepSeek, not Anthropic (§9.1).
+- Ollama: check it's running and reachable at the config entry's base URL; pull the model (`ollama pull nomic-embed-text`).
+- Cloud providers: verify the config entry's credentials and that the model name matches the provider's spelling.
 - Failures log at WARNING; conversation continues without ingest.
 
 ### LLM error: provider exception text not visible

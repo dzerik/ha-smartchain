@@ -22,5 +22,5 @@
     "mcp>=1.0,<2",
     "yandexcloud>=0.295.0"
   ],
-  "version": "4.4.2"
+  "version": "4.5.0"
 }

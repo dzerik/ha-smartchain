@@ -10,7 +10,7 @@
 [![GitHub release](https://img.shields.io/github/v/release/dzerik/ha-smartchain)](https://github.com/dzerik/ha-smartchain/releases)
 [![Downloads](https://img.shields.io/github/downloads/dzerik/ha-smartchain/total?color=41BDF5&label=downloads)](https://github.com/dzerik/ha-smartchain/releases)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![tests](https://img.shields.io/badge/tests-289+-brightgreen)](tests/)
+[![tests](https://img.shields.io/badge/tests-411+-brightgreen)](tests/)
 [![CI](https://img.shields.io/github/actions/workflow/status/dzerik/ha-smartchain/ci.yml?label=CI&branch=main)](https://github.com/dzerik/ha-smartchain/actions/workflows/ci.yml)
 [![HACS validation](https://img.shields.io/github/actions/workflow/status/dzerik/ha-smartchain/hacs.yml?label=HACS&branch=main)](https://github.com/dzerik/ha-smartchain/actions/workflows/hacs.yml)
 [![Hassfest](https://img.shields.io/github/actions/workflow/status/dzerik/ha-smartchain/hassfest.yml?label=Hassfest&branch=main)](https://github.com/dzerik/ha-smartchain/actions/workflows/hassfest.yml)
@@ -41,7 +41,7 @@ Supported providers:
 - **Multi-agent orchestration** *(v4.4.0+)* — `ask_agents` parallel fan-out across up to 5 siblings, `critique_response` second-opinion review, `ask_agent` single delegation
 - **Custom tools from YAML** *(v4.1.0+)* — declarative LLM-callable tools with four action types (`service`, `template`, `rest`, `script`); per-subentry `allowed_tools` filter
 - **MCP client** *(v4.2.0+)* — connect to remote MCP servers (`stdio` / `sse` / `http`) — filesystem, GitHub, brave-search, etc.; per-server auto-reconnect
-- **Long-term memory / RAG** *(v4.3.0+)* — Chroma vector store; `search_memory` LLM tool; conversation + (opt-in) HA logbook ingest; pluggable embeddings (Ollama / OpenAI / GigaChat / Yandex)
+- **Long-term memory / RAG** *(v4.3.0+, reworked in v4.5.0)* — named memory stores over four pluggable vector backends (`sqlite_numpy` — the default, no extra install — plus `sqlite_vec`, `pgvector`, `qdrant`); embeddings configured as a provider sub-entry (GigaChat / YandexGPT / OpenAI / Ollama) so credentials stay out of YAML; `search_memory` LLM tool; conversation + (opt-in) HA logbook ingest
 - **State history** — `get_state_history` tool for past device states
 - **Vision** — camera image analysis via multimodal models
 - **Skill system** — loadable YAML files with additional knowledge
@@ -110,13 +110,14 @@ Full user guide with all features and running examples:
 - **English:** [docs/USAGE.md](docs/USAGE.md)
 - **Русский:** [docs/USAGE-ru.md](docs/USAGE-ru.md)
 
-Covers: providers and credentials · subentry options · all services with examples · built-in conversation tools (Assist API, history, delegate, multi-agent, search_memory) · custom tools from YAML (service / template / rest / script) · MCP client (stdio / SSE / HTTP) · long-term memory (Chroma + 4 embedding providers) · AI Task entity · sidebar panel · skills system · troubleshooting.
+Covers: providers and credentials · subentry options · all services with examples · built-in conversation tools (Assist API, history, delegate, multi-agent, search_memory) · custom tools from YAML (service / template / rest / script) · MCP client (stdio / SSE / HTTP) · long-term memory (4 vector backends + embeddings sub-entries) · AI Task entity · sidebar panel · skills system · troubleshooting.
 
 ## What's new
 
 | Version | Highlights |
 |---|---|
-| **v4.4.0** | Multi-agent orchestration — `ask_agents` parallel fan-out + `critique_response` second-opinion review |
+| **v4.5.0** | Pluggable vector backends (sqlite_numpy / sqlite_vec / pgvector / qdrant), embeddings as a provider capability, named multi-stores |
+| v4.4.0 | Multi-agent orchestration — `ask_agents` parallel fan-out + `critique_response` second-opinion review |
 | v4.3.0 | Long-term memory / RAG — Chroma vector store, `search_memory` tool, conversation + logbook ingest |
 | v4.2.0 | MCP client — connect to remote MCP servers via stdio / SSE / HTTP with auto-reconnect |
 | v4.1.0 | Custom tools from YAML — declarative LLM tools (service / template / rest / script) |

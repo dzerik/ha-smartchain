@@ -170,11 +170,12 @@ service: smartchain.reload_tools
 ```yaml
 service: smartchain.clear_memory
 data:
+  store: conversations  # необязательно (v4.5.0+) — опустите, чтобы очистить все хранилища
   kind: conversation    # any | conversation | logbook (default: any)
   agent_id: conversation.smartchain_main   # необязательно — только этот агент
 ```
 
-Стреляет `smartchain_memory_cleared` с `{"deleted": <int>}`. Бросает `HomeAssistantError` если память не сконфигурирована.
+Стреляет `smartchain_memory_cleared` с `{"deleted": <int>, "stores": [<names>]}`. Бросает `HomeAssistantError`, если память не сконфигурирована или если `store` называет несуществующее хранилище.
 
 ---
 
@@ -189,7 +190,7 @@ data:
 | `ask_agent` | ≥ 2 sub-entries | Делегировать вопрос конкретному siblings |
 | `ask_agents` *(v4.4.0+)* | `enable_multi_agent_tools: true` + ≥ 2 sub-entries | Параллельный fan-out нескольким siblings (см. §10) |
 | `critique_response` *(v4.4.0+)* | то же | Попросить siblings отревьюить черновик ответа (см. §10) |
-| `search_memory` *(v4.3.0+)* | блок `memory:` в YAML | Семантический поиск по embeddings диалогов + logbook (см. §9) |
+| `search_memory` *(v4.3.0+)* | поднялось хотя бы одно хранилище блока `memory:` | Семантический поиск по эмбеддингам диалогов + logbook (см. §9) |
 | Свои YAML tools | блок `tools:` в YAML | Декларативные tools пользователя (см. §7) |
 | MCP tools | блок `mcp_servers:` в YAML | Автоматически обнаруживаются на каждом сервере (см. §8) |
 
@@ -368,60 +369,223 @@ mcp_servers:
 
 ## 9. Долговременная память / RAG
 
-Сохранять диалоги и (опционально) HA logbook как embeddings в локальной Chroma векторной БД. LLM может вспоминать их через встроенный tool `search_memory`.
+Сохраняет ходы диалога и (опционально) записи HA logbook как эмбеддинги в векторном хранилище. LLM вспоминает их через встроенный tool `search_memory`.
 
-> **Требуется опциональная установка.** `chromadb` НЕ объявлен в `manifest.json` — у него нативные зависимости (sqlite ≥ 3.35, onnxruntime), которые pip-шаг HA не всегда может разрешить. Для memory нужно вручную установить в Python-окружение HA:
->
-> - **HA Container / Core:** `docker exec homeassistant pip install chromadb`
-> - **HA OS / Supervised:** добавить custom requirement через SSH add-on или [Pyscript](https://github.com/custom-components/pyscript), затем restart HA
-> - **venv install:** `<venv>/bin/pip install chromadb`
->
-> Без установленного `chromadb` блок `memory:` в `tools.yaml` тихо no-op'ится (одна строка WARNING в логе при старте). Все остальные фичи работают.
+**В v4.5.0 эта подсистема переработана.** Эмбеддинги теперь — **возможность провайдера**, настраиваемая как sub-entry: креды больше не появляются в `tools.yaml` вообще. Векторное хранилище стало **подключаемым**, и бэкенд по умолчанию не требует установки ничего сверх того, что уже входит в Home Assistant. Если вы обновляетесь с v4.3.x / v4.4.x, сначала прочитайте §9.8: старый плоский блок `memory:` намеренно отвергается.
 
-### 9.1. Включение в `tools.yaml`
+Настройка состоит из двух шагов: создать sub-entry эмбеддингов (§9.1), затем объявить одно или несколько хранилищ, которые на него ссылаются (§9.2).
+
+### 9.1. Шаг 1 — создать sub-entry эмбеддингов
+
+**Настройки > Устройства и службы > SmartChain > меню из трёх точек > Добавить sub-entry > Embeddings.**
+
+Форма спрашивает всего две вещи:
+
+- **Имя** — заголовок sub-entry. Именно на него ссылается `tools.yaml`, поэтому выберите что-то устойчивое и уникальное среди *всех* config entries SmartChain. Если два sub-entry носят одинаковый заголовок, SmartChain откажется привязывать любой из них вместо того, чтобы гадать, и запишет ошибку в лог с указанием конфликта.
+- **Модель** — выпадающий список моделей эмбеддингов провайдера плюс поле свободного ввода, если у вас крутится модель, которую API не анонсирует (например, локально скачанная в Ollama). При заполнении обоих полей побеждает свободный ввод.
+
+Креды наследуются от config entry. Больше заполнять нечего — у sub-entry эмбеддингов нет ни промпта, ни tools, ни температуры.
+
+> **Оговорка о возможностях.** Тип sub-entry **Embeddings** предлагается только у провайдеров, которые действительно предоставляют API эмбеддингов. **DeepSeek и Anthropic — нет**, поэтому у их config entries этого пункта не будет. Если это ваши единственные провайдеры, добавьте второй config entry для провайдера, у которого API есть: локальный Ollama ничего не стоит и может обслуживать только эмбеддинги.
+
+| Провайдер | Модели эмбеддингов |
+|---|---|
+| GigaChat | `Embeddings`, `EmbeddingsGigaR` |
+| YandexGPT | `text-search-doc`, `text-search-query` |
+| OpenAI | `text-embedding-3-small`, `text-embedding-3-large` |
+| Ollama | `nomic-embed-text`, `mxbai-embed-large`, `bge-m3` |
+| DeepSeek, Anthropic | — нет API эмбеддингов |
+
+Списки моделей по возможности запрашиваются у провайдера вживую и фильтруются по назначению, поэтому формы чата больше не предлагают модели эмбеддингов и наоборот. Таблица выше — встроенный запасной вариант на случай, когда API провайдера недоступен.
+
+Рекомендуемая стартовая точка: **Ollama + `nomic-embed-text`** — локально, бесплатно, privacy-friendly. Облачные провайдеры получают полный текст всего, что вы эмбеддите.
+
+### 9.2. Шаг 2 — объявить хранилища в `tools.yaml`
+
+**Хранилище** связывает один sub-entry эмбеддингов с одним векторным бэкендом и несёт собственные настройки хранения и ингеста. Минимальная рабочая конфигурация — две строки:
+
+```yaml
+memory:
+  stores:
+    - name: conversations
+      embeddings: "Ollama nomic"
+```
+
+Это даёт бэкенд `sqlite_numpy`, хранение 90 дней, ингест диалогов включён, ингест logbook выключен.
+
+Более полный пример с двумя хранилищами:
+
+```yaml
+memory:
+  stores:
+    - name: conversations
+      description: "Past conversations with the household"
+      embeddings: "Ollama nomic"
+      backend:
+        type: sqlite_numpy
+      retention_days: 30
+      ingest_conversation: true
+      ingest_logbook:
+        enabled: true
+        domains: [light, climate, lock, alarm_control_panel]
+        poll_interval_minutes: 60
+
+    - name: house_events
+      description: "Long-lived history of device events"
+      embeddings: "OpenAI embeddings"
+      backend:
+        type: pgvector
+        dsn: "postgresql://smartchain:CHANGE_ME@db.example.local:5432/smartchain"
+        table: smartchain_memory
+      retention_days: 0
+      ingest_conversation: false
+      ingest_logbook:
+        enabled: true
+        domains: [binary_sensor, lock, cover]
+        poll_interval_minutes: 120
+```
+
+| Поле | Обязательно | По умолчанию | Смысл |
+|---|---|---|---|
+| `name` | да | — | Идентификатор хранилища, должен соответствовать `^[a-z_][a-z0-9_]*$` и быть уникальным в списке. Он же даёт имя файлу SQLite у файловых бэкендов. |
+| `embeddings` | да | — | Заголовок sub-entry эмбеддингов, к которому привязываемся (§9.1). |
+| `description` | нет | `""` | Показывается LLM в схеме `search_memory` — пишите так, чтобы модель могла выбрать нужное хранилище. |
+| `backend` | нет | `{type: sqlite_numpy}` | Выбор векторного бэкенда, см. §9.3. |
+| `retention_days` | нет | `90` | Горизонт ежедневной чистки, 0–3650. `0` отключает чистку для этого хранилища. |
+| `ingest_conversation` | нет | `true` | Писать ли ходы диалога в это хранилище. |
+| `ingest_logbook` | нет | выключен | `enabled` (bool), `domains` (список), `poll_interval_minutes` (5–1440, по умолчанию 60). |
+
+После правки вызовите `smartchain.reload_tools`. Ошибки валидации поднимаются оттуда с сообщением, называющим проблемный ключ, а предыдущая конфигурация продолжает работать.
+
+> **`!secret` в `tools.yaml` не работает.** SmartChain читает файл без хранилища секретов, поэтому тег `!secret` роняет весь файл с ошибкой *«Secrets not supported in this YAML file»*. Указывайте строки подключения прямо в файле и защищайте его правами доступа файловой системы.
+
+### 9.3. Векторные бэкенды
+
+Каждое хранилище выбирает бэкенд самостоятельно. Все четыре реализуют один и тот же контракт, поэтому можно начать с бэкенда по умолчанию и позже перевести хранилище на другой, ничего больше не меняя.
+
+| Бэкенд | Доп. установка | Когда использовать |
+|---|---|---|
+| `sqlite_numpy` | ничего | По умолчанию. Любая инсталляция. До ~50 000 записей на хранилище. |
+| `sqlite_vec` | `pip install sqlite-vec` | Та же раскладка файлов, нативный KNN. Нужна сборка Python с загрузкой расширений. |
+| `pgvector` | `pip install asyncpg` + PostgreSQL | Большие хранилища; естественный выбор, если recorder HA уже работает на PostgreSQL. |
+| `qdrant` | сервер Qdrant | Большие хранилища без PostgreSQL. Без Python-зависимостей. |
+
+**`sqlite_numpy` (по умолчанию) — вообще без шага установки.** Хранение — на стандартном `sqlite3`, близость — косинус на numpy по отобранным строкам, и то и другое поставляется вместе с Home Assistant. Поэтому долговременная память работает «из коробки» на любой инсталляции.
+
+```yaml
+      backend:
+        type: sqlite_numpy
+        path: /config/smartchain/conversations.db   # optional
+```
+
+Без `path` база кладётся в `<config>/.storage/smartchain_memory/<имя хранилища>.db`, так что несколько хранилищ сосуществуют без коллизий. После ~50 000 записей бэкенд один раз пишет в лог предупреждение с советом перейти на `pgvector` или `qdrant`; работать он продолжает, просто медленнее.
+
+**`sqlite_vec`** — та же раскладка файлов и та же опция `path`, но поиск идёт в виртуальной таблице `vec0`, а не в numpy. Нужен `pip install sqlite-vec` **и** сборка Python с `enable_load_extension`, что верно не везде. Если чего-то из этого нет, хранилище отключается с записью в лог, называющей `sqlite_numpy` как замену без изменений.
+
+**`pgvector`** — нужен `pip install asyncpg` в Python-окружении Home Assistant и база PostgreSQL, пользователю которой разрешено выполнять `CREATE EXTENSION`: при старте SmartChain выполняет `CREATE EXTENSION IF NOT EXISTS vector`. Если ваш пользователь не суперпользователь, попросите администратора выполнить этот оператор один раз для базы заранее — тогда вызов при старте станет пустой операцией. Индекс HNSW по косинусу создаётся, если сервер это поддерживает.
+
+```yaml
+      backend:
+        type: pgvector
+        dsn: "postgresql://smartchain:CHANGE_ME@db.example.local:5432/smartchain"
+        table: smartchain_memory
+```
+
+`table` по умолчанию `smartchain_memory`; давайте каждому хранилищу свою таблицу, если они делят одну базу. Ошибки подключения логируются полностью, но наружу отдаются без DSN, поэтому креды не попадают ни к LLM, ни в ответ сервиса.
+
+**`qdrant`** — без Python-зависимостей: SmartChain говорит с REST API Qdrant через общую сессию aiohttp Home Assistant. Нужен только доступный сервер Qdrant. Коллекция создаётся при первом старте с косинусной метрикой.
+
+```yaml
+      backend:
+        type: qdrant
+        url: "https://qdrant.example.local:6333"
+        api_key: "CHANGE_ME"
+        collection: smartchain_memory
+        verify_ssl: true
+```
+
+`collection` по умолчанию `smartchain_memory`; `api_key` не обязателен для сервера без аутентификации; для самоподписанного сертификата поставьте `verify_ssl: false`.
+
+Любая операция бэкенда ограничена таймаутом 30 с, а бэкенд, который не смог подняться, отключает только своё хранилище.
+
+### 9.4. Размерность эмбеддингов закрепляется за хранилищем
+
+При старте SmartChain эмбеддит короткую пробную строку, измеряет длину вектора и передаёт эту ширину бэкенду, а тот её запоминает. Если позже sub-entry эмбеддингов этого хранилища начнёт указывать на модель другой ширины, расхождение обнаруживается *до* того, как что-либо будет записано:
+
+> `stored embedding dimension is 768 but the configured model produces 1536. Clear this store with smartchain.clear_memory, then call smartchain.reload_tools.`
+
+Это хранилище отключается, остальные продолжают работать. Векторы разной ширины никогда не смешиваются, поэтому индекс не может тихо испортиться.
+
+Чтобы осознанно сменить модель эмбеддингов у хранилища — автоматического переэмбеддинга нет, поэтому старые векторы придётся удалить:
+
+1. `smartchain.clear_memory` с `store: <имя>`.
+2. Переконфигурируйте sub-entry эмбеддингов (**меню из трёх точек > Переконфигурировать** на sub-entry) на новую модель.
+3. `smartchain.reload_tools`.
+
+### 9.5. Как это видит LLM
+
+Каждый ход диалога планирует фоновую задачу для каждого хранилища с `ingest_conversation: true`. Задача эмбеддит и сохраняет `User: <q>\n\nAssistant: <a>` с метаданными `{kind: conversation, timestamp, agent_id, subentry_id, conversation_id}`. Один медленный провайдер не может задержать другое хранилище.
+
+Tool `search_memory` добавляется в список tools LLM, если поднялось хотя бы одно хранилище. Его схема перечисляет имена хранилищ и их описания, чтобы модель могла выбрать:
+
+> Пользователь: *«Напомни, что я говорил вчера вечером про посудомойку.»*
+>
+> Ассистент вызывает `search_memory(query="посудомойка", kind="conversation", store="conversations")`, получает релевантные прошлые ходы и отвечает на их основе.
+
+- `store` **обязателен, когда настроено два или больше хранилищ**, и не обязателен ровно при одном — при единственном хранилище нечего уточнять.
+- Tool также фильтрует по `subentry_id` вызывающего агента, поэтому агенты достают только свои воспоминания (гарантия приватности).
+- `kind` — `conversation`, `logbook` или `any` (по умолчанию); `top_k` по умолчанию 5 и ограничен сверху значением 20.
+
+### 9.6. Ингест logbook (opt-in)
+
+Поставьте у хранилища `ingest_logbook.enabled: true` — и SmartChain будет периодически импортировать записи HA logbook, отфильтрованные по указанным `domains`, как воспоминания `kind: logbook`. После этого LLM может запросить `search_memory(query="…", kind="logbook")` или оставить `kind` равным `any`, чтобы искать по обоим видам.
+
+Опрос выполняется отдельно для каждого хранилища, поэтому одно может следить за logbook, пока другое остаётся чисто диалоговым.
+
+> **Заметка:** ингест logbook зависит от внутренностей HA logbook (`logbook.humanify` / `_get_events`). На версиях HA, где этих имён нет, поллер молча ничего не импортирует. Ингест диалогов от этого не страдает.
+
+### 9.7. Чистка памяти
+
+Используйте сервис `smartchain.clear_memory` (§5.4). Он фильтрует по `kind` и/или `agent_id` и принимает необязательный `store`:
+
+```yaml
+service: smartchain.clear_memory
+data:
+  store: conversations   # optional — omit to clear every store
+  kind: conversation     # any | conversation | logbook (default: any)
+```
+
+Если `store` опущен, чистятся все настроенные хранилища. Событие `smartchain_memory_cleared` несёт `{"deleted": <int>, "stores": [<names>]}`.
+
+Файловые хранилища живут в `<config>/.storage/smartchain_memory/<имя хранилища>.db`, если хранилище не задало `backend.path`.
+
+### 9.8. Миграция с v4.4.x
+
+Блок из v4.3.0 / v4.4.x выглядел так и **больше не принимается**:
 
 ```yaml
 memory:
   enabled: true
-  provider: ollama                    # ollama | openai | gigachat | yandex
+  provider: ollama
   model: nomic-embed-text
-  base_url: http://localhost:11434    # для ollama; для облака игнорируется
-  api_key: "!secret openai_embed_key" # обязателен для openai / gigachat / yandex
-  retention_days: 90                  # 0 отключает ежедневную чистку
-  ingest_conversation: true
-  ingest_logbook:
-    enabled: false
-    domains: [light, climate, lock, alarm_control_panel]
-    poll_interval_minutes: 60
+  api_key: "…"
 ```
 
-Рекомендуемая стартовая точка: `provider: ollama` с `nomic-embed-text` — локально, бесплатно, privacy-friendly. Облачные провайдеры отправляют embedded-текст на их серверы.
+Поскольку креды уехали из YAML, мигрировать его *куда-то* невозможно, пока не существует sub-entry эмбеддингов, — поэтому SmartChain громко отвергает старую форму вместо того, чтобы гадать. `smartchain.reload_tools` падает с сообщением, называющим проблемные ключи и три шага:
 
-### 9.2. Как это видит LLM
+1. Создайте sub-entry эмбеддингов на config entry провайдера (§9.1), задав имя и модель эмбеддингов.
+2. Замените блок `memory:` списком `stores:`, в поле `embeddings:` которого стоит это имя (§9.2).
+3. Вызовите `smartchain.reload_tools`.
 
-После включения каждый ход диалога планирует background task, который embedд'ит и сохраняет `User: <q>\n\nAssistant: <a>` с метаданными `{kind: conversation, timestamp, agent_id, subentry_id, conversation_id}`. Tool `search_memory` добавляется в список tools LLM.
+**Chroma удалён.** `chromadb` и `langchain-chroma` убраны из манифеста и из кода — шаг `pip install chromadb`, который описывали прежние версии этого руководства, больше не нужен, и именно эту проблему приходилось обходить в v4.4.1. Если в `<config>/.storage/smartchain_memory/` осталась директория Chroma от прежней версии, она теперь бесхозная и её можно удалить; данные не конвертируются. На большинстве инсталляций она всё равно пуста, потому что pip-шаг HA не мог установить `chromadb`.
 
-> Пользователь: *«Напомни, что я говорил вчера вечером про посудомойку.»*
->
-> Ассистент вызывает `search_memory(query="посудомойка", kind="conversation")`, получает релевантные прошлые ходы и отвечает на их основе.
+### 9.9. Персистентность и устойчивость
 
-Tool также фильтрует по текущему `subentry_id` — агенты по умолчанию видят только свои memories (privacy-гарантия).
-
-### 9.3. Ингест logbook (opt-in)
-
-Установите `ingest_logbook.enabled: true` — SmartChain будет периодически импортировать записи HA logbook (с фильтром по доменам) как memories `kind: logbook`. LLM может запрашивать `search_memory(query="…", kind="logbook")` или `kind="any"` для объединения.
-
-> **Заметка:** Ингест logbook зависит от внутренностей HA logbook (`logbook.humanify` / `_get_events`) — на некоторых версиях HA этих имён нет и ингест тихо no-op'ит. Ингест диалогов работает независимо.
-
-### 9.4. Чистка памяти
-
-Используйте сервис `smartchain.clear_memory` (§5.4) для удаления memories. Фильтр по `kind` и/или `agent_id`. Полная Chroma БД живёт в `<config>/.storage/smartchain_memory/`.
-
-### 9.5. Персистентность и устойчивость
-
-- Embeddings считаются через `hass.async_add_executor_job` (не блокирует event-loop) с timeout 30 с per call.
-- Падающий embeddings-провайдер не крашит диалог — лог WARNING, ход не ингестится.
-- Daily retention task удаляет записи старше `retention_days` (timezone-normalised в UTC).
+- Эмбеддинги считаются через `hass.async_add_executor_job` (не блокирует event-loop) с таймаутом 30 с на вызов; операции бэкенда ограничены собственными 30 с.
+- Сбой изолирован одним хранилищем: отсутствующий заголовок sub-entry, дублирующийся заголовок, недоступный бэкенд или расхождение размерности отключают это хранилище, записывают причину в лог и дают подняться всем остальным.
+- Падающий провайдер эмбеддингов не роняет диалог — сбой пишется в лог на уровне WARNING, а ход не ингестится.
+- Ежедневная задача чистки на каждое хранилище удаляет записи старше `retention_days` (метки времени нормализуются в UTC). `retention_days: 0` её отключает.
+- `smartchain.reload_tools` перестраивает реестр атомарно: новый собирается первым и подменяет старый только при успехе, поэтому неудачная правка не трогает работающие хранилища.
 
 ---
 
@@ -557,12 +721,22 @@ Skills добавляются к системному промпту LLM при 
 - Фейлы изолированы per server — остальные MCP-серверы и YAML-tools продолжают работать.
 
 ### Memory: "Memory is not configured for this installation."
-Tool `search_memory` был вызван, но блока `memory:` нет в `tools.yaml`. Либо добавьте его, либо перестаньте просить LLM использовать tool.
+Tool `search_memory` был вызван, но ни одно хранилище не поднялось. Либо в `tools.yaml` нет ни одной записи `memory.stores[]`, либо все хранилища упали при старте — ищите в логе причину по каждому (см. §9.9).
 
-### Embeddings-провайдер недоступен
-- `ollama`: убедитесь что он запущен и достижим по `base_url`; скачайте модель (`ollama pull nomic-embed-text`).
-- Облачные провайдеры: проверьте `api_key` и что имя модели совпадает с написанием провайдера.
-- Фейлы логируются WARNING; диалог продолжается без ингеста.
+### Memory: хранилище ссылается на несуществующий sub-entry эмбеддингов
+В логе указан отсутствующий заголовок и перечислены доступные. Поле `embeddings:` совпадает с **заголовком** sub-entry в точности — проверьте опечатку или переименование. Заголовок, занятый двумя sub-entry, тоже отвергается; переименуйте один из них.
+
+### Memory: «the flat memory: block was replaced in v4.5.0»
+У вас остался блок `memory:` из v4.3.x / v4.4.x с `provider` / `model` / `api_key`. Выполните три шага миграции из §9.8.
+
+### Memory: расхождение размерности при старте
+Sub-entry эмбеддингов этого хранилища теперь указывает на модель другой ширины, чем уже сохранённая. Очистите это хранилище и перезагрузите конфигурацию — см. §9.4.
+
+### Провайдер эмбеддингов недоступен
+- Sub-entry эмбеддингов предлагают только провайдеры с API эмбеддингов — не DeepSeek и не Anthropic (§9.1).
+- Ollama: убедитесь, что он запущен и достижим по базовому URL из config entry; скачайте модель (`ollama pull nomic-embed-text`).
+- Облачные провайдеры: проверьте креды config entry и что имя модели совпадает с написанием провайдера.
+- Сбои логируются на уровне WARNING; диалог продолжается без ингеста.
 
 ### LLM ошибка: текст provider exception не виден
 Так задумано. v4.0.2 добавила security-границу — ошибки провайдера (которые могут содержать API-ключи) логируются как ERROR через `LOGGER.exception`, но пользовательский ответ сервиса — дженерик `"LLM request failed; see Home Assistant logs for details."` Реальная ошибка — в логе HA.
