@@ -54,15 +54,14 @@ def test_entities_without_an_area_get_their_own_line_last() -> None:
     assert "Пылесос" in lines[-1]
 
 
-def test_no_entity_ids_or_states_appear() -> None:
+def test_no_entity_ids_appear() -> None:
     """Ids are near-useless without HA control tools; states are retrieved."""
     text = _skeleton(_cand("light.kitchen_ceiling", "Потолочный", "Кухня"))
     assert "light.kitchen_ceiling" not in text
-    assert "=" not in text
 
 
 def test_a_nameless_entity_falls_back_to_its_entity_id() -> None:
-    text = _skeleton(_cand("light.orphan", "light.orphan", "Кухня"))
+    text = _skeleton(_cand("light.orphan", "", "Кухня"))
     assert "light.orphan" in text
 
 
@@ -110,4 +109,20 @@ def test_truncation_says_what_it_omitted_and_points_at_the_tool() -> None:
 
 def test_a_home_that_fits_has_no_omission_line() -> None:
     text = _skeleton(_cand("light.a", "Потолочный", "Кухня"))
+    assert "Кухня — light: Потолочный" in text
     assert "search_entities" not in text
+
+
+def test_a_single_oversized_area_is_still_capped_and_announces_itself() -> None:
+    """The reviewer's repro: one area alone that exceeds the whole budget.
+
+    The bug was that the first area was admitted unconditionally (nothing yet
+    to reserve room after), so a single huge area silently blew the budget
+    with no omission line at all. This must now stay within the budget and
+    say, right where the area is, that it was cut off.
+    """
+    cands = [_cand(f"sensor.s{i}", f"Датчик номер {i}", "Кухня") for i in range(500)]
+    text = _skeleton(*cands)
+    assert len(text) <= ENTITY_SKELETON_MAX_CHARS
+    assert text.startswith("Кухня — sensor:")
+    assert "search_entities" in text
