@@ -47,3 +47,26 @@ class MemoryConfig:
     ingest_conversation: bool = True
     logbook: LogbookConfig = field(default_factory=LogbookConfig)
     backend: BackendConfig = field(default_factory=BackendConfig)
+
+
+@dataclass(frozen=True)
+class StoreConfig:
+    """One named memory store: an embeddings binding plus a vector backend."""
+
+    name: str
+    embeddings: str = ""
+    description: str = ""
+    backend: BackendConfig = field(default_factory=BackendConfig)
+    retention_days: int = 90
+    ingest_conversation: bool = True
+    logbook: LogbookConfig = field(default_factory=LogbookConfig)
+
+
+@dataclass(frozen=True)
+class MemorySettings:
+    """The parsed `memory:` block — a list of named stores."""
+
+    stores: list[StoreConfig] = field(default_factory=list)
+
+    def names(self) -> list[str]:
+        return [s.name for s in self.stores]
