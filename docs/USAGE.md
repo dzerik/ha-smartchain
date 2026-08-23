@@ -80,6 +80,9 @@ These options live on **each sub-entry**:
 | `process_builtin_sentences` | true | Try HA's built-in intent parser first; fall back to LLM if no intent matched |
 | `chat_history` | true | Send multi-turn history (vs. just current message) |
 | `enable_history_tool` | false | Expose `get_state_history` LLM tool |
+| `dynamic_entity_context` *(v5.0.0+)* | **true** | Send a compact map of the home plus the entities the message is about, instead of every entity — see §9.11 |
+| `dynamic_context_preset` *(v5.0.0+)* | `optimal` | Which entities that map covers — see §9.11 |
+| `dynamic_context_on_assist` *(v5.0.0+)* | false | Also add the matched entities when the Assist API is on — see §9.11 |
 | `allowed_tools` *(v4.1.0+)* | all | Restrict which custom YAML / MCP tools this agent sees |
 | `enable_multi_agent_tools` *(v4.4.0+)* | false | Expose `ask_agents` + `critique_response` tools (only when ≥2 sub-entries exist) |
 | `verify_ssl` (GigaChat only) | false | TLS verify toggle for self-signed Sber certs |
@@ -818,6 +821,121 @@ To keep it tight, do one or both of these:
 - Use **`preset: minimal` plus `include:`**, naming only the entities you actually want findable. `exclude:` drops specific entities or whole domains from any preset and always wins, so it works as a redaction list on top of a wider preset too.
 
 Nothing else about an entity is sent: **states are never embedded**, in any mode, and no credential ever enters a catalogue entry, an index log line, a tool result or the `smartchain_entities_reindexed` payload. Entity ids and area names do appear in log lines — they are not credentials.
+
+### 9.11. Dynamic entity context *(v5.0.0+)* — the prompt stops carrying the whole home
+
+**This one is on by default**, so an existing agent changes behaviour the moment you upgrade.
+
+Until v5.0.0 the system prompt rendered every area, every device and every entity with its current state, on every single turn. In a home with a thousand entities that is most of the prompt, paid for on every message, and it buries the two or three entities the user actually asked about.
+
+Now the prompt carries two much smaller blocks instead:
+
+- a **skeleton** — one line per area, entity names grouped by domain, no ids and no states. It is always complete for the configured scope, so the model can always see the shape of the home.
+- a **retrieved block** — only the entities this particular message is about, with their entity ids, areas and live states.
+
+The split is the whole idea. Retrieval on its own answers *"what state is X in"* well and *"what exists"* badly: *"включи свет"* matches a dozen lamps, *"выключи всё"* matches nothing in particular, and an entity the user happened to describe with unlucky words does not surface at all — whereupon the model, seeing no such entity in its context, answers that the device does not exist. Keeping the skeleton always present and always complete is what makes that failure impossible.
+
+**One checkbox restores the old behaviour.** Turn `dynamic_entity_context` off on the sub-entry and the agent renders the full device dump again, byte for byte, through the same cache it always used. Nothing else about the turn changes.
+
+| Option | Default | Effect |
+|---|---|---|
+| `dynamic_entity_context` | **`true`** | Send the skeleton plus the retrieved block instead of the full device dump |
+| `dynamic_context_preset` | `optimal` | Which entities the skeleton covers — one of `minimal` / `optimal` / `maximal` / `paranoid` |
+| `dynamic_context_on_assist` | `false` | Also add the retrieved block when `llm_hass_api` is set |
+
+How many entities the retrieval may add is **not** an option: it is the constant `ENTITY_CONTEXT_MAX_ENTITIES`, currently 12. Every extra option is a support surface, and if 12 turns out to be wrong it should change in one place for everybody.
+
+#### What the skeleton looks like
+
+```
+Кухня — light: Потолочный, Подсветка; sensor: Влажность, Температура; switch: Кофеварка, Чайник
+Спальня — climate: Кондиционер; light: Люстра, Бра
+No area — binary_sensor: Входная дверь; vacuum: Пылесос
+```
+
+One line per area; inside it, the entity names grouped by domain.
+
+- **Domain labels are the Home Assistant domain itself** — `light`, `switch`, `sensor` — left in English, exactly as the entity index's catalogue entries already are.
+- **Names are friendly names**, resolved `name → original_name → entity_id`, the same way the entity index resolves them.
+- **Areas come alphabetically and the unassigned entities come last**, under a `No area` line, rather than being dropped. An entity nobody put in a room is exactly the kind a user forgets exists.
+- Within an area the domains are alphabetical and the names follow `entity_id` order, so an unchanged home renders an identical map every turn.
+- **No entity ids, no device classes, no states, no device grouping.**
+
+That last point surprises people, so it is worth saying why. **Without the Assist API the model has no Home Assistant control tools at all.** The conversation entity builds its tool list from `chat_log.llm_api.tools`, and Home Assistant fills that in only when `llm_hass_api` is configured. On the path this feature targets the device context is therefore purely informational — the model answers questions about the home rather than acting on it, except through whatever custom YAML or MCP tools you defined, which take their own arguments. An `entity_id` in the skeleton would buy the model nothing. Ids live in the retrieved block, where there are at most twelve of them and where the Assist opt-in below makes them actionable.
+
+Per entity the skeleton costs roughly 12–20 characters against 60–90 in the dump it replaces. Note that the two are built from different candidate sets: the old dump only ever listed entities that belong to a *device* that sits in an *area*, so it silently skipped helpers, template entities and anything unassigned, while the skeleton uses the same candidate resolution the entity index does. Under `optimal` that is a much shorter prompt over a wider map; under `maximal` or `paranoid` the skeleton can name things the old prompt never did.
+
+#### The skeleton is bounded, and says so when it truncates
+
+A skeleton longer than `ENTITY_SKELETON_MAX_CHARS` — 6 000 characters, roughly 300–500 entities — would stop being a map and start being the dump it replaced. So areas are emitted until the budget is spent, and whatever did not fit is replaced by a final line naming what went missing:
+
+```
+… and 27 more area(s) holding 540 entities — use search_entities to look any of them up.
+```
+
+An area so large that it could not fit whole even on a fresh budget is rendered as far as it goes and carries its own note, in the same voice:
+
+```
+… 118 more entities in Гараж — use search_entities to look them up.
+```
+
+**Nothing is ever silently truncated.** A model that quietly lost half the home would be confidently wrong about it; a model that is told what it cannot see can go and look it up.
+
+The rendered skeleton is cached per preset and shared by every agent. `entity_registry_updated`, `device_registry_updated` and `area_registry_updated` invalidate it — the same three events the entity indexer listens to — with a 300-second TTL as a backstop for a change that somehow raises none of them. It does not depend on states, so a light turning on does not rebuild it.
+
+#### Scope — `dynamic_context_preset`
+
+The skeleton covers whatever `dynamic_context_preset` selects, and the four presets are exactly the ones the entity index uses: `minimal`, `optimal` (the default), `maximal` and `paranoid`, with the same monotonic membership. See the preset table in §9.10 for what each one selects.
+
+**It is a separate setting from any entity store's `source.preset`, deliberately.** Someone running both sets both. Coupling them would make the prompt's scope change whenever somebody edited an unrelated index, which is a worse surprise than a second setting.
+
+One difference from §9.10 worth holding in mind: this preset decides what reaches the **chat** provider, in the prompt, on every turn — not what reaches the embeddings provider. `paranoid` here means the names of the hidden and disabled entities go to your LLM on every message.
+
+#### No entity index is required
+
+This is the part most easily missed. **Dynamic entity context needs no memory store, no embeddings sub-entry and no vector backend.** The skeleton is built from the entity, device and area registries, and retrieval's lexical pass reads those same registries directly — case- and accent-folded matching against the friendly name, the aliases, the area and the `entity_id`. With nothing configured beyond the integration itself, the feature is fully operational.
+
+A configured entity index (§9.10) adds a second pass on top: a vector search over the store, merged with the lexical hits by the same ranking `search_entities` uses — exact lexical first, then prefix, then vector by score, deduplicated by `entity_id`. That is what finds an entity whose name shares no word with the query. The vector pass runs only when there is **exactly one** entity index; with two or more there is no non-arbitrary choice and no user to ask, so retrieval stays lexical rather than silently preferring one index over another.
+
+#### The retrieved block
+
+```
+Mentioned in this request:
+- light.kitchen_ceiling — Потолочный [Кухня] = on
+- switch.kitchen_socket_3 — Кофеварка [Кухня] = off
+```
+
+States are read live from `hass.states` at render time, never from a store's stored metadata — the same rule `search_entities` follows. An entity with no state reads `unavailable`; an entity with no area shows `—`. An empty result renders nothing at all, not an empty heading.
+
+An entity can appear twice on a turn: by name in the skeleton and in full in the retrieved block. That repetition is deliberate and cheap. The two blocks answer different questions, and suppressing the skeleton entry would make the map of the home change shape depending on what was asked — the exact instability the skeleton exists to prevent.
+
+#### `search_entities` still covers the rest
+
+Automatic retrieval sees one message and can miss. `search_entities` (§9.10) stays available to the model for precisely those cases, and the skeleton's truncation lines point at it by name. It does need an entity index to exist — the tool is registered only when at least one store has a `source:` block — whereas the automatic retrieval described here does not.
+
+#### The Assist path — opt-in, and the retrieved block only
+
+When `llm_hass_api` is set, Home Assistant injects its own list of exposed entities and its own control tools. That list is Home Assistant's and we have no way to shrink it, so **by default this feature does nothing at all on the Assist path**: no skeleton, no retrieved block, no change of any kind.
+
+Turn `dynamic_context_on_assist` on and exactly one thing is added: the **retrieved block**, appended to `extra_system_prompt` after whatever it already held, which is preserved untouched. Never the skeleton — that would duplicate Home Assistant's list at full price.
+
+What it buys is the semantic hits a name-based exposure list does not surface, in a form the model can act on, since the block carries entity ids and the Assist tools take them. What it costs is tokens on every turn, on top of a prompt that already carries HA's own list. Hence: off by default.
+
+#### What it does not do
+
+**Retrieval runs on the latest message alone.** Not on the conversation history. A follow-up like *"а выключи его"* therefore retrieves on a pronoun, and the retrieved block for that turn comes back empty or beside the point.
+
+That is deliberate rather than unfinished: folding older turns into the query retrieves the *previous* subject, which is at least as often wrong as right. It degrades gracefully precisely because the skeleton is always there — the model still sees the whole home by name, still has the earlier turns in its own chat history, and still has `search_entities` when an index is configured. That is the honest boundary of the feature.
+
+#### If something fails
+
+Layered, so a turn is never lost:
+
+- **Retrieval fails** → the skeleton alone is used and the failure is logged.
+- **The skeleton fails** → the full device dump is used and the failure is logged. A failure is never cached, so a transient registry error cannot blind the agent for the whole TTL.
+- Neither can raise into the message handler.
+
+An empty home is not a failure and does not trigger the fallback: it renders an empty context, and the prompt is your system prompt alone.
 
 ---
 
