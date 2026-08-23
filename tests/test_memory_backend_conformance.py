@@ -154,6 +154,50 @@ async def test_operations_are_noops_after_close(backend) -> None:
     assert await backend.delete_where(None) == 0
 
 
+async def test_list_metadata_returns_every_stored_doc(backend) -> None:
+    await backend.initialize(3)
+    await backend.upsert(
+        [
+            VectorRecord(doc_id="a", vector=[1.0, 0.0, 0.0], text="a", metadata={"kind": "x"}),
+            VectorRecord(doc_id="b", vector=[0.0, 1.0, 0.0], text="b", metadata={"kind": "y"}),
+        ]
+    )
+    everything = await backend.list_metadata()
+    assert set(everything) == {"a", "b"}
+    assert everything["a"]["kind"] == "x"
+
+
+async def test_list_metadata_honours_the_filter(backend) -> None:
+    await backend.initialize(3)
+    await backend.upsert(
+        [
+            VectorRecord(doc_id="a", vector=[1.0, 0.0, 0.0], text="a", metadata={"kind": "x"}),
+            VectorRecord(doc_id="b", vector=[0.0, 1.0, 0.0], text="b", metadata={"kind": "y"}),
+        ]
+    )
+    assert set(await backend.list_metadata({"kind": "x"})) == {"a"}
+
+
+async def test_update_metadata_replaces_without_touching_the_vector(backend) -> None:
+    await backend.initialize(3)
+    await backend.upsert(
+        [VectorRecord(doc_id="a", vector=[1.0, 0.0, 0.0], text="a", metadata={"kind": "x"})]
+    )
+    assert await backend.update_metadata("a", {"kind": "x", "state": "on"}) is True
+
+    stored = await backend.list_metadata({"kind": "x"})
+    assert stored["a"]["state"] == "on"
+
+    # the vector survived: an identical query still finds the document
+    hits = await backend.query([1.0, 0.0, 0.0], top_k=1, where=None)
+    assert hits[0].doc_id == "a"
+
+
+async def test_update_metadata_reports_a_missing_doc(backend) -> None:
+    await backend.initialize(3)
+    assert await backend.update_metadata("nope", {"kind": "x"}) is False
+
+
 def test_factory_builds_each_type(hass: HomeAssistant, tmp_path) -> None:
     from types import SimpleNamespace
 

@@ -188,6 +188,29 @@ class SqliteVecBackend:
             for r in rows
         ]
 
+    async def update_metadata(self, doc_id: str, metadata: dict[str, Any]) -> bool:
+        def _run() -> bool:
+            with closing(self._connect()) as conn, conn:
+                cur = conn.execute(
+                    "UPDATE docs SET metadata = ? WHERE doc_id = ?",
+                    (json.dumps(metadata), doc_id),
+                )
+                return cur.rowcount > 0
+
+        return await self.hass.async_add_executor_job(_run)
+
+    async def list_metadata(self, where: Filter | None = None) -> dict[str, dict[str, Any]]:
+        clause, params = build_where_clause(where)
+
+        def _run() -> dict[str, dict[str, Any]]:
+            with closing(self._connect()) as conn:
+                rows = conn.execute(
+                    f"SELECT doc_id, metadata FROM docs WHERE 1=1{clause}", params
+                ).fetchall()
+            return {row["doc_id"]: json.loads(row["metadata"]) for row in rows}
+
+        return await self.hass.async_add_executor_job(_run)
+
     async def delete_older_than(self, cutoff_iso: str) -> int:
         if not self.is_available:
             return 0

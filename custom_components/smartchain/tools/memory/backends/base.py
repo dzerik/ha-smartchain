@@ -60,6 +60,22 @@ class VectorBackend(Protocol):
         self, vector: list[float], top_k: int, where: Filter | None
     ) -> list[VectorHit]: ...
 
+    async def update_metadata(self, doc_id: str, metadata: dict[str, Any]) -> bool:
+        """Replace one document's metadata without touching its vector.
+
+        Returns True when the document existed. Never re-embeds — being able
+        to refresh metadata cheaply is the entire reason this method exists.
+        """
+        ...
+
+    async def list_metadata(self, where: Filter | None = None) -> dict[str, dict[str, Any]]:
+        """Every stored document's metadata, keyed by doc_id.
+
+        For reconciliation, not for serving queries: callers must pass a
+        `where` narrow enough to keep the result bounded.
+        """
+        ...
+
     async def delete_older_than(self, cutoff_iso: str) -> int: ...
 
     async def delete_where(self, where: Filter | None) -> int: ...
