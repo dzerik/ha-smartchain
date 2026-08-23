@@ -111,6 +111,83 @@ async def test_a_whole_phrase_match_outranks_a_token_match(hass: HomeAssistant) 
     assert [c.entity_id for c in ranked] == ["light.phrase", "light.token"]
 
 
+async def test_a_domain_word_does_not_match_every_entity_of_that_domain(
+    hass: HomeAssistant,
+) -> None:
+    """The re-review's repro. `light.lamp_N` must not match on "light".
+
+    Tokenizing the whole `entity_id` handed every entity of a domain the
+    domain word for free, so any English utterance containing "light"
+    matched every lamp in the house at an identical score. With 30 decoys the
+    entity the user actually named came back **31st of 31** and was dropped
+    at `ENTITY_CONTEXT_MAX_ENTITIES = 12`.
+
+    Only the object id is tokenized now, so the decoys — whose names and
+    object ids say "lamp" — do not match this query at all.
+    """
+    reg, _ = _registry([])
+    cands = {
+        f"light.lamp_{i}": _cand(f"light.lamp_{i}", f"Lamp {i}", area="Hall") for i in range(30)
+    }
+    cands["light.kitchen_ceiling"] = _cand(
+        "light.kitchen_ceiling", "Kitchen ceiling", area="Kitchen"
+    )
+
+    ranked = await rank_entities(
+        hass, reg, cands, "turn on the kitchen light", top_k=12, tokenize=True
+    )
+
+    assert [c.entity_id for c in ranked] == ["light.kitchen_ceiling"]
+
+
+async def test_more_matched_tokens_outranks_fewer(hass: HomeAssistant) -> None:
+    """An entity matching "kitchen" AND "light" beats one matching "kitchen".
+
+    Insertion order puts the weaker candidate first on purpose: with every
+    token hit scored alike, the flat tie left dict order to decide and this
+    would come back the wrong way round.
+    """
+    reg, _ = _registry([])
+    cands = {
+        "sensor.kitchen_humidity": _cand(
+            "sensor.kitchen_humidity", "Kitchen humidity", area="Hall"
+        ),
+        "light.kitchen_ceiling": _cand("light.kitchen_ceiling", "Kitchen light", area="Hall"),
+    }
+
+    ranked = await rank_entities(
+        hass, reg, cands, "turn on the kitchen light", top_k=5, tokenize=True
+    )
+
+    assert [c.entity_id for c in ranked] == [
+        "light.kitchen_ceiling",
+        "sensor.kitchen_humidity",
+    ]
+
+
+async def test_a_token_flood_cannot_hide_an_exact_name_match(hass: HomeAssistant) -> None:
+    """The candidate cap must not stop the scan before a strong hit is seen.
+
+    `ENTITY_LEXICAL_CANDIDATES` was counted against every hit including cheap
+    token ones, which tokenization made easy to reach: 200 entities sharing
+    one common word ended the loop, and an exact-name match further down the
+    candidate set was never examined at all. The same home found it fine with
+    `tokenize=False`, which is what gave the bug away.
+    """
+    reg, _ = _registry([])
+    cands = {
+        f"sensor.node_{i}": _cand(f"sensor.node_{i}", f"Kitchen node {i}", area="Hall")
+        for i in range(400)
+    }
+    cands["light.exact"] = _cand("light.exact", "Turn on the kitchen light", area="Hall")
+
+    ranked = await rank_entities(
+        hass, reg, cands, "turn on the kitchen light", top_k=5, tokenize=True
+    )
+
+    assert ranked[0].entity_id == "light.exact"
+
+
 async def test_tokens_under_three_characters_are_dropped(hass: HomeAssistant) -> None:
     """Short function words carry no selective power and are discarded.
 

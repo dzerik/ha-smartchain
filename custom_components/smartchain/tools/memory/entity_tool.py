@@ -44,10 +44,12 @@ _TOKEN_RE = re.compile(r"[^\W_]+", re.UNICODE)
 # the set intersection keeps the token arm cheap.
 _TOKEN_MIN_LEN = 3
 
-# Score for a token hit. It shares the `_PREFIX` tier with a whole-needle
-# partial match but sorts after it, so a candidate that matched the entire
-# phrase still outranks one that only matched a word of it.
-_TOKEN_SCORE = 0.25
+# Ceiling for a token hit, reached only when every token of the query matched.
+# A hit scores `_TOKEN_SCORE_MAX * matched / len(tokens)`, so an entity that
+# matched "kitchen" AND "light" outranks one that matched "light" alone. The
+# ceiling stays below the whole-needle prefix score of 0.5, so a candidate that
+# matched the entire phrase still outranks every token hit.
+_TOKEN_SCORE_MAX = 0.25
 
 
 def _fold(text: str) -> str:
@@ -116,6 +118,21 @@ def _lexical(
     same boundaries fixes it in general. The whole-needle exact and prefix
     arms above keep their substring semantics: they are matching a phrase the
     caller chose, where a substring hit is meaningful.
+
+    Two things keep the token arm from swamping everything else.
+
+    It is scored by **how many** tokens matched, not by whether any did, so
+    an entity matching "kitchen" and "light" sorts above one matching only
+    "light". Undifferentiated token hits made the whole group one flat tie,
+    in which the entity the user actually named finished wherever dict order
+    happened to put it.
+
+    And the **domain segment of the entity_id is excluded** from the token
+    haystack — only the object id is used. Every entity of a domain shares
+    its domain word, so tokenizing it made any English utterance containing
+    "light" match every lamp in the house at an identical score. The domain
+    is structured data the caller already has; it has no business being
+    matched as prose.
     """
     needle = _fold(query)
     if not needle:
@@ -124,16 +141,34 @@ def _lexical(
     if tokenize:
         tokens = {t for t in _TOKEN_RE.findall(needle) if len(t) >= _TOKEN_MIN_LEN}
     ranked: list[tuple[int, float, EntityCandidate]] = []
+    # Counted separately so the cap behaves as it always has on the
+    # `tokenize=False` path (`search_entities`), where `token_hits` stays 0
+    # and `strong_hits` is exactly `len(ranked)`. On the token path, cheap
+    # token hits are capped but must never stop the scan: an exact-name match
+    # further down the candidate set has to stay reachable. Before this split
+    # a home with 200+ token hits ahead of an exact match never saw it at all.
+    strong_hits = 0
+    token_hits = 0
     for cand in candidates.values():
         haystacks = [cand.name, cand.entity_id, cand.area, *cand.aliases]
         folded = [_fold(h) for h in haystacks if h]
         if any(h == needle for h in folded):
             ranked.append((_EXACT, 1.0, cand))
+            strong_hits += 1
         elif any(h.startswith(needle) or needle in h for h in folded):
             ranked.append((_PREFIX, 0.5, cand))
-        elif tokens and tokens & {w for h in folded for w in _TOKEN_RE.findall(h)}:
-            ranked.append((_PREFIX, _TOKEN_SCORE, cand))
-        if len(ranked) >= ENTITY_LEXICAL_CANDIDATES:
+            strong_hits += 1
+        elif tokens and token_hits < ENTITY_LEXICAL_CANDIDATES:
+            # `entity_id` minus its domain — the object id carries the words a
+            # user might actually say, the domain is every sibling's too.
+            object_id = cand.entity_id.split(".", 1)[-1]
+            token_texts = [cand.name, object_id, cand.area, *cand.aliases]
+            words = {w for t in token_texts if t for w in _TOKEN_RE.findall(_fold(t))}
+            matched = len(tokens & words)
+            if matched:
+                ranked.append((_PREFIX, _TOKEN_SCORE_MAX * matched / len(tokens), cand))
+                token_hits += 1
+        if strong_hits >= ENTITY_LEXICAL_CANDIDATES:
             break
     return ranked
 
