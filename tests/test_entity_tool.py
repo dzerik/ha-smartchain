@@ -7,11 +7,13 @@ from homeassistant.core import HomeAssistant
 
 from custom_components.smartchain.const import DOMAIN, ENTITY_TOOL_NAME
 from custom_components.smartchain.tools.memory.entity_filter import EntityCandidate
+from custom_components.smartchain.tools.memory.entity_index import EntityIndexer
 from custom_components.smartchain.tools.memory.entity_tool import (
     execute_entity_search,
     get_entity_tool_definition,
 )
-from custom_components.smartchain.tools.memory.store import MemorySnippet
+from custom_components.smartchain.tools.memory.registry import MemoryRegistry
+from custom_components.smartchain.tools.memory.store import MemorySnippet, MemoryStore
 
 pytestmark = pytest.mark.usefixtures("enable_custom_integrations")
 
@@ -28,18 +30,18 @@ def _cand(entity_id: str, name: str, area: str = "Кухня", aliases=()) -> En
     )
 
 
-def _registry(hass, candidates, *, hits=None, store_available=True):
-    store = MagicMock()
+def _registry(hass, candidates, *, hits=None, store_available=True, store_names=("entities",)):
+    store = MagicMock(spec=MemoryStore)
     store.is_available = store_available
     store.search = AsyncMock(return_value=hits or [])
 
-    indexer = MagicMock()
+    indexer = MagicMock(spec=EntityIndexer)
     indexer.config = MagicMock(index_states=False)
 
-    reg = MagicMock()
-    reg.entity_store_names.return_value = ["entities"]
-    reg.indexer_for.side_effect = lambda n: indexer if n == "entities" else None
-    reg.get.side_effect = lambda n: store if n in ("entities", None) else None
+    reg = MagicMock(spec=MemoryRegistry)
+    reg.entity_store_names.return_value = list(store_names)
+    reg.indexer_for.side_effect = lambda n: indexer if n in store_names else None
+    reg.get.side_effect = lambda n: store if n in store_names else None
     hass.data.setdefault(DOMAIN, {})["memory"] = reg
 
     patcher = patch(
@@ -51,7 +53,7 @@ def _registry(hass, candidates, *, hits=None, store_available=True):
 
 
 def test_definition_names_the_tool_and_requires_a_query() -> None:
-    reg = MagicMock()
+    reg = MagicMock(spec=MemoryRegistry)
     reg.entity_store_names.return_value = ["entities"]
     spec = get_entity_tool_definition(reg)
     assert spec["name"] == ENTITY_TOOL_NAME
@@ -60,7 +62,7 @@ def test_definition_names_the_tool_and_requires_a_query() -> None:
 
 
 def test_definition_requires_store_with_two_entity_stores() -> None:
-    reg = MagicMock()
+    reg = MagicMock(spec=MemoryRegistry)
     reg.entity_store_names.return_value = ["a", "b"]
     spec = get_entity_tool_definition(reg)
     assert spec["parameters"]["properties"]["store"]["enum"] == ["a", "b"]
@@ -85,8 +87,20 @@ async def test_lexical_match_finds_by_alias(hass: HomeAssistant) -> None:
     patcher.stop()
 
 
-async def test_exact_lexical_outranks_a_better_vector_hit(hass: HomeAssistant) -> None:
-    """The whole reason lexical stays in the loop."""
+async def test_exact_lexical_match_merges_with_a_lower_scored_vector_hit(
+    hass: HomeAssistant,
+) -> None:
+    """Exact-tier candidates still surface correctly once a vector hit is
+    merged into the ranking.
+
+    This does NOT pin the tier-over-score ordering: the exact tier is
+    hardcoded to score 1.0, the ceiling for any cosine score, and this
+    fixture's vector hit is 0.99 — strictly lower. A naive score-only sort
+    with the tier dropped from the key produces the identical order, so this
+    test passes either way. See
+    test_prefix_lexical_outranks_a_higher_scored_vector_hit for the test that
+    actually exercises the tier.
+    """
     hass.states.async_set("light.ceiling", "on", {})
     hass.states.async_set("switch.socket", "off", {})
     hit = MemorySnippet(
@@ -97,6 +111,34 @@ async def test_exact_lexical_outranks_a_better_vector_hit(hass: HomeAssistant) -
     _, _, patcher = _registry(
         hass,
         [_cand("light.ceiling", "Кофеварка"), _cand("switch.socket", "Розетка")],
+        hits=[hit],
+    )
+
+    result = await execute_entity_search(hass, query="Кофеварка")
+
+    assert result.index("light.ceiling") < result.index("switch.socket")
+    patcher.stop()
+
+
+async def test_prefix_lexical_outranks_a_higher_scored_vector_hit(hass: HomeAssistant) -> None:
+    """The whole reason lexical stays in the loop.
+
+    The exact tier's hardcoded 1.0 can never lose to a cosine score, so it
+    proves nothing about the tier itself. The prefix tier (hardcoded 0.5) is
+    where the ordering has bite: a prefix lexical match must still beat a
+    vector hit that scores higher on cosine similarity alone. A naive
+    score-only sort gets this one wrong.
+    """
+    hass.states.async_set("light.ceiling", "on", {})
+    hass.states.async_set("switch.socket", "off", {})
+    hit = MemorySnippet(
+        text="switch.socket — Кофеварка",
+        score=0.9,
+        metadata={"kind": "entity", "entity_id": "switch.socket"},
+    )
+    _, _, patcher = _registry(
+        hass,
+        [_cand("light.ceiling", "Кофеварка на кухне"), _cand("switch.socket", "Розетка")],
         hits=[hit],
     )
 
@@ -190,8 +232,32 @@ async def test_unknown_store_is_reported_back(hass: HomeAssistant) -> None:
     patcher.stop()
 
 
+async def test_ambiguous_store_is_reported_without_a_store_arg(hass: HomeAssistant) -> None:
+    """Several entity stores, no `store` argument: the tool must not guess."""
+    _, _, patcher = _registry(hass, [], store_names=("a", "b"))
+
+    result = await execute_entity_search(hass, query="x")
+
+    assert "pass `store`" in result
+    assert "Available: a, b" in result
+    patcher.stop()
+
+
+async def test_a_valid_store_name_bypasses_the_ambiguous_branch(hass: HomeAssistant) -> None:
+    """Passing `store` explicitly against a multi-store registry must resolve
+    directly rather than falling into the ambiguous branch."""
+    hass.states.async_set("light.ceiling", "on", {})
+    _, _, patcher = _registry(hass, [_cand("light.ceiling", "Потолок")], store_names=("a", "b"))
+
+    result = await execute_entity_search(hass, query="потолок", store="a")
+
+    assert "light.ceiling" in result
+    assert "pass `store`" not in result
+    patcher.stop()
+
+
 async def test_no_entity_store_configured(hass: HomeAssistant) -> None:
-    reg = MagicMock()
+    reg = MagicMock(spec=MemoryRegistry)
     reg.entity_store_names.return_value = []
     hass.data.setdefault(DOMAIN, {})["memory"] = reg
     result = await execute_entity_search(hass, query="x")
