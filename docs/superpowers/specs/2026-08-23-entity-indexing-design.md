@@ -351,13 +351,20 @@ Execution:
    works when the indexer never started. That is what makes the §10 fallback
    real rather than nominal — a tool that depended on a live indexer would
    return nothing in exactly the situation the fallback exists for.
-2. **Vector pass** over the store, with `domain` / `area` / `state` translated
-   into a metadata filter. Skipped when the store is unavailable.
+2. **Vector pass** over the store, with `domain` / `area` translated into a
+   metadata filter. Skipped when the store is unavailable.
 
-   `state` is a metadata filter only when the store has `index_states: true`.
-   Otherwise it is applied after enrichment, against the live state read in
-   step 4. Either way the caller gets the same answer; passing `state` to a
-   store that does not index states is not an error.
+   `state` is **not** a metadata filter. It is applied after enrichment,
+   against the live state read in step 4, regardless of `index_states`.
+
+   > Corrected during implementation. This section originally made `state` a
+   > metadata filter when `index_states: true`. The final review found that
+   > wrong: stored state is up to one flush interval stale, and arbitrarily
+   > stale for an entity that has not changed since its last sweep, while the
+   > live post-filter runs afterwards and is authoritative. The pre-filter
+   > could therefore only produce false negatives — discarding exactly the
+   > semantic-only matches this tool exists to find — and never a correct
+   > exclusion the live filter would have missed.
 3. **Merge** — exact lexical match first, then prefix, then vector by score.
    Deduplicated by `entity_id`, truncated to `top_k`.
 4. **Enrich** — each hit's current state is read from `hass.states` at answer
@@ -416,7 +423,14 @@ The v4.0.2 boundary is unchanged and applies here in a new place: entity names,
 areas and aliases are user data and go to an external embeddings provider. This
 is inherent to the feature, but it must be **stated in the documentation** —
 including that `paranoid` sends the entire home, diagnostics included, and that
-`person` and `device_tracker` entities are in `optimal`'s scope.
+`person` entities are in `optimal`'s scope.
+
+> Corrected during implementation. This originally said `person` **and**
+> `device_tracker`. The code puts `device_tracker` in neither preset list, so
+> it is reached only by `maximal` and `paranoid`. That is the better default —
+> presence trackers are the most sensitive domain in the home and this data
+> leaves for a third-party provider — and `include: [device_tracker]` is a
+> one-line opt-in for anyone who wants it.
 
 No credential may appear in an indexer log line, in a tool result, or in the
 `smartchain_entities_reindexed` payload. Entity ids and area names are not
