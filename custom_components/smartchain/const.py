@@ -186,7 +186,6 @@ MEMORY_CHUNK_OVERLAP = 100
 MEMORY_TOOL_NAME = "search_memory"
 SERVICE_CLEAR_MEMORY = "clear_memory"
 EVENT_MEMORY_CLEARED = f"{DOMAIN}_memory_cleared"
-MEMORY_PROVIDERS = ["ollama", "openai", "gigachat", "yandex"]
 # Relative to hass.config.config_dir/.storage
 MEMORY_PERSIST_DIRNAME = "smartchain_memory"
 MEMORY_LOGBOOK_POLL_MIN_MINUTES = 5
