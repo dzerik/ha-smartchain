@@ -24,6 +24,13 @@ LOGGER = logging.getLogger(__name__)
 
 _EXACT, _PREFIX, _VECTOR = 0, 1, 2
 
+# Ceiling on `fetch_k` in `rank_entities`: the most hits any call will ever
+# ask a vector store for in one query, no matter what `fetch_k` (or, when it
+# is omitted, `top_k`) a caller passes. Keeps a caller that inflates `top_k`
+# to preserve candidates before filtering (see `execute_entity_search`) from
+# turning that into an unbounded store scan.
+_MAX_STORE_FETCH_K = 200
+
 
 def _fold(text: str) -> str:
     """Case- and accent-insensitive comparison key."""
@@ -94,6 +101,7 @@ async def rank_entities(
     store_name: str | None = None,
     where_extra: dict[str, Any] | None = None,
     degrade_on_store_failure: bool = True,
+    fetch_k: int | None = None,
 ) -> list[EntityCandidate]:
     """Candidates ranked lexical-first, then by vector score, deduplicated.
 
@@ -101,6 +109,20 @@ async def rank_entities(
     names an available store. A vector hit for an entity outside `candidates`
     is dropped — a stale document must not resurrect an entity that no longer
     exists, or that the caller's preset excludes.
+
+    `top_k` and `fetch_k` bound two different things and are deliberately not
+    the same number. `top_k` bounds the *result*: the ranked, deduplicated
+    list this function returns is sliced to it. `fetch_k` bounds the *store
+    query* instead — how many hits are requested from the vector backend,
+    before ranking, dedup or any caller-side filtering. A caller that inflates
+    `top_k` past its real page size (to avoid losing candidates to this
+    function's own truncation ahead of filters it applies afterwards — see
+    `execute_entity_search`) must not have that inflation turn into an
+    equally inflated store query. When `fetch_k` is omitted it derives from
+    `top_k` as `top_k * 2`, matching this function's pre-extraction inline
+    behaviour. Either way the request sent to the store is capped at
+    `_MAX_STORE_FETCH_K`, so no caller — accidentally or otherwise — can turn
+    a search into an unbounded store scan.
 
     By default a failing store degrades to lexical rather than failing the
     caller: this function is on the path that builds a system prompt, and a
@@ -119,8 +141,10 @@ async def rank_entities(
         where: dict[str, Any] = {"kind": "entity"}
         if where_extra:
             where.update(where_extra)
+        fetch = fetch_k if fetch_k is not None else top_k * 2
+        fetch = min(fetch, _MAX_STORE_FETCH_K)
         try:
-            for snippet in await target.search(query, top_k=top_k * 2, where=where):
+            for snippet in await target.search(query, top_k=fetch, where=where):
                 entity_id = (snippet.metadata or {}).get("entity_id", "")
                 cand = candidates.get(entity_id)
                 if cand is not None and entity_id not in seen:
@@ -185,6 +209,13 @@ async def execute_entity_search(
     # makes rank_entities' truncation a no-op here; this function's own loop
     # below still stops at the caller's real `top_k` once filters are
     # applied, exactly as before this was split out.
+    #
+    # That inflated `top_k` must not also inflate the vector *query* —
+    # rank_entities derives its store fetch size from `top_k` by default,
+    # which would ask the store for `len(candidates) * 2` hits on a large
+    # install. `fetch_k` is passed explicitly instead, sized off this
+    # function's real render `top_k` (over-fetched enough to survive the
+    # filters below), and rank_entities caps it regardless.
     try:
         ranked = await rank_entities(
             hass,
@@ -195,6 +226,7 @@ async def execute_entity_search(
             store_name=target_name,
             where_extra=where_extra,
             degrade_on_store_failure=False,
+            fetch_k=top_k * 4,
         )
     except Exception:
         LOGGER.exception("entity search failed")

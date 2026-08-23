@@ -1,12 +1,18 @@
 """The shared ranking both search_entities and the prompt context use."""
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from homeassistant.core import HomeAssistant
 
+from custom_components.smartchain.const import DOMAIN
 from custom_components.smartchain.tools.memory.entity_filter import EntityCandidate
-from custom_components.smartchain.tools.memory.entity_tool import rank_entities
+from custom_components.smartchain.tools.memory.entity_index import EntityIndexer
+from custom_components.smartchain.tools.memory.entity_tool import (
+    _MAX_STORE_FETCH_K,
+    execute_entity_search,
+    rank_entities,
+)
 from custom_components.smartchain.tools.memory.registry import MemoryRegistry
 from custom_components.smartchain.tools.memory.store import MemorySnippet, MemoryStore
 
@@ -119,3 +125,62 @@ async def test_a_failing_store_degrades_to_lexical(hass: HomeAssistant) -> None:
     )
 
     assert [c.entity_id for c in ranked] == ["light.a"]
+
+
+async def test_store_fetch_is_capped_regardless_of_top_k(hass: HomeAssistant) -> None:
+    """A caller may inflate `top_k` well past its real page size — as
+    `execute_entity_search` does, to avoid losing candidates to this
+    function's own truncation ahead of filters applied afterwards. That must
+    not turn into an unbounded store query: the store's `top_k=` stays
+    bounded and small, not proportional to the candidate count or to the
+    inflated `top_k`.
+    """
+    reg, store = _registry(["entities"])
+    cands = {f"light.{i}": _cand(f"light.{i}", "Свет") for i in range(1000)}
+
+    await rank_entities(hass, reg, cands, "свет", top_k=1000, store_name="entities")
+
+    fetch = store.search.await_args.kwargs["top_k"]
+    assert fetch <= _MAX_STORE_FETCH_K
+    assert fetch < 1000
+
+
+async def test_domain_filter_does_not_shrink_the_page_below_top_k(
+    hass: HomeAssistant,
+) -> None:
+    """Regression guard for the bug fixed in `execute_entity_search`.
+
+    Before the fix, rank_entities truncated the merged candidate pool to the
+    render `top_k` before domain/area/state filters ran. With enough
+    same-ranked non-matching candidates ahead of the matching ones, that
+    truncation could throw away every entity the filter would have kept,
+    returning an empty or partial page even though a full page of matches
+    existed further down the ranking.
+    """
+    all_cands: dict[str, EntityCandidate] = {}
+    for i in range(20):
+        entity_id = f"sensor.noise{i}"
+        hass.states.async_set(entity_id, "on", {})
+        all_cands[entity_id] = _cand(entity_id, "Свет")
+    for i in range(5):
+        entity_id = f"light.{i}"
+        hass.states.async_set(entity_id, "on", {})
+        all_cands[entity_id] = _cand(entity_id, "Свет")
+
+    indexer = MagicMock(spec=EntityIndexer)
+    indexer.config = MagicMock()
+
+    reg = MagicMock(spec=MemoryRegistry)
+    reg.entity_store_names.return_value = ["entities"]
+    reg.indexer_for.return_value = indexer
+    reg.get.return_value = MagicMock(spec=MemoryStore, is_available=False)
+    hass.data.setdefault(DOMAIN, {})["memory"] = reg
+
+    with patch(
+        "custom_components.smartchain.tools.memory.entity_tool.resolve_candidates",
+        return_value=all_cands,
+    ):
+        result = await execute_entity_search(hass, query="свет", domain="light", top_k=5)
+
+    assert result.count("light.") == 5
+    assert "sensor.noise" not in result
