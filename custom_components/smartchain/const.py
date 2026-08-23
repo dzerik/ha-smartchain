@@ -207,7 +207,9 @@ MEMORY_BACKEND_TYPES = ["sqlite_numpy", "sqlite_vec", "pgvector", "qdrant"]
 MEMORY_DEFAULT_BACKEND = "sqlite_numpy"
 MEMORY_BACKEND_TIMEOUT_SECONDS = 30
 MEMORY_DIM_PROBE_TEXT = "smartchain dimension probe"
-MEMORY_STORE_NAME_PATTERN = r"^[a-z_][a-z0-9_]*$"
+# \Z, not $: a store name becomes a filename component for the file-based
+# backends, and $ would let a trailing newline through.
+MEMORY_STORE_NAME_PATTERN = r"^[a-z_][a-z0-9_]*\Z"
 MEMORY_SQLITE_SOFT_LIMIT = 50_000
 MEMORY_DEFAULT_QDRANT_COLLECTION = "smartchain_memory"
 MEMORY_DEFAULT_PG_TABLE = "smartchain_memory"

@@ -27,6 +27,12 @@ def test_store_name_pattern_is_enforced() -> None:
         MEMORY_SCHEMA({"stores": [{"name": "Bad Name", "embeddings": "E"}]})
 
 
+def test_store_name_rejects_trailing_newline() -> None:
+    """The name becomes a filename component, so `$` alone would be too lax."""
+    with pytest.raises(vol.Invalid):
+        MEMORY_SCHEMA({"stores": [{"name": "ok\n", "embeddings": "E"}]})
+
+
 def test_duplicate_store_names_rejected() -> None:
     with pytest.raises(vol.Invalid, match="duplicate"):
         MEMORY_SCHEMA(
