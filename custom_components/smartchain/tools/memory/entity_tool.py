@@ -33,10 +33,13 @@ _EXACT, _PREFIX, _VECTOR = 0, 1, 2
 _MAX_STORE_FETCH_K = 200
 
 # Runs of alphanumerics, Unicode-aware, with `_` deliberately excluded so
-# `light.kitchen_ceiling` yields "light", "kitchen" and "ceiling" rather than
-# one unusable "kitchen_ceiling". Applied to BOTH sides of the token arm — the
-# needle and each haystack — so the two are split on identical boundaries and
-# the comparison is word-to-word.
+# `kitchen_ceiling` yields "kitchen" and "ceiling" rather than one unusable
+# "kitchen_ceiling". Note the token haystack gets the object id only, never the
+# domain: `light.kitchen_ceiling` contributes "kitchen" and "ceiling" but not
+# "light", because every entity of a domain shares that word and it drowned the
+# ranking. Applied to BOTH sides of the token arm — the needle and each
+# haystack — so the two are split on identical boundaries and the comparison is
+# word-to-word.
 _TOKEN_RE = re.compile(r"[^\W_]+", re.UNICODE)
 
 # Tokens shorter than this are dropped before matching. Short function words
