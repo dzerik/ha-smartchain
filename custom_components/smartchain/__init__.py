@@ -23,6 +23,7 @@ from .helpers import async_generate_structured  # re-exported for downstream int
 from .tools import ToolRegistry
 from .tools.loader import LoaderError, load_tools_file
 from .tools.mcp import MCPManager
+from .tools.memory.entity_context import SkeletonCache
 from .tools.memory.registry import MemoryRegistry
 
 __all__ = ["async_generate_structured"]
@@ -199,6 +200,11 @@ async def _reload_registry(hass: HomeAssistant) -> int:
             await old_memory.shutdown()
         hass.data[DOMAIN]["memory"] = new_memory
 
+    # A reload must not serve an entity skeleton map built before it.
+    skeleton: SkeletonCache | None = hass.data[DOMAIN].get("entity_skeleton")
+    if skeleton is not None:
+        skeleton.invalidate()
+
     # MCP tools arrive asynchronously after start(); the count fired in the
     # reload event therefore reflects only the synchronously-loaded YAML tools.
     return len(result.yaml_tools)
@@ -294,6 +300,10 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         hass.data[DOMAIN]["mcp_manager"] = MCPManager(hass, hass.data[DOMAIN]["tools"])
     if "memory" not in hass.data[DOMAIN]:
         hass.data[DOMAIN]["memory"] = MemoryRegistry(hass)
+    if "entity_skeleton" not in hass.data[DOMAIN]:
+        cache = SkeletonCache(hass)
+        cache.start()
+        hass.data[DOMAIN]["entity_skeleton"] = cache
     try:
         initial = await _reload_registry(hass)
         LOGGER.info("SmartChain loaded %d custom tools", initial)
@@ -467,6 +477,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             await _reload_registry(hass)
         except LoaderError as err:
             LOGGER.error("SmartChain tools.yaml load failed on entry setup: %s", err)
+        # `stop()` cleared its registry subscriptions; without this the cache
+        # would silently stop invalidating for the rest of the HA run.
+        skeleton: SkeletonCache | None = hass.data.get(DOMAIN, {}).get("entity_skeleton")
+        if skeleton is not None:
+            skeleton.start()
 
     subentries = entry.subentries
     if subentries:
@@ -504,9 +519,12 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         memory: MemoryRegistry | None = hass.data.get(DOMAIN, {}).get("memory")
         if memory is not None:
             await memory.shutdown()
-        # Mark the teardown so the next `async_setup_entry` rebuilds both — a
-        # reload of the only config entry must not leave memory and MCP dead for
-        # the rest of the HA run.
+        skeleton: SkeletonCache | None = hass.data.get(DOMAIN, {}).get("entity_skeleton")
+        if skeleton is not None:
+            await skeleton.stop()
+        # Mark the teardown so the next `async_setup_entry` rebuilds all three —
+        # a reload of the only config entry must not leave memory, MCP and the
+        # entity skeleton cache dead for the rest of the HA run.
         if DOMAIN in hass.data:
             hass.data[DOMAIN]["subsystems_stopped"] = True
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)

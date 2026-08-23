@@ -7,9 +7,17 @@ device does not exist merely because the query worded it badly.
 """
 
 import logging
+import time
+from typing import Any
 
-from ...const import ENTITY_SKELETON_MAX_CHARS
-from .entity_filter import EntityCandidate
+from homeassistant.core import Event, HomeAssistant, callback
+from homeassistant.helpers import area_registry as ar
+from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
+
+from ...const import ENTITY_SKELETON_CACHE_TTL, ENTITY_SKELETON_MAX_CHARS
+from .config import EntitySourceConfig
+from .entity_filter import EntityCandidate, resolve_candidates
 
 LOGGER = logging.getLogger(__name__)
 
@@ -143,3 +151,62 @@ def render_skeleton(candidates: dict[str, EntityCandidate]) -> str:
     if len(result) > ENTITY_SKELETON_MAX_CHARS:
         result = result[:ENTITY_SKELETON_MAX_CHARS]
     return result
+
+
+class SkeletonCache:
+    """One rendered map per preset, shared by every conversation agent.
+
+    Registry events are the real invalidation; the TTL is a backstop for a
+    change that somehow raises none.
+    """
+
+    def __init__(self, hass: HomeAssistant) -> None:
+        self.hass = hass
+        self._cache: dict[str, tuple[str, float]] = {}
+        self._unsubs: list[Any] = []
+
+    def start(self) -> None:
+        if self._unsubs:
+            return
+        for event in (
+            er.EVENT_ENTITY_REGISTRY_UPDATED,
+            dr.EVENT_DEVICE_REGISTRY_UPDATED,
+            ar.EVENT_AREA_REGISTRY_UPDATED,
+        ):
+            self._unsubs.append(self.hass.bus.async_listen(event, self._on_registry))
+
+    async def stop(self) -> None:
+        for unsub in self._unsubs:
+            unsub()
+        self._unsubs.clear()
+
+    @callback
+    def _on_registry(self, _event: Event) -> None:
+        self.invalidate()
+
+    @callback
+    def invalidate(self) -> None:
+        self._cache.clear()
+
+    def get(self, preset: str) -> str | None:
+        """The map for `preset`, or None if it could not be built.
+
+        The tri-state matters: "" is a genuinely empty home, None is a
+        failure, and the caller falls back to the full devices dump only for
+        the second. A failure is never cached — a transient registry error
+        must not blind the agent for the whole TTL.
+        """
+        now = time.monotonic()
+        cached = self._cache.get(preset)
+        if cached is not None and (now - cached[1]) < ENTITY_SKELETON_CACHE_TTL:
+            return cached[0]
+
+        try:
+            candidates = resolve_candidates(self.hass, EntitySourceConfig(preset=preset))
+            rendered = render_skeleton(candidates)
+        except Exception:  # noqa: BLE001 — a prompt must never fail to build
+            LOGGER.exception("entity skeleton could not be built")
+            return None
+
+        self._cache[preset] = (rendered, now)
+        return rendered
