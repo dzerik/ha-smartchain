@@ -35,6 +35,22 @@ class BackendConfig:
 
 
 @dataclass(frozen=True)
+class EntitySourceConfig:
+    """Turns a store into an index of Home Assistant entities.
+
+    `include` and `exclude` accept either a bare domain (`sensor`) or a full
+    entity_id (`sensor.kitchen_temperature`). `exclude` is applied last and
+    wins over both the preset and `include`.
+    """
+
+    type: str = "entities"
+    preset: str = "optimal"
+    index_states: bool = False
+    include: list[str] = field(default_factory=list)
+    exclude: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
 class StoreConfig:
     """One named memory store: an embeddings binding plus a vector backend."""
 
@@ -45,6 +61,7 @@ class StoreConfig:
     retention_days: int = 90
     ingest_conversation: bool = True
     logbook: LogbookConfig = field(default_factory=LogbookConfig)
+    source: EntitySourceConfig | None = None
 
 
 @dataclass(frozen=True)

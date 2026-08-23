@@ -63,3 +63,36 @@ def test_memory_settings_names() -> None:
         ]
     )
     assert settings.names() == ["a", "b"]
+
+
+def test_entity_source_defaults() -> None:
+    from custom_components.smartchain.tools.memory.config import EntitySourceConfig
+
+    cfg = EntitySourceConfig()
+    assert cfg.type == "entities"
+    assert cfg.preset == "optimal"
+    assert cfg.index_states is False
+    assert cfg.include == []
+    assert cfg.exclude == []
+
+
+def test_store_config_source_defaults_to_none() -> None:
+    from custom_components.smartchain.tools.memory.config import StoreConfig
+
+    assert StoreConfig(name="a", embeddings="E").source is None
+
+
+def test_store_config_carries_a_source() -> None:
+    from custom_components.smartchain.tools.memory.config import (
+        EntitySourceConfig,
+        StoreConfig,
+    )
+
+    cfg = StoreConfig(
+        name="entities",
+        embeddings="E",
+        source=EntitySourceConfig(preset="paranoid", index_states=True),
+    )
+    assert cfg.source is not None
+    assert cfg.source.preset == "paranoid"
+    assert cfg.source.index_states is True

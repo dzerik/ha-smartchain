@@ -170,7 +170,6 @@ CONF_ALLOWED_TOOLS = "allowed_tools"
 SERVICE_RELOAD_TOOLS = "reload_tools"
 EVENT_TOOLS_RELOADED = f"{DOMAIN}_tools_reloaded"
 TOOL_NAME_PATTERN = r"^[a-z_][a-z0-9_]*$"
-RESERVED_TOOL_NAMES = frozenset({HISTORY_TOOL_NAME, DELEGATE_TOOL_NAME})
 
 # MCP client (v4.2.0)
 MCP_RECONNECT_INITIAL_DELAY = 1.0  # seconds
@@ -235,3 +234,79 @@ ENGINE_EMBEDDING_MODELS = {
     UNIQUE_ID_OPENAI: EMBEDDING_MODELS_OPENAI,
     UNIQUE_ID_OLLAMA: EMBEDDING_MODELS_OLLAMA,
 }
+
+# Entity indexing (v5.0.0)
+ENTITY_SOURCE_TYPE = "entities"
+ENTITY_PRESETS = ["minimal", "optimal", "maximal", "paranoid"]
+ENTITY_DEFAULT_PRESET = "optimal"
+ENTITY_TOOL_NAME = "search_entities"
+SERVICE_REINDEX_ENTITIES = "reindex_entities"
+EVENT_ENTITIES_REINDEXED = f"{DOMAIN}_entities_reindexed"
+ENTITY_INDEX_BATCH_SIZE = 32
+ENTITY_INDEX_BATCH_PAUSE_SECONDS = 0.5
+ENTITY_REGISTRY_DEBOUNCE_SECONDS = 5
+ENTITY_STATE_FLUSH_SECONDS = 30
+ENTITY_SEARCH_DEFAULT_TOP_K = 10
+ENTITY_SEARCH_MAX_TOP_K = 50
+ENTITY_LEXICAL_CANDIDATES = 200
+
+# Only what a person controls.
+ENTITY_MINIMAL_DOMAINS = [
+    "light",
+    "switch",
+    "cover",
+    "climate",
+    "lock",
+    "fan",
+    "media_player",
+    "scene",
+    "script",
+    "vacuum",
+    "water_heater",
+    "humidifier",
+    "valve",
+]
+# `optimal` adds these whole domains on top of the minimal set.
+ENTITY_OPTIMAL_EXTRA_DOMAINS = [
+    "button",
+    "input_boolean",
+    "input_select",
+    "input_number",
+    "select",
+    "number",
+    "alarm_control_panel",
+    "person",
+    "weather",
+]
+# ...and these sensor / binary_sensor device classes. Battery level, signal
+# strength and the like are deliberately absent: they dominate a real home by
+# count and carry no meaning a user would ever search for.
+ENTITY_MEANINGFUL_DEVICE_CLASSES = [
+    "temperature",
+    "humidity",
+    "illuminance",
+    "pressure",
+    "motion",
+    "occupancy",
+    "presence",
+    "door",
+    "window",
+    "opening",
+    "garage_door",
+    "smoke",
+    "gas",
+    "moisture",
+    "carbon_monoxide",
+    "carbon_dioxide",
+    "power",
+    "energy",
+    "sound",
+    "vibration",
+    "problem",
+]
+
+# RESERVED_TOOL_NAMES lives here, after ENTITY_TOOL_NAME, because it
+# references that name — defining it up near the other tool-name constants
+# would forward-reference a name that doesn't exist yet at that point in the
+# module and raise NameError on import.
+RESERVED_TOOL_NAMES = frozenset({HISTORY_TOOL_NAME, DELEGATE_TOOL_NAME, ENTITY_TOOL_NAME})
