@@ -39,6 +39,8 @@ from langchain_core.messages import (
 from .const import (
     CONF_ALLOWED_TOOLS,
     CONF_CHAT_HISTORY,
+    CONF_DYNAMIC_CONTEXT_PRESET,
+    CONF_DYNAMIC_ENTITY_CONTEXT,
     CONF_ENABLE_HISTORY_TOOL,
     CONF_ENABLE_MULTI_AGENT_TOOLS,
     CONF_LLM_HASS_API,
@@ -47,6 +49,7 @@ from .const import (
     CRITIQUE_TOOL_NAME,
     DEFAULT_CHAT_HISTORY,
     DEFAULT_DEVICES_PROMPT,
+    DEFAULT_DYNAMIC_ENTITY_CONTEXT,
     DEFAULT_ENABLE_HISTORY_TOOL,
     DEFAULT_ENABLE_MULTI_AGENT_TOOLS,
     DEFAULT_PROCESS_BUILTIN_SENTENCES,
@@ -54,6 +57,7 @@ from .const import (
     DELEGATE_MANY_TOOL_NAME,
     DELEGATE_TOOL_NAME,
     DOMAIN,
+    ENTITY_DEFAULT_PRESET,
     ENTITY_SEARCH_DEFAULT_TOP_K,
     ENTITY_TOOL_NAME,
     HISTORY_TOOL_NAME,
@@ -77,6 +81,7 @@ from .tools.delegate_many_tool import (
     get_delegate_many_tool_definition,
 )
 from .tools.dispatcher import dispatch as dispatch_custom_tool
+from .tools.memory.entity_context import build_entity_context
 from .tools.memory.entity_tool import (
     execute_entity_search,
     get_entity_tool_definition,
@@ -226,6 +231,37 @@ class SmartChainConversationEntity(ConversationEntity):
         self._prompt_cache_time = now
         return rendered
 
+    async def _build_system_prompt(
+        self, options: dict[str, Any], user_input: ConversationInput
+    ) -> str:
+        """Compose the system prompt for a turn without the Assist API.
+
+        With `dynamic_entity_context` off, or when the skeleton could not be
+        built, this reproduces today's prompt byte-for-byte through the same
+        cache — both cases mean: behave exactly as this integration always
+        has. Only the user prompt is a template; the context is plain text
+        and varies per turn, so running Jinja over the pair would bust the
+        cache on every message for no gain.
+        """
+        user_prompt = options.get(CONF_PROMPT, DEFAULT_PROMPT)
+        dynamic = options.get(CONF_DYNAMIC_ENTITY_CONTEXT, DEFAULT_DYNAMIC_ENTITY_CONTEXT)
+        context = None
+        if dynamic:
+            context = await build_entity_context(
+                self.hass,
+                preset=options.get(CONF_DYNAMIC_CONTEXT_PRESET, ENTITY_DEFAULT_PRESET),
+                query=user_input.text or "",
+            )
+
+        if context is None:
+            raw_prompt = user_prompt + DEFAULT_DEVICES_PROMPT
+            return self._render_prompt_cached(raw_prompt)
+
+        prompt = self._render_prompt_cached(user_prompt)
+        if context:
+            prompt = f"{prompt}\n\n{context}"
+        return prompt
+
     async def _async_get_skills_prompt(self) -> str:
         """Return cached skills prompt text. First call reads YAML files in executor."""
         if self._skills_prompt is None:
@@ -261,8 +297,7 @@ class SmartChainConversationEntity(ConversationEntity):
             except conversation.ConverseError as err:
                 return err.as_conversation_result()
         else:
-            raw_prompt = user_prompt + DEFAULT_DEVICES_PROMPT
-            prompt = self._render_prompt_cached(raw_prompt)
+            prompt = await self._build_system_prompt(options, user_input)
             chat_log.content[0] = SystemContent(content=prompt)
 
         # Append skills prompt to system message
