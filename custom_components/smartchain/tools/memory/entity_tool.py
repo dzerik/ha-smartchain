@@ -34,12 +34,14 @@ _MAX_STORE_FETCH_K = 200
 
 # Runs of alphanumerics, Unicode-aware, with `_` deliberately excluded so
 # `light.kitchen_ceiling` yields "light", "kitchen" and "ceiling" rather than
-# one unusable "kitchen_ceiling".
+# one unusable "kitchen_ceiling". Applied to BOTH sides of the token arm — the
+# needle and each haystack — so the two are split on identical boundaries and
+# the comparison is word-to-word.
 _TOKEN_RE = re.compile(r"[^\W_]+", re.UNICODE)
 
-# Tokens shorter than this are dropped before matching. Two-letter fragments
-# ("на", "то", "in", "on") are substrings of half a home's entity names and
-# would turn a token pass into "return everything".
+# Tokens shorter than this are dropped before matching. Short function words
+# ("на", "то", "in", "on") carry no selective power, and dropping them before
+# the set intersection keeps the token arm cheap.
 _TOKEN_MIN_LEN = 3
 
 # Score for a token hit. It shares the `_PREFIX` tier with a whole-needle
@@ -98,17 +100,29 @@ def _lexical(
     `search_entities` uses — the whole query is one needle, which is right
     when a model supplies a short descriptive phrase. On, the needle is
     additionally split into words and a candidate is admitted when any word
-    of three characters or more occurs in one of its haystacks. That is what
-    the prompt context needs, because it passes the raw user utterance:
-    "включи свет на кухне" is nobody's entity name, and without the token
-    pass it matches nothing at all on an install with no vector index.
+    of three characters or more appears **as a whole word** in one of its
+    haystacks. That is what the prompt context needs, because it passes the
+    raw user utterance: "включи свет на кухне" is nobody's entity name, and
+    without the token pass it matches nothing at all on an install with no
+    vector index.
+
+    The token arm compares **words to words**, never substrings. A token is
+    kept only when it equals a whole word of a haystack, so "turn off the
+    light" does not reach an entity called "Office" through "off", and "what
+    is the temperature" does not reach a "Thermostat" through "the". A
+    minimum length cannot fix that class — the fragments are legitimately
+    three characters or more — and a stopword list would need one per
+    language and would still miss the next case. Splitting both sides on the
+    same boundaries fixes it in general. The whole-needle exact and prefix
+    arms above keep their substring semantics: they are matching a phrase the
+    caller chose, where a substring hit is meaningful.
     """
     needle = _fold(query)
     if not needle:
         return []
-    tokens: list[str] = []
+    tokens: set[str] = set()
     if tokenize:
-        tokens = [t for t in _TOKEN_RE.findall(needle) if len(t) >= _TOKEN_MIN_LEN]
+        tokens = {t for t in _TOKEN_RE.findall(needle) if len(t) >= _TOKEN_MIN_LEN}
     ranked: list[tuple[int, float, EntityCandidate]] = []
     for cand in candidates.values():
         haystacks = [cand.name, cand.entity_id, cand.area, *cand.aliases]
@@ -117,7 +131,7 @@ def _lexical(
             ranked.append((_EXACT, 1.0, cand))
         elif any(h.startswith(needle) or needle in h for h in folded):
             ranked.append((_PREFIX, 0.5, cand))
-        elif tokens and any(t in h for h in folded for t in tokens):
+        elif tokens and tokens & {w for h in folded for w in _TOKEN_RE.findall(h)}:
             ranked.append((_PREFIX, _TOKEN_SCORE, cand))
         if len(ranked) >= ENTITY_LEXICAL_CANDIDATES:
             break

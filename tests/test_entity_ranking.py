@@ -71,7 +71,9 @@ async def test_tokenize_finds_the_entity_a_russian_sentence_names(
 ) -> None:
     reg, _ = _registry([])
     cands = {
-        "light.a": _cand("light.a", "Свет"),
+        # "свет" is one whole word of this name, not the whole name — the
+        # case whole-word matching has to keep working for.
+        "light.a": _cand("light.a", "Потолочный свет"),
         "sensor.b": _cand("sensor.b", "Влажность"),
     }
 
@@ -110,11 +112,56 @@ async def test_a_whole_phrase_match_outranks_a_token_match(hass: HomeAssistant) 
 
 
 async def test_tokens_under_three_characters_are_dropped(hass: HomeAssistant) -> None:
-    """Otherwise "на" alone would drag in half the home — "Ванна" included."""
-    reg, _ = _registry([])
-    cands = {"light.bath": _cand("light.bath", "Ванна")}
+    """Short function words carry no selective power and are discarded.
 
-    assert await rank_entities(hass, reg, cands, "то на ты", top_k=5, tokenize=True) == []
+    The candidate's name must contain the short token as a WHOLE WORD, or
+    this test cannot tell the length filter from the word-boundary rule —
+    under whole-word matching an earlier version of it (query "то на ты"
+    against a name "Ванна") passed with the length filter entirely removed,
+    because "на" is not a word of "ванна" either way. "Свет на кухне" does
+    have "на" as a word, so only the length filter keeps this empty.
+    """
+    reg, _ = _registry([])
+    cands = {"light.a": _cand("light.a", "Свет на кухне")}
+
+    # The whole needle is not a substring of anything here, so the first two
+    # arms cannot fire and the token arm is the only one under test.
+    assert await rank_entities(hass, reg, cands, "ты на", top_k=5, tokenize=True) == []
+
+
+async def test_off_does_not_match_inside_office(hass: HomeAssistant) -> None:
+    """ "off" must not reach "Office". The substring bug this round fixed.
+
+    A three-character minimum cannot help — "off" and "the" clear it — and a
+    stopword list would need one per language. Matching word-to-word is what
+    fixes the class.
+    """
+    reg, _ = _registry([])
+    cands = {
+        "switch.office": _cand("switch.office", "Office", area="Hall"),
+        "light.ceiling": _cand("light.ceiling", "Ceiling light", area="Hall"),
+    }
+
+    ranked = await rank_entities(hass, reg, cands, "turn off the light", top_k=5, tokenize=True)
+
+    # Positive control in the same call, so this cannot pass by matching
+    # nothing at all.
+    assert [c.entity_id for c in ranked] == ["light.ceiling"]
+
+
+async def test_the_does_not_match_inside_thermostat(hass: HomeAssistant) -> None:
+    """ "the" must not reach "Thermostat"."""
+    reg, _ = _registry([])
+    cands = {
+        "climate.thermostat": _cand("climate.thermostat", "Thermostat", area="Hall"),
+        "sensor.temp": _cand("sensor.temp", "Temperature", area="Hall"),
+    }
+
+    ranked = await rank_entities(
+        hass, reg, cands, "what is the temperature", top_k=5, tokenize=True
+    )
+
+    assert [c.entity_id for c in ranked] == ["sensor.temp"]
 
 
 async def test_exact_lexical_outranks_a_higher_scored_vector_hit(
