@@ -36,11 +36,13 @@ from .const import (
     CONF_VERIFY_SSL,
     DEFAULT_TEMPERATURE,
     DOMAIN,
+    EVENT_ENTITIES_REINDEXED,
     EVENT_MEMORY_CLEARED,
     EVENT_TOOLS_RELOADED,
     ID_GIGACHAT,
     MEMORY_PERSIST_DIRNAME,
     SERVICE_CLEAR_MEMORY,
+    SERVICE_REINDEX_ENTITIES,
     SERVICE_RELOAD_TOOLS,
     SIGNAL_NEW_ANALYSIS,
     SUBENTRY_TYPE_CONVERSATION,
@@ -330,8 +332,43 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
             store = registry.get(name)
             if store is not None:
                 deleted += await store.clear(where or None)
+            # An entity-index store cleared directly through `store.clear` is
+            # now out of step with its index and nothing will rebuild it until
+            # the next registry event or restart happens to trigger a sweep —
+            # from the user's side that reads as "search_entities finds
+            # nothing, permanently". Schedule a reconciling sweep for any
+            # cleared store that has an indexer, as a background task so
+            # clearing never blocks on re-embedding the whole home.
+            indexer = registry.indexer_for(name)
+            if indexer is not None:
+                hass.async_create_background_task(
+                    indexer.reconcile(), name="smartchain_entity_index_reclear_sweep"
+                )
 
         hass.bus.async_fire(EVENT_MEMORY_CLEARED, {"deleted": deleted, "stores": targets})
+
+    async def _handle_reindex_entities(call: ServiceCall) -> None:
+        registry: MemoryRegistry | None = hass.data.get(DOMAIN, {}).get("memory")
+        names = registry.entity_store_names() if registry is not None else []
+        if not names:
+            raise HomeAssistantError("no entity index is configured")
+
+        requested = call.data.get("store")
+        if requested is not None and requested not in names:
+            raise HomeAssistantError(f"unknown entity index {requested!r}; configured: {names}")
+        targets = [requested] if requested else names
+        full = bool(call.data.get("full", False))
+
+        totals = {"new": 0, "changed": 0, "removed": 0, "unchanged": 0}
+        for name in targets:
+            indexer = registry.indexer_for(name)
+            if indexer is None:
+                continue
+            result = await indexer.reconcile(full=full)
+            for key in totals:
+                totals[key] += getattr(result, key)
+
+        hass.bus.async_fire(EVENT_ENTITIES_REINDEXED, {"stores": targets, **totals})
 
     # Register sidebar panel (graceful — skip if frontend not available).
     # Failures here aren't fatal but they do mean the user has no UI — bump from
@@ -399,6 +436,15 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
                     vol.Optional("agent_id"): str,
                     vol.Optional("store"): str,
                 }
+            ),
+        )
+    if not hass.services.has_service(DOMAIN, SERVICE_REINDEX_ENTITIES):
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_REINDEX_ENTITIES,
+            _handle_reindex_entities,
+            schema=vol.Schema(
+                {vol.Optional("store"): str, vol.Optional("full", default=False): bool}
             ),
         )
     return True

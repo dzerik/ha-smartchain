@@ -90,3 +90,25 @@ clear_memory:
       example: conversations
       selector:
         text:
+
+reindex_entities:
+  name: Reindex entities
+  description: >-
+    Rebuild an entity index from the current registries. Only entities whose
+    catalogue text changed are re-embedded, so this is cheap to call.
+  fields:
+    store:
+      name: Store
+      description: Which entity index to sweep. Omit to sweep all of them.
+      required: false
+      selector:
+        text:
+    full:
+      name: Full
+      description: >-
+        Re-embed every entity even if nothing changed. Needed only after
+        switching to a different embedding model.
+      required: false
+      default: false
+      selector:
+        boolean:

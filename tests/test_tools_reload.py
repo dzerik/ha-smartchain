@@ -106,6 +106,7 @@ def test_services_yaml_declares_every_registered_service() -> None:
     from custom_components.smartchain import SERVICE_ANALYZE_IMAGE, SERVICE_ASK
     from custom_components.smartchain.const import (
         SERVICE_CLEAR_MEMORY,
+        SERVICE_REINDEX_ENTITIES,
         SERVICE_RELOAD_TOOLS,
     )
 
@@ -117,6 +118,7 @@ def test_services_yaml_declares_every_registered_service() -> None:
         SERVICE_ANALYZE_IMAGE,
         SERVICE_CLEAR_MEMORY,
         SERVICE_RELOAD_TOOLS,
+        SERVICE_REINDEX_ENTITIES,
     }
     assert set(declared[SERVICE_CLEAR_MEMORY]["fields"]) == {"kind", "agent_id", "store"}
     assert declared[SERVICE_CLEAR_MEMORY]["fields"]["kind"]["selector"]["select"]["options"] == [
@@ -125,3 +127,4 @@ def test_services_yaml_declares_every_registered_service() -> None:
         "logbook",
     ]
     assert "fields" not in declared[SERVICE_RELOAD_TOOLS]
+    assert set(declared[SERVICE_REINDEX_ENTITIES]["fields"]) == {"store", "full"}

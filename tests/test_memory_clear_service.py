@@ -19,6 +19,7 @@ from custom_components.smartchain.const import (
     SERVICE_CLEAR_MEMORY,
     SUBENTRY_TYPE_EMBEDDINGS,
 )
+from custom_components.smartchain.tools.memory.entity_index import EntityIndexer, SweepResult
 
 pytestmark = pytest.mark.usefixtures("enable_custom_integrations")
 
@@ -196,3 +197,65 @@ async def test_clear_memory_unknown_store_raises(hass: HomeAssistant, two_stores
         await hass.services.async_call(
             DOMAIN, SERVICE_CLEAR_MEMORY, {"store": "ghost"}, blocking=True
         )
+
+
+_ENTITY_AND_CONVERSATION_YAML = """
+tools: []
+memory:
+  stores:
+    - name: entities
+      embeddings: "GigaChat Embeddings"
+      source:
+        type: entities
+        preset: minimal
+    - name: conversations
+      embeddings: "GigaChat Embeddings"
+"""
+
+
+@pytest.fixture
+def patched_indexer():
+    """Patch EntityIndexer so `entities` gets an indexer without doing real work."""
+    with patch(
+        "custom_components.smartchain.tools.memory.registry.EntityIndexer",
+        spec=EntityIndexer,
+    ) as indexer_cls:
+        indexer_cls.return_value.start = MagicMock()
+        indexer_cls.return_value.stop = AsyncMock()
+        indexer_cls.return_value.reconcile = AsyncMock(return_value=SweepResult())
+        yield indexer_cls
+
+
+async def test_clear_memory_triggers_a_sweep_for_an_indexed_store(
+    hass: HomeAssistant, tools_dir: Path, patched_store, patched_indexer
+) -> None:
+    """Clearing a `kind: entity` store outside the indexer must not leave the
+    index stale forever — clear_memory schedules a reconciling sweep."""
+    (tools_dir / "tools.yaml").write_text(_ENTITY_AND_CONVERSATION_YAML)
+    _add_embeddings_entry(hass)
+    await async_setup(hass, {})
+    assert hass.data[DOMAIN]["memory"].indexer_for("entities") is not None
+
+    await hass.services.async_call(
+        DOMAIN, SERVICE_CLEAR_MEMORY, {"store": "entities"}, blocking=True
+    )
+    await hass.async_block_till_done()
+
+    patched_indexer.return_value.reconcile.assert_awaited_once_with()
+
+
+async def test_clear_memory_does_not_sweep_a_conversation_store(
+    hass: HomeAssistant, tools_dir: Path, patched_store, patched_indexer
+) -> None:
+    """A plain conversation store has no indexer, so no sweep is scheduled for it."""
+    (tools_dir / "tools.yaml").write_text(_ENTITY_AND_CONVERSATION_YAML)
+    _add_embeddings_entry(hass)
+    await async_setup(hass, {})
+    assert hass.data[DOMAIN]["memory"].indexer_for("conversations") is None
+
+    await hass.services.async_call(
+        DOMAIN, SERVICE_CLEAR_MEMORY, {"store": "conversations"}, blocking=True
+    )
+    await hass.async_block_till_done()
+
+    patched_indexer.return_value.reconcile.assert_not_awaited()
