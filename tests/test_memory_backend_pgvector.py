@@ -25,20 +25,31 @@ def test_build_pg_where_empty() -> None:
 
 def test_build_pg_where_single() -> None:
     clause, params = build_pg_where({"kind": "logbook"}, start_index=2)
-    assert clause == " AND metadata->>'kind' = $2"
-    assert params == ["logbook"]
+    assert clause == " AND metadata->'kind' = $2::jsonb"
+    assert params == ['"logbook"']
 
 
 def test_build_pg_where_multiple_numbers_placeholders_sequentially() -> None:
     clause, params = build_pg_where({"kind": "logbook", "agent_id": "a1"}, start_index=3)
-    assert clause == " AND metadata->>'kind' = $3 AND metadata->>'agent_id' = $4"
-    assert params == ["logbook", "a1"]
+    assert clause == " AND metadata->'kind' = $3::jsonb AND metadata->'agent_id' = $4::jsonb"
+    assert params == ['"logbook"', '"a1"']
 
 
-def test_build_pg_where_casts_non_string_values() -> None:
+def test_build_pg_where_encodes_non_string_values_as_json() -> None:
     clause, params = build_pg_where({"chunk_index": 2}, start_index=1)
-    assert clause == " AND metadata->>'chunk_index' = $1"
+    assert clause == " AND metadata->'chunk_index' = $1::jsonb"
     assert params == ["2"]
+
+
+def test_build_pg_where_encodes_booleans_as_json_not_python_repr() -> None:
+    """`str(True)` is "True", which no jsonb boolean can ever equal."""
+    _clause, params = build_pg_where({"pinned": True, "draft": False}, start_index=1)
+    assert params == ["true", "false"]
+
+
+def test_build_pg_where_encodes_floats_without_python_repr() -> None:
+    _clause, params = build_pg_where({"score": 0.5}, start_index=1)
+    assert params == ["0.5"]
 
 
 @pytest.fixture
@@ -122,6 +133,65 @@ async def test_initialize_dimension_mismatch_raises(
     assert be.is_available is False
 
 
+async def test_dimension_mismatch_names_the_table_to_drop(
+    hass: HomeAssistant, fake_asyncpg, fake_pool
+) -> None:
+    """clear_memory cannot reach an unavailable store, so it must not be advised."""
+    _pool, conn = fake_pool
+    conn.fetchval = AsyncMock(return_value=768)
+    be = PgVectorBackend(hass, dsn="postgresql://user:hunter2@h/db", table="smartchain_memory")
+    with pytest.raises(BackendInitError) as exc:
+        await be.initialize(1536)
+
+    message = str(exc.value)
+    assert "Drop the table smartchain_memory" in message
+    assert "smartchain.reload_tools" in message
+    assert "clear_memory" not in message
+    assert "hunter2" not in message
+
+
+async def test_dimension_lookup_is_schema_qualified(
+    hass: HomeAssistant, fake_asyncpg, fake_pool
+) -> None:
+    """pg_class.relname alone can match a same-named table in another schema."""
+    _pool, conn = fake_pool
+    be = PgVectorBackend(hass, dsn="postgresql://x/y", table="t")
+    await be.initialize(3)
+
+    sql = conn.fetchval.call_args.args[0]
+    assert "to_regclass($1)" in sql
+    assert "relname" not in sql
+
+
+async def test_failed_initialize_does_not_strand_a_pool(
+    hass: HomeAssistant, fake_asyncpg, fake_pool
+) -> None:
+    """reload_tools re-runs initialize; a leaked pool per attempt accumulates."""
+    pool, conn = fake_pool
+    conn.execute = AsyncMock(side_effect=RuntimeError("permission denied for schema public"))
+
+    be = PgVectorBackend(hass, dsn="postgresql://x/y", table="t")
+    with pytest.raises(BackendInitError):
+        await be.initialize(3)
+
+    pool.close.assert_awaited()
+    assert be._pool is None
+
+
+async def test_failed_initialize_on_dimension_mismatch_closes_the_pool(
+    hass: HomeAssistant, fake_asyncpg, fake_pool
+) -> None:
+    pool, conn = fake_pool
+    conn.fetchval = AsyncMock(return_value=768)
+
+    be = PgVectorBackend(hass, dsn="postgresql://x/y", table="t")
+    with pytest.raises(BackendInitError):
+        await be.initialize(1536)
+
+    pool.close.assert_awaited()
+    assert be._pool is None
+
+
 async def test_connection_failure_raises_without_leaking_dsn(
     hass: HomeAssistant, fake_pool
 ) -> None:
@@ -155,7 +225,7 @@ async def test_query_orders_by_cosine_distance(
     assert hits[0].distance == 0.1
     sql = conn.fetch.call_args.args[0]
     assert "<=>" in sql
-    assert "metadata->>'kind'" in sql
+    assert "metadata->'kind' = $3::jsonb" in sql
 
 
 async def test_upsert_uses_on_conflict(hass: HomeAssistant, fake_asyncpg, fake_pool) -> None:

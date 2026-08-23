@@ -21,16 +21,22 @@ def build_pg_where(where: Filter | None, start_index: int) -> tuple[str, list[An
     """Translate the neutral filter into a jsonb WHERE fragment.
 
     `start_index` is the first positional placeholder number to use, so the
-    caller can reserve $1/$2 for the query vector and limit. Values are cast to
-    str because `metadata->>'key'` yields text.
+    caller can reserve $1/$2 for the query vector and limit.
+
+    The comparison is jsonb-to-jsonb (`metadata->'key' = $n::jsonb`), not
+    text-to-text. `metadata->>'key'` renders every value as text, where a
+    Python `True` stringifies to "True" and can never equal the "true" JSON
+    stores; floats are similarly at the mercy of repr. Encoding the value with
+    json.dumps and letting Postgres compare jsonb keeps str, int, float and
+    bool — the whole of `Filter` — matching what `upsert` wrote.
     """
     if not where:
         return "", []
     clauses: list[str] = []
     params: list[Any] = []
     for offset, (key, value) in enumerate(where.items()):
-        clauses.append(f"metadata->>'{key}' = ${start_index + offset}")
-        params.append(str(value))
+        clauses.append(f"metadata->'{key}' = ${start_index + offset}::jsonb")
+        params.append(json.dumps(value))
     return " AND " + " AND ".join(clauses), params
 
 
@@ -72,18 +78,26 @@ class PgVectorBackend:
             async with self._pool.acquire() as conn:
                 await conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
 
+                # to_regclass resolves the name through the session search_path
+                # and yields the one OID this connection would actually read.
+                # Matching on pg_class.relname alone would happily pick up a
+                # same-named table in an unrelated schema.
                 existing_dim = await conn.fetchval(
                     "SELECT a.atttypmod FROM pg_attribute a "
-                    "JOIN pg_class c ON c.oid = a.attrelid "
-                    "WHERE c.relname = $1 AND a.attname = 'embedding'",
+                    "WHERE a.attrelid = to_regclass($1) AND a.attname = 'embedding'",
                     self.table,
                 )
                 if existing_dim is not None and int(existing_dim) != dim:
                     self.is_available = False
+                    # Clearing the store cannot fix this: the vector(N) column
+                    # type outlives a row delete, and a store with a dimension
+                    # conflict never becomes available for smartchain.clear_memory
+                    # to act on. Only dropping the table does it.
                     raise BackendInitError(
                         f"table {self.table} stores {existing_dim}-dimensional vectors "
-                        f"but the configured model produces {dim}. Clear this store "
-                        "with smartchain.clear_memory, then call smartchain.reload_tools."
+                        f"but the configured model produces {dim}. Drop the table "
+                        f"{self.table} in the configured database, then call "
+                        "smartchain.reload_tools."
                     )
 
                 await conn.execute(
@@ -106,10 +120,12 @@ class PgVectorBackend:
                         "slower on large stores."
                     )
         except BackendInitError:
+            await self._discard_pool()
             raise
         except Exception:  # noqa: BLE001
             self.is_available = False
             LOGGER.exception("pgvector schema setup failed")
+            await self._discard_pool()
             raise BackendInitError(
                 "pgvector could not create its table or extension. The database "
                 "user likely lacks privileges; see the Home Assistant log."
@@ -184,11 +200,24 @@ class PgVectorBackend:
             status = await conn.execute(f"DELETE FROM {self.table} WHERE TRUE{clause}", *params)
         return _rowcount(status)
 
+    async def _discard_pool(self) -> None:
+        """Close and drop the pool, tolerating a pool that is already broken.
+
+        `initialize` must not leave a pool behind when it fails: reload_tools
+        re-runs it, so every reload against an unreachable or unprivileged
+        database would otherwise strand another set of live connections.
+        """
+        pool, self._pool = self._pool, None
+        if pool is None:
+            return
+        try:
+            await pool.close()
+        except Exception:  # noqa: BLE001 — teardown must not mask the real cause
+            LOGGER.debug("pgvector pool close failed during cleanup")
+
     async def close(self) -> None:
         self.is_available = False
-        if self._pool is not None:
-            await self._pool.close()
-            self._pool = None
+        await self._discard_pool()
 
 
 def _vector_literal(vector: list[float]) -> str:

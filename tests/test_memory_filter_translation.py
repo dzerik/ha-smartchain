@@ -26,8 +26,8 @@ def test_sqlite_two_conditions_are_anded() -> None:
 
 def test_pg_placeholders_start_where_told() -> None:
     clause, params = build_pg_where({"kind": "logbook"}, start_index=3)
-    assert clause == " AND metadata->>'kind' = $3"
-    assert params == ["logbook"]
+    assert clause == " AND metadata->'kind' = $3::jsonb"
+    assert params == ['"logbook"']
 
 
 def test_pg_empty() -> None:
@@ -40,9 +40,18 @@ def test_qdrant_empty_is_none() -> None:
 
 
 def test_qdrant_must_conditions() -> None:
+    # Qdrant filter keys are JSON paths into the payload, and `upsert` nests
+    # the neutral metadata under a "metadata" key — so the path prefix is
+    # mandatory. Without it every filtered query and delete matches nothing.
     assert build_qdrant_filter({"kind": "logbook"}) == {
-        "must": [{"key": "kind", "match": {"value": "logbook"}}]
+        "must": [{"key": "metadata.kind", "match": {"value": "logbook"}}]
     }
+
+
+def test_qdrant_keys_are_payload_paths_not_bare_names() -> None:
+    flt = build_qdrant_filter({"kind": "logbook", "subentry_id": "s1"})
+    keys = [cond["key"] for cond in flt["must"]]
+    assert keys == ["metadata.kind", "metadata.subentry_id"]
 
 
 def test_all_dialects_handle_the_same_two_key_filter() -> None:
@@ -51,7 +60,13 @@ def test_all_dialects_handle_the_same_two_key_filter() -> None:
     pg_clause, pg_params = build_pg_where(where, start_index=1)
     qdrant = build_qdrant_filter(where)
 
-    assert len(sqlite_params) == 2
-    assert len(pg_params) == 2
-    assert len(qdrant["must"]) == 2
-    assert "kind" in sqlite_clause and "kind" in pg_clause
+    # Arity alone proves nothing: a dialect can emit the right number of
+    # clauses against entirely wrong keys. Assert on key semantics too.
+    assert sqlite_params == ["conversation", "s1"]
+    assert pg_params == ['"conversation"', '"s1"']
+    for key in where:
+        assert f"json_extract(metadata, '$.{key}')" in sqlite_clause
+        assert f"metadata->'{key}'" in pg_clause
+
+    assert [cond["key"] for cond in qdrant["must"]] == ["metadata.kind", "metadata.subentry_id"]
+    assert [cond["match"]["value"] for cond in qdrant["must"]] == ["conversation", "s1"]

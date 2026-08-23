@@ -1,5 +1,6 @@
 """Tests for the Qdrant REST backend against a mocked aiohttp session."""
 
+import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -11,8 +12,10 @@ from custom_components.smartchain.tools.memory.backends.base import (
 )
 from custom_components.smartchain.tools.memory.backends.qdrant import (
     QdrantBackend,
+    QdrantError,
     build_qdrant_filter,
     point_id_for,
+    strip_userinfo,
 )
 
 
@@ -34,10 +37,26 @@ def test_build_qdrant_filter_conditions() -> None:
     flt = build_qdrant_filter({"kind": "logbook", "agent_id": "a1"})
     assert flt == {
         "must": [
-            {"key": "kind", "match": {"value": "logbook"}},
-            {"key": "agent_id", "match": {"value": "a1"}},
+            {"key": "metadata.kind", "match": {"value": "logbook"}},
+            {"key": "metadata.agent_id", "match": {"value": "a1"}},
         ]
     }
+
+
+def test_filter_keys_match_the_nesting_upsert_writes(hass: HomeAssistant) -> None:
+    """The filter path must address the payload shape `upsert` actually stores.
+
+    `upsert` writes {"doc_id": …, "text": …, "metadata": {...}}, so a filter on
+    a bare "kind" addresses a payload key that does not exist and matches
+    nothing — which silently empties every filtered search and delete.
+    """
+    record = VectorRecord("d", [1.0, 0.0, 0.0], "t", {"kind": "logbook"})
+    payload = {"doc_id": record.doc_id, "text": record.text, "metadata": record.metadata}
+
+    key = build_qdrant_filter({"kind": "logbook"})["must"][0]["key"]
+    container, _, leaf = key.rpartition(".")
+    assert container == "metadata"
+    assert payload[container][leaf] == "logbook"
 
 
 def _response(status: int = 200, payload: dict | None = None):
@@ -59,11 +78,9 @@ def session_and_calls():
 
     def _request(method, url, **kwargs):
         calls.append((method, url, kwargs.get("json")))
-        # Extract path from URL
-        if "http://q:6333" in url:
-            path = url.split("http://q:6333", 1)[1]
-        else:
-            path = url
+        # Extract the path from any URL, credentialed hosts included.
+        rest = url.split("://", 1)[-1]
+        path = "/" + rest.split("/", 1)[1] if "/" in rest else "/"
         # Try method+path first, then suffix-only
         method_path = f"{method} {path}"
         if method_path in responses:
@@ -145,7 +162,7 @@ async def test_upsert_maps_doc_id_and_keeps_original_in_payload(
         await be.initialize(3)
         await be.upsert([VectorRecord("logbook_abc", [1.0, 0.0, 0.0], "ta", {"kind": "logbook"})])
 
-    points_calls = [c for c in calls if c[1].endswith("/points") and c[0] == "PUT"]
+    points_calls = [c for c in calls if "/points" in c[1] and c[0] == "PUT"]
     assert points_calls
     point = points_calls[0][2]["points"][0]
     assert point["id"] == point_id_for("logbook_abc")
@@ -188,7 +205,9 @@ async def test_query_translates_filter_and_maps_score(
     assert hits[0].distance == pytest.approx(0.25)
 
     search = [c for c in calls if c[1].endswith("/collections/mem/points/search")][0]
-    assert search[2]["filter"] == {"must": [{"key": "kind", "match": {"value": "logbook"}}]}
+    assert search[2]["filter"] == {
+        "must": [{"key": "metadata.kind", "match": {"value": "logbook"}}]
+    }
 
 
 async def test_unreachable_server_raises_without_leaking_api_key(
@@ -262,3 +281,206 @@ async def test_runtime_failure_leaves_backend_available(
         assert hits == []
         # Backend must remain available after a transient query failure
         assert be.is_available is True
+
+
+async def _ready(hass: HomeAssistant, session, responses, api_key=None, url="http://q:6333"):
+    """Build an initialized backend against the mocked session."""
+    responses["GET /collections/mem"] = _response(404, {})
+    responses["PUT /collections/mem"] = _response(200, {"result": {}})
+    with patch(
+        "custom_components.smartchain.tools.memory.backends.qdrant.async_get_clientsession",
+        return_value=session,
+    ):
+        be = QdrantBackend(hass, url, "mem", api_key, True)
+        await be.initialize(3)
+    return be
+
+
+async def test_writes_wait_for_durability(hass: HomeAssistant, session_and_calls) -> None:
+    """Without wait=true qdrant only acknowledges, so read-after-write races."""
+    session, calls, responses = session_and_calls
+    responses["POST /collections/mem/points/count"] = _response(200, {"result": {"count": 0}})
+    be = await _ready(hass, session, responses)
+
+    with patch(
+        "custom_components.smartchain.tools.memory.backends.qdrant.async_get_clientsession",
+        return_value=session,
+    ):
+        await be.upsert([VectorRecord("a", [1.0, 0.0, 0.0], "ta", {"kind": "logbook"})])
+        await be.delete_where({"kind": "logbook"})
+
+    upsert_url = [c[1] for c in calls if c[0] == "PUT" and "/points" in c[1]][-1]
+    delete_url = [c[1] for c in calls if "/points/delete" in c[1]][-1]
+    assert upsert_url.endswith("?wait=true")
+    assert delete_url.endswith("?wait=true")
+
+
+async def test_retention_delete_waits_for_durability(
+    hass: HomeAssistant, session_and_calls
+) -> None:
+    session, calls, responses = session_and_calls
+    responses["POST /collections/mem/points/scroll"] = _response(
+        200,
+        {
+            "result": {
+                "points": [
+                    {"id": "p1", "payload": {"metadata": {"timestamp": "2020-01-01T00:00:00"}}}
+                ],
+                "next_page_offset": None,
+            }
+        },
+    )
+    be = await _ready(hass, session, responses)
+
+    with patch(
+        "custom_components.smartchain.tools.memory.backends.qdrant.async_get_clientsession",
+        return_value=session,
+    ):
+        assert await be.delete_older_than("2026-01-01T00:00:00") == 1
+
+    delete_url = [c[1] for c in calls if "/points/delete" in c[1]][-1]
+    assert delete_url.endswith("?wait=true")
+
+
+async def test_upsert_raises_when_the_batch_is_rejected(
+    hass: HomeAssistant, session_and_calls
+) -> None:
+    """A rejected write must not look like a success to MemoryStore."""
+    session, _calls, responses = session_and_calls
+    be = await _ready(hass, session, responses)
+    responses["PUT /collections/mem/points?wait=true"] = _response(500, {})
+
+    with patch(
+        "custom_components.smartchain.tools.memory.backends.qdrant.async_get_clientsession",
+        return_value=session,
+    ):
+        with pytest.raises(QdrantError):
+            await be.upsert([VectorRecord("a", [1.0, 0.0, 0.0], "ta", {})])
+
+
+async def test_delete_where_returns_a_real_count_not_a_flag(
+    hass: HomeAssistant, session_and_calls
+) -> None:
+    """The number is summed into smartchain_memory_cleared, so 0/1 is wrong."""
+    session, _calls, responses = session_and_calls
+    responses["POST /collections/mem/points/count"] = _response(200, {"result": {"count": 7}})
+    responses["POST /collections/mem/points/delete?wait=true"] = _response(
+        200, {"result": {"status": "acknowledged"}}
+    )
+    be = await _ready(hass, session, responses)
+
+    with patch(
+        "custom_components.smartchain.tools.memory.backends.qdrant.async_get_clientsession",
+        return_value=session,
+    ):
+        assert await be.delete_where({"kind": "logbook"}) == 7
+
+
+async def test_delete_where_raises_when_qdrant_rejects_it(
+    hass: HomeAssistant, session_and_calls
+) -> None:
+    session, _calls, responses = session_and_calls
+    responses["POST /collections/mem/points/count"] = _response(200, {"result": {"count": 2}})
+    be = await _ready(hass, session, responses)
+    responses["POST /collections/mem/points/delete?wait=true"] = _response(403, {})
+
+    with patch(
+        "custom_components.smartchain.tools.memory.backends.qdrant.async_get_clientsession",
+        return_value=session,
+    ):
+        with pytest.raises(QdrantError):
+            await be.delete_where({"kind": "logbook"})
+
+
+def test_strip_userinfo_removes_credentials() -> None:
+    assert strip_userinfo("https://qu:s3cr3t@host:6333") == "https://host:6333"
+    assert strip_userinfo("http://q:6333") == "http://q:6333"
+    # A port that will not parse must not defeat the scrub.
+    assert "URLSECRET" not in strip_userinfo("https://qu:URLSECRET@badhost.invalid:notaport")
+
+
+async def test_url_password_never_reaches_the_log(
+    hass: HomeAssistant, caplog: pytest.LogCaptureFixture
+) -> None:
+    """aiohttp.InvalidURL.__str__ is the whole URL and it subclasses ClientError."""
+    import aiohttp
+
+    session = MagicMock()
+    session.request = MagicMock(
+        side_effect=aiohttp.InvalidURL("https://qu:URLSECRET@badhost.invalid:notaport")
+    )
+
+    caplog.set_level(logging.DEBUG)
+    with patch(
+        "custom_components.smartchain.tools.memory.backends.qdrant.async_get_clientsession",
+        return_value=session,
+    ):
+        url = "https://qu:URLSECRET@badhost.invalid:6333"
+        be = QdrantBackend(hass, url, "mem", "hunter2", True)
+        with pytest.raises(BackendInitError) as exc:
+            await be.initialize(3)
+
+    assert "URLSECRET" not in caplog.text
+    assert "hunter2" not in caplog.text
+    assert "URLSECRET" not in str(exc.value)
+    assert "hunter2" not in str(exc.value)
+    # `from err` would keep the credentialed URL reachable on __cause__.
+    assert exc.value.__cause__ is None
+
+
+async def test_runtime_transport_failures_do_not_leak_the_url(
+    hass: HomeAssistant, session_and_calls, caplog: pytest.LogCaptureFixture
+) -> None:
+    import aiohttp
+
+    session, _calls, responses = session_and_calls
+    be = await _ready(
+        hass, session, responses, api_key="hunter2", url="https://qu:URLSECRET@h:6333"
+    )
+
+    session.request = MagicMock(
+        side_effect=aiohttp.InvalidURL("https://qu:URLSECRET@badhost.invalid:notaport")
+    )
+    caplog.clear()
+    caplog.set_level(logging.DEBUG)
+    with patch(
+        "custom_components.smartchain.tools.memory.backends.qdrant.async_get_clientsession",
+        return_value=session,
+    ):
+        assert await be.query([1.0, 0.0, 0.0], top_k=3, where=None) == []
+        with pytest.raises(QdrantError):
+            await be.upsert([VectorRecord("a", [1.0, 0.0, 0.0], "ta", {})])
+        with pytest.raises(QdrantError):
+            await be.delete_where(None)
+        with pytest.raises(QdrantError):
+            await be.delete_older_than("2026-01-01T00:00:00")
+
+    assert "URLSECRET" not in caplog.text
+    assert "hunter2" not in caplog.text
+
+
+async def test_dimension_mismatch_names_the_collection_to_delete(
+    hass: HomeAssistant, session_and_calls
+) -> None:
+    """clear_memory cannot reach an unavailable store, so it must not be advised."""
+    session, _calls, responses = session_and_calls
+    responses["GET /collections/mem"] = _response(
+        200, {"result": {"config": {"params": {"vectors": {"size": 768}}}}}
+    )
+
+    with patch(
+        "custom_components.smartchain.tools.memory.backends.qdrant.async_get_clientsession",
+        return_value=session,
+    ):
+        be = QdrantBackend(hass, "https://qu:URLSECRET@h:6333", "mem", "hunter2", True)
+        with pytest.raises(BackendInitError) as exc:
+            await be.initialize(1536)
+
+    message = str(exc.value)
+    assert "Delete the collection mem" in message
+    assert "smartchain.reload_tools" in message
+    assert "clear_memory" not in message
+    # The message reaches users and the LLM: no credential, and no server URL.
+    assert "URLSECRET" not in message
+    assert "hunter2" not in message
+    assert "6333" not in message

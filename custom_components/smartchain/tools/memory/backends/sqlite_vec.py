@@ -9,11 +9,13 @@ replacement.
 import json
 import logging
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 from typing import Any
 
 from homeassistant.core import HomeAssistant
 
+from ....const import MEMORY_SQLITE_SOFT_LIMIT
 from .base import BackendInitError, Filter, VectorHit, VectorRecord
 from .sqlite_numpy import build_where_clause
 
@@ -23,6 +25,12 @@ _GUIDANCE = (
     "The sqlite_vec backend is unavailable on this installation. Switch the "
     "store's backend type to sqlite_numpy, which needs no extension."
 )
+
+# vec0 applies its `k` limit inside the index, before any SQL condition on the
+# joined `docs` row can run. A filtered query therefore has to ask for more
+# neighbours than it needs and narrow them afterwards — see `query`.
+_FILTERED_OVERFETCH_FACTOR = 20
+_FILTERED_OVERFETCH_MIN = 200
 
 
 def _load_sqlite_vec(conn: sqlite3.Connection) -> None:
@@ -57,7 +65,7 @@ class SqliteVecBackend:
     async def initialize(self, dim: int) -> None:
         def _run() -> str | None:
             self.db_path.parent.mkdir(parents=True, exist_ok=True)
-            with self._connect() as conn:
+            with closing(self._connect()) as conn, conn:
                 conn.execute(
                     "CREATE TABLE IF NOT EXISTS docs ("
                     "doc_id TEXT PRIMARY KEY, text TEXT NOT NULL, "
@@ -88,10 +96,14 @@ class SqliteVecBackend:
 
         if stored is not None and int(stored) != dim:
             self.is_available = False
+            # Clearing the store cannot fix this: the recorded dimension and
+            # the vec0 table survive a delete, and a store with a dimension
+            # conflict never becomes available for smartchain.clear_memory to
+            # act on. Only removing the file does it.
             raise BackendInitError(
                 f"stored embedding dimension is {stored} but the configured model "
-                f"produces {dim}. Clear this store with smartchain.clear_memory, "
-                "then call smartchain.reload_tools."
+                f"produces {dim}. Delete the database file {self.db_path}, then "
+                "call smartchain.reload_tools."
             )
 
         self._dim = dim
@@ -102,7 +114,7 @@ class SqliteVecBackend:
             return
 
         def _run() -> None:
-            with self._connect() as conn:
+            with closing(self._connect()) as conn, conn:
                 for rec in records:
                     existing = conn.execute(
                         "SELECT rowid_ref FROM docs WHERE doc_id = ?", (rec.doc_id,)
@@ -137,15 +149,32 @@ class SqliteVecBackend:
             return []
         clause, params = build_where_clause(where)
 
+        # HEURISTIC, and an incomplete one. vec0's `k` is honoured by the index
+        # itself, so the metadata conditions can only narrow the page vec0
+        # already chose. Asking for `top_k` neighbours and filtering afterwards
+        # loses every match that happens to rank below `top_k` non-matches — a
+        # filtered search would return nothing at all whenever the nearest rows
+        # all belong to another kind. Over-fetching widens that window but does
+        # not close it: a record matching the filter but ranked below
+        # `knn_limit` non-matching records is still missed. Backends that can
+        # filter inside the index (sqlite_numpy, pgvector, qdrant) have no such
+        # limit; prefer them when filtered recall must be exact.
+        knn_limit = top_k
+        if clause:
+            knn_limit = min(
+                max(top_k * _FILTERED_OVERFETCH_FACTOR, _FILTERED_OVERFETCH_MIN),
+                MEMORY_SQLITE_SOFT_LIMIT,
+            )
+
         def _run() -> list[Any]:
-            with self._connect() as conn:
+            with closing(self._connect()) as conn:
                 return conn.execute(
                     "SELECT d.doc_id, d.text, d.metadata, v.distance "
                     "FROM vec_docs v "
                     "JOIN docs d ON d.rowid_ref = v.rowid "
                     "WHERE v.embedding MATCH ? AND k = ?" + clause + " "
-                    "ORDER BY v.distance",
-                    [json.dumps(vector), top_k, *params],
+                    "ORDER BY v.distance LIMIT ?",
+                    [json.dumps(vector), knn_limit, *params, top_k],
                 ).fetchall()
 
         rows = await self.hass.async_add_executor_job(_run)
@@ -164,7 +193,7 @@ class SqliteVecBackend:
             return 0
 
         def _run() -> int:
-            with self._connect() as conn:
+            with closing(self._connect()) as conn, conn:
                 rows = conn.execute(
                     "SELECT rowid_ref FROM docs WHERE timestamp != '' AND timestamp < ?",
                     (cutoff_iso,),
@@ -185,7 +214,7 @@ class SqliteVecBackend:
         clause, params = build_where_clause(where)
 
         def _run() -> int:
-            with self._connect() as conn:
+            with closing(self._connect()) as conn, conn:
                 rows = conn.execute(
                     f"SELECT rowid_ref FROM docs WHERE 1=1{clause}", params
                 ).fetchall()

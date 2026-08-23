@@ -35,4 +35,8 @@ dev = [
     "home-assistant-intents>=2026.3.3",
     "jsonschema>=4.0",
     "mcp>=1.0,<2",
+    # Test-only: lets the cross-backend conformance suite actually exercise the
+    # sqlite_vec backend in CI. Deliberately NOT in manifest.json — the runtime
+    # requires no new dependency, and sqlite_vec stays lazy-imported.
+    "sqlite-vec>=0.1",
 ]

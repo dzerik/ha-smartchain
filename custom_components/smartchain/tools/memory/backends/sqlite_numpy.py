@@ -7,6 +7,7 @@ it the one backend guaranteed to work on every installation.
 import json
 import logging
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 from typing import Any
 
@@ -70,7 +71,7 @@ class SqliteNumpyBackend:
     async def initialize(self, dim: int) -> None:
         def _run() -> str | None:
             self.db_path.parent.mkdir(parents=True, exist_ok=True)
-            with self._connect() as conn:
+            with closing(self._connect()) as conn, conn:
                 conn.executescript(_SCHEMA)
                 row = conn.execute("SELECT value FROM _meta WHERE key = 'dim'").fetchone()
                 if row is None:
@@ -86,10 +87,14 @@ class SqliteNumpyBackend:
 
         if stored is not None and int(stored) != dim:
             self.is_available = False
+            # Clearing the store cannot fix this: the recorded dimension
+            # outlives a delete, and a store with a dimension conflict never
+            # becomes available for smartchain.clear_memory to act on. Only
+            # removing the file does it.
             raise BackendInitError(
                 f"stored embedding dimension is {stored} but the configured model "
-                f"produces {dim}. Clear this store with smartchain.clear_memory, "
-                "then call smartchain.reload_tools."
+                f"produces {dim}. Delete the database file {self.db_path}, then "
+                "call smartchain.reload_tools."
             )
 
         self._dim = dim
@@ -110,7 +115,7 @@ class SqliteNumpyBackend:
         ]
 
         def _run() -> int:
-            with self._connect() as conn:
+            with closing(self._connect()) as conn, conn:
                 conn.executemany(
                     "INSERT INTO docs (doc_id, text, metadata, embedding, timestamp) "
                     "VALUES (?, ?, ?, ?, ?) "
@@ -139,7 +144,7 @@ class SqliteNumpyBackend:
         clause, params = build_where_clause(where)
 
         def _run() -> list[sqlite3.Row]:
-            with self._connect() as conn:
+            with closing(self._connect()) as conn, conn:
                 return conn.execute(
                     f"SELECT doc_id, text, metadata, embedding FROM docs WHERE 1=1{clause}",
                     params,
@@ -177,7 +182,7 @@ class SqliteNumpyBackend:
             return 0
 
         def _run() -> int:
-            with self._connect() as conn:
+            with closing(self._connect()) as conn, conn:
                 cur = conn.execute(
                     "DELETE FROM docs WHERE timestamp != '' AND timestamp < ?",
                     (cutoff_iso,),
@@ -192,13 +197,13 @@ class SqliteNumpyBackend:
         clause, params = build_where_clause(where)
 
         def _run() -> int:
-            with self._connect() as conn:
+            with closing(self._connect()) as conn, conn:
                 cur = conn.execute(f"DELETE FROM docs WHERE 1=1{clause}", params)
                 return cur.rowcount
 
         return await self.hass.async_add_executor_job(_run)
 
     async def close(self) -> None:
-        # Connections are opened per operation and closed by the context
-        # manager, so there is nothing long-lived to release.
+        # Connections are opened per operation and closed by contextlib.closing,
+        # so there is nothing long-lived to release.
         self.is_available = False

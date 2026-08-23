@@ -112,5 +112,23 @@ async def test_dimension_mismatch_raises(hass: HomeAssistant, tmp_path) -> None:
     assert other.is_available is False
 
 
+async def test_dimension_mismatch_names_the_file_to_delete(hass: HomeAssistant, tmp_path) -> None:
+    """A dimension conflict makes the store unavailable, so clear_memory cannot
+    reach it — and would not reset the recorded dimension even if it could."""
+    path = tmp_path / "memory.db"
+    be = SqliteNumpyBackend(hass, path)
+    await be.initialize(3)
+    await be.close()
+
+    other = SqliteNumpyBackend(hass, path)
+    with pytest.raises(BackendInitError) as exc:
+        await other.initialize(768)
+
+    message = str(exc.value)
+    assert f"Delete the database file {path}" in message
+    assert "smartchain.reload_tools" in message
+    assert "clear_memory" not in message
+
+
 async def test_query_on_empty_store_returns_empty(backend) -> None:
     assert await backend.query([1.0, 0.0, 0.0], top_k=5, where=None) == []

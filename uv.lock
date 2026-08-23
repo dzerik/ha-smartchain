@@ -2268,6 +2268,7 @@ dev = [
     { name = "pytest-homeassistant-custom-component", version = "0.13.357", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.14.2'" },
     { name = "pyturbojpeg" },
     { name = "ruff" },
+    { name = "sqlite-vec" },
 ]
 
 [package.metadata]
@@ -2288,6 +2289,7 @@ dev = [
     { name = "pytest-homeassistant-custom-component", specifier = ">=0.13" },
     { name = "pyturbojpeg", specifier = ">=2.0" },
     { name = "ruff", specifier = ">=0.15" },
+    { name = "sqlite-vec", specifier = ">=0.1" },
 ]
 
 [[package]]
@@ -6408,6 +6410,18 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/0d/c9/f14fdf71bb8957e0c7e39db69bbdf12b5c80f4ef775fdfa127bf4e0d6760/sqlalchemy-2.0.51-cp314-cp314t-win32.whl", hash = "sha256:9161cfc9efce70d1715f47d6ff40f79c6778c00d53be4fbc09d70301e4b83ba7", size = 2151313, upload-time = "2026-06-15T16:03:39.127Z" },
     { url = "https://files.pythonhosted.org/packages/6a/c6/673e618e6f4f297e126d9b56ea2f6478708f6c1af4e3223835c22e2c3697/sqlalchemy-2.0.51-cp314-cp314t-win_amd64.whl", hash = "sha256:159bb6ba32059f57ad7375a8f50d844dd2f19d14954ecf820cd33e20debd46b2", size = 2186280, upload-time = "2026-06-15T16:03:40.569Z" },
     { url = "https://files.pythonhosted.org/packages/e2/22/dbf013a12ec759e54a34a119e9e217435b3f71b2dd5c61a7ade0a25dae87/sqlalchemy-2.0.51-py3-none-any.whl", hash = "sha256:bb024d8b621d0be75f4f44ecc7c950450026e76d66dc8f791bb5331d7fed59d5", size = 1944334, upload-time = "2026-06-15T16:09:22.418Z" },
+]
+
+[[package]]
+name = "sqlite-vec"
+version = "0.1.10a4"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f0/5b/f993763030dc4bad04b8fe437c34c5595709e17727cd4a3c4e3a766a1497/sqlite_vec-0.1.10a4-py3-none-macosx_10_6_x86_64.whl", hash = "sha256:d5008e4ed863ed30a52489b8989a1df3dd9b7c8fe3b4fc526ccdb83c3c50661f", size = 179091, upload-time = "2026-05-18T06:54:31.902Z" },
+    { url = "https://files.pythonhosted.org/packages/f2/52/ca3edf018d67f7736ad7520770b66031063b54f8a0b1bc3622ead3a9f646/sqlite_vec-0.1.10a4-py3-none-macosx_11_0_arm64.whl", hash = "sha256:8d1b8cffdd8fe86d48efc3e447569da3874e4cf7d61ad2ddf5a8ece102294b0e", size = 197402, upload-time = "2026-05-18T06:54:33.456Z" },
+    { url = "https://files.pythonhosted.org/packages/21/b4/571bc81c408521eb2390dcfee987ebeda8a63f3cf765626381a6f0191274/sqlite_vec-0.1.10a4-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:60f8fada13f6e48c2ea14709ba9f30429a13d3a291616671b62ca48bb36aebcb", size = 190124, upload-time = "2026-05-18T06:54:34.925Z" },
+    { url = "https://files.pythonhosted.org/packages/79/27/57ccbf098b2bb4ab4f0ee138cf1e38235f84636f74e0a52464b9a8aa1c0e/sqlite_vec-0.1.10a4-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.manylinux1_x86_64.whl", hash = "sha256:f1897fa54780aaee4ce216091a51193f6383060099325360163550836f803eff", size = 213876, upload-time = "2026-05-18T06:54:35.949Z" },
+    { url = "https://files.pythonhosted.org/packages/73/26/9f64179d13d2032edcf7b6ab8539d600db3fa08a359a0859c0daa2bf2b86/sqlite_vec-0.1.10a4-py3-none-win_amd64.whl", hash = "sha256:21473f81e58536f2594e4196a03c19a553476c834d97be4d03a2bb0a7d51e1c3", size = 310292, upload-time = "2026-05-18T06:54:36.876Z" },
 ]
 
 [[package]]

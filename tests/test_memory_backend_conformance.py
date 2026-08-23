@@ -90,6 +90,21 @@ async def test_metadata_filter_narrows_results(backend) -> None:
     assert [h.doc_id for h in hits] == ["b"]
 
 
+async def test_filter_is_applied_before_the_top_k_cut(backend) -> None:
+    """Matching records ranked below non-matching ones must still be returned.
+
+    A backend that asks its index for `top_k` neighbours and only then applies
+    the metadata filter returns nothing here: the ten `logbook` rows are all
+    nearer the query than the three `conversation` rows.
+    """
+    near = [_rec(f"log{i}", [1.0, float(i) / 1000, 0.0], kind="logbook") for i in range(10)]
+    far = [_rec(f"conv{i}", [0.2, 1.0, float(i) / 1000], kind="conversation") for i in range(3)]
+    await backend.upsert(near + far)
+
+    hits = await backend.query([1.0, 0.0, 0.0], top_k=3, where={"kind": "conversation"})
+    assert sorted(h.doc_id for h in hits) == ["conv0", "conv1", "conv2"]
+
+
 async def test_upsert_same_doc_id_replaces(backend) -> None:
     await backend.upsert([_rec("a", [1.0, 0.0, 0.0])])
     await backend.upsert([_rec("a", [0.0, 0.0, 1.0])])
