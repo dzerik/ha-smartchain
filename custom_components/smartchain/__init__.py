@@ -179,10 +179,15 @@ async def _reload_registry(hass: HomeAssistant) -> int:
         await manager.start()
 
     # --- Memory subsystem: build first, swap only on success ---
+    # Constructed outside the try so the failure path can always close it:
+    # build() may have registered and started retention / logbook tasks for the
+    # stores it got through before raising, and discarding the object without a
+    # shutdown() would leak those timers for the life of the process.
+    new_memory = MemoryRegistry(hass)
     try:
-        new_memory = MemoryRegistry(hass)
         await new_memory.build(result.memory_settings, _memory_persist_dir(hass))
     except Exception:  # noqa: BLE001
+        await new_memory.shutdown()
         LOGGER.exception("memory rebuild failed; keeping the previous registry")
     else:
         old_memory: MemoryRegistry | None = hass.data[DOMAIN].get("memory")
@@ -403,6 +408,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     entry.async_on_unload(entry.add_update_listener(update_listener))
 
+    # `async_setup` runs once per HA run, so if a previous unload tore the shared
+    # subsystems down (last entry removed, or the user hitting "Reload" on their
+    # only entry) nothing else would ever bring them back. Rebuild here, gated on
+    # the marker rather than on "the registry is empty" — an install with no
+    # `memory:` block legitimately has an empty registry, and rebuilding on that
+    # would re-read tools.yaml and bounce every MCP server on each entry setup.
+    if hass.data.get(DOMAIN, {}).pop("subsystems_stopped", False):
+        try:
+            await _reload_registry(hass)
+        except LoaderError as err:
+            LOGGER.error("SmartChain tools.yaml load failed on entry setup: %s", err)
+
     subentries = entry.subentries
     if subentries:
         clients: dict[str, object] = {}
@@ -439,4 +456,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         memory: MemoryRegistry | None = hass.data.get(DOMAIN, {}).get("memory")
         if memory is not None:
             await memory.shutdown()
+        # Mark the teardown so the next `async_setup_entry` rebuilds both — a
+        # reload of the only config entry must not leave memory and MCP dead for
+        # the rest of the HA run.
+        if DOMAIN in hass.data:
+            hass.data[DOMAIN]["subsystems_stopped"] = True
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)

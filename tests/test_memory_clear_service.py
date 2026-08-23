@@ -130,7 +130,11 @@ async def test_clear_memory_unknown_store_raises(
     _add_embeddings_entry(hass)
     await async_setup(hass, {})
 
-    with pytest.raises(HomeAssistantError):
+    # Assert the registry actually built: without this the empty-registry guard
+    # would raise the same error and the unknown-store guard would go untested.
+    assert hass.data[DOMAIN]["memory"].names() == ["conversations"]
+
+    with pytest.raises(HomeAssistantError, match="unknown memory store"):
         await hass.services.async_call(
             DOMAIN, SERVICE_CLEAR_MEMORY, {"store": "nope"}, blocking=True
         )

@@ -99,6 +99,32 @@ async def test_registry_lands_in_hass_data(
     assert sorted(registry.names()) == ["conversations", "entities"]
 
 
+async def test_registry_is_rebuilt_after_an_entry_reload(
+    hass: HomeAssistant, mock_llm_client, tmp_path_factory, patched_store
+) -> None:
+    """Unloading the only entry then setting it up again must revive memory.
+
+    `async_setup` runs once per HA run, so nothing else would repopulate the
+    registry the unload emptied.
+    """
+    entry = await _setup(hass, tmp_path_factory, mock_llm_client)
+    assert sorted(hass.data[DOMAIN]["memory"].names()) == ["conversations", "entities"]
+
+    await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+    assert hass.data[DOMAIN]["memory"].names() == []
+
+    with patch(
+        "custom_components.smartchain.get_client",
+        new_callable=AsyncMock,
+        return_value=mock_llm_client,
+    ):
+        await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    assert sorted(hass.data[DOMAIN]["memory"].names()) == ["conversations", "entities"]
+
+
 async def test_only_flagged_stores_receive_conversation_ingest(
     hass: HomeAssistant, mock_llm_client, tmp_path_factory, patched_store
 ) -> None:
