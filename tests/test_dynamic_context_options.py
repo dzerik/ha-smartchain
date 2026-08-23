@@ -1,5 +1,8 @@
 """The three dynamic-context options reach the subentry form and its data."""
 
+import json
+from pathlib import Path
+
 import pytest
 from homeassistant.core import HomeAssistant
 from pytest_homeassistant_custom_component.common import MockConfigEntry
@@ -20,6 +23,18 @@ from custom_components.smartchain.const import (
 )
 
 pytestmark = pytest.mark.usefixtures("enable_custom_integrations")
+
+_COMPONENT_DIR = Path(__file__).resolve().parents[1] / "custom_components" / "smartchain"
+_TRANSLATION_FILES = {
+    "strings": _COMPONENT_DIR / "strings.json",
+    "en": _COMPONENT_DIR / "translations" / "en.json",
+    "ru": _COMPONENT_DIR / "translations" / "ru.json",
+}
+_NEW_DYNAMIC_CONTEXT_KEYS = {
+    CONF_DYNAMIC_ENTITY_CONTEXT,
+    CONF_DYNAMIC_CONTEXT_PRESET,
+    CONF_DYNAMIC_CONTEXT_ON_ASSIST,
+}
 
 
 def test_defaults_are_what_the_spec_says() -> None:
@@ -79,3 +94,33 @@ async def test_the_options_round_trip_into_subentry_data(
     assert result["data"][CONF_DYNAMIC_ENTITY_CONTEXT] is False
     assert result["data"][CONF_DYNAMIC_CONTEXT_PRESET] == "minimal"
     assert result["data"][CONF_DYNAMIC_CONTEXT_ON_ASSIST] is True
+
+
+def test_the_new_options_have_labels_everywhere_they_can_render() -> None:
+    """Pin translation-key parity for the fields this subsystem added.
+
+    ``_subentry_schema`` is shared by the conversation subentry form
+    (``config_subentries.conversation.step.{user,reconfigure}.data``) and the
+    entry-level options form (``options.step.settings.data``). All three new
+    dynamic-context keys must carry a label in all three translation files,
+    in all three of those blocks — otherwise a user sees a raw key instead
+    of a label wherever the shared schema is rendered.
+
+    Narrowed to the keys this subsystem introduces. Two pre-existing fields
+    (``allowed_tools``, ``enable_multi_agent_tools``) are also rendered
+    conditionally by the same shared schema and already lack labels
+    everywhere, in all three files — that gap predates this change and is
+    reported separately rather than asserted here, since fixing it is out
+    of this subsystem's scope.
+    """
+    for file_label, path in _TRANSLATION_FILES.items():
+        data = json.loads(path.read_text(encoding="utf-8"))
+        conv_step = data["config_subentries"]["conversation"]["step"]
+        blocks = {
+            "conv_user": conv_step["user"]["data"],
+            "conv_reconfigure": conv_step["reconfigure"]["data"],
+            "options_settings": data["options"]["step"]["settings"]["data"],
+        }
+        for block_name, block in blocks.items():
+            missing = _NEW_DYNAMIC_CONTEXT_KEYS - block.keys()
+            assert not missing, f"{file_label}.{block_name} is missing labels for {missing}"
