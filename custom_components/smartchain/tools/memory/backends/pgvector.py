@@ -181,6 +181,27 @@ class PgVectorBackend:
             for r in rows
         ]
 
+    async def update_metadata(self, doc_id: str, metadata: dict[str, Any]) -> bool:
+        if not self.is_available:
+            return False
+        async with self._pool.acquire() as conn:
+            status = await conn.execute(
+                f"UPDATE {self.table} SET metadata = $1::jsonb WHERE doc_id = $2",
+                json.dumps(metadata, ensure_ascii=False),
+                doc_id,
+            )
+        return _rowcount(status) > 0
+
+    async def list_metadata(self, where: Filter | None = None) -> dict[str, dict[str, Any]]:
+        if not self.is_available:
+            return {}
+        clause, params = build_pg_where(where, start_index=1)
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                f"SELECT doc_id, metadata FROM {self.table} WHERE TRUE{clause}", *params
+            )
+        return {row["doc_id"]: json.loads(row["metadata"]) for row in rows}
+
     async def delete_older_than(self, cutoff_iso: str) -> int:
         if not self.is_available:
             return 0

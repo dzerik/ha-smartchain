@@ -513,6 +513,79 @@ async def test_query_raises_on_non_2xx_status(hass: HomeAssistant, session_and_c
     assert "hunter2" not in message
 
 
+async def test_list_metadata_follows_the_scroll_cursor(
+    hass: HomeAssistant, session_and_calls
+) -> None:
+    session, _calls, responses = session_and_calls
+    be = await _ready(hass, session, responses)
+    pages = [
+        (
+            200,
+            {
+                "result": {
+                    "points": [{"payload": {"metadata": {"kind": "entity"}, "doc_id": "a"}}],
+                    "next_page_offset": "cur1",
+                }
+            },
+        ),
+        (
+            200,
+            {
+                "result": {
+                    "points": [{"payload": {"metadata": {"kind": "entity"}, "doc_id": "b"}}],
+                    "next_page_offset": None,
+                }
+            },
+        ),
+    ]
+    with patch.object(be, "_request", new=AsyncMock(side_effect=pages)) as req:
+        result = await be.list_metadata({"kind": "entity"})
+
+    assert set(result) == {"a", "b"}
+    assert req.await_count == 2
+    assert req.await_args_list[1].args[2]["offset"] == "cur1"
+
+
+async def test_update_metadata_sets_payload_and_waits(
+    hass: HomeAssistant, session_and_calls
+) -> None:
+    session, _calls, responses = session_and_calls
+    be = await _ready(hass, session, responses)
+    with patch.object(be, "_request", new=AsyncMock(return_value=(200, {}))) as req:
+        assert await be.update_metadata("a", {"kind": "entity", "state": "on"}) is True
+
+    path = req.await_args.args[1]
+    assert "points/payload" in path
+    assert "wait=true" in path
+
+
+async def test_update_metadata_raises_on_a_bad_status(
+    hass: HomeAssistant, session_and_calls
+) -> None:
+    session, _calls, responses = session_and_calls
+    be = await _ready(hass, session, responses)
+    with (
+        patch.object(be, "_request", new=AsyncMock(return_value=(500, {}))),
+        pytest.raises(QdrantError),
+    ):
+        await be.update_metadata("a", {"kind": "entity"})
+
+
+async def test_update_metadata_is_a_no_op_when_backend_is_unavailable(
+    hass: HomeAssistant,
+) -> None:
+    """Carried forward from Task 1: the is_available guard must not be bypassed."""
+    be = QdrantBackend(hass, "http://q:6333", "mem", None, True)
+    assert await be.update_metadata("a", {"kind": "entity"}) is False
+
+
+async def test_list_metadata_is_a_no_op_when_backend_is_unavailable(
+    hass: HomeAssistant,
+) -> None:
+    be = QdrantBackend(hass, "http://q:6333", "mem", None, True)
+    assert await be.list_metadata() == {}
+
+
 async def test_store_search_degrades_to_empty_when_the_backend_raises(
     hass: HomeAssistant, caplog
 ) -> None:

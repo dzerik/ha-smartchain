@@ -278,6 +278,67 @@ class QdrantBackend:
             )
         return hits
 
+    async def update_metadata(self, doc_id: str, metadata: dict[str, Any]) -> bool:
+        """Replace one point's metadata payload without touching its vector.
+
+        Known divergence from the SQL backends: Qdrant's payload-set endpoint
+        reports success even for a point id that does not exist, so this
+        always returns True once the request is accepted. The indexer never
+        calls this for an unknown doc_id, so no pre-check is added to fake
+        the SQL backends' "existed" semantics.
+        """
+        if not self.is_available:
+            return False
+        try:
+            status, _body = await self._request(
+                "POST",
+                f"/collections/{self.collection}/points/payload?wait=true",
+                {"payload": {"metadata": metadata}, "points": [point_id_for(doc_id)]},
+            )
+        except (aiohttp.ClientError, OSError, TimeoutError) as err:
+            self._log_transport_failure("update_metadata", err)
+            raise QdrantError("qdrant update_metadata failed to reach the server") from None
+        self._check_status(status, "update_metadata")
+        return True
+
+    async def list_metadata(self, where: Filter | None = None) -> dict[str, dict[str, Any]]:
+        """Every stored point's metadata, keyed by doc_id, via the scroll API."""
+        if not self.is_available:
+            return {}
+        found: dict[str, dict[str, Any]] = {}
+        offset: Any = None
+        try:
+            while True:
+                payload: dict[str, Any] = {
+                    "limit": 256,
+                    "with_payload": True,
+                    "with_vector": False,
+                }
+                flt = build_qdrant_filter(where)
+                if flt is not None:
+                    payload["filter"] = flt
+                if offset is not None:
+                    payload["offset"] = offset
+
+                status, body = await self._request(
+                    "POST", f"/collections/{self.collection}/points/scroll", payload
+                )
+                self._check_status(status, "list_metadata scroll")
+
+                result = body.get("result") or {}
+                for point in result.get("points") or []:
+                    point_payload = point.get("payload") or {}
+                    doc_id = point_payload.get("doc_id")
+                    if doc_id:
+                        found[doc_id] = point_payload.get("metadata") or {}
+
+                offset = result.get("next_page_offset")
+                if offset is None:
+                    return found
+        except (aiohttp.ClientError, OSError, TimeoutError) as err:
+            self._log_transport_failure("list_metadata scroll", err)
+            raise QdrantError("qdrant list_metadata failed to reach the server") from None
+
     async def delete_older_than(self, cutoff_iso: str) -> int:
         if not self.is_available:
             return 0

@@ -236,3 +236,64 @@ async def test_upsert_uses_on_conflict(hass: HomeAssistant, fake_asyncpg, fake_p
 
     sql = conn.executemany.call_args.args[0]
     assert "ON CONFLICT (doc_id) DO UPDATE" in sql
+
+
+async def test_update_metadata_issues_a_scoped_update(
+    hass: HomeAssistant, fake_asyncpg, fake_pool
+) -> None:
+    _pool, conn = fake_pool
+    be = PgVectorBackend(hass, dsn="postgresql://x/y", table="t")
+    await be.initialize(3)
+    conn.execute.return_value = "UPDATE 1"
+
+    assert await be.update_metadata("a", {"kind": "entity"}) is True
+
+    sql = conn.execute.call_args.args[0]
+    assert "UPDATE" in sql and "metadata" in sql
+    assert "WHERE doc_id = $2" in sql
+
+
+async def test_update_metadata_reports_a_missing_doc(
+    hass: HomeAssistant, fake_asyncpg, fake_pool
+) -> None:
+    _pool, conn = fake_pool
+    be = PgVectorBackend(hass, dsn="postgresql://x/y", table="t")
+    await be.initialize(3)
+    conn.execute.return_value = "UPDATE 0"
+
+    assert await be.update_metadata("nope", {"kind": "entity"}) is False
+
+
+async def test_list_metadata_filters_and_keys_by_doc_id(
+    hass: HomeAssistant, fake_asyncpg, fake_pool
+) -> None:
+    _pool, conn = fake_pool
+    be = PgVectorBackend(hass, dsn="postgresql://x/y", table="t")
+    await be.initialize(3)
+    conn.fetch = AsyncMock(
+        return_value=[
+            {"doc_id": "a", "metadata": '{"kind": "entity"}'},
+            {"doc_id": "b", "metadata": '{"kind": "entity"}'},
+        ]
+    )
+
+    result = await be.list_metadata({"kind": "entity"})
+
+    assert set(result) == {"a", "b"}
+    assert result["a"]["kind"] == "entity"
+    assert "metadata->" in conn.fetch.call_args.args[0]
+
+
+async def test_update_metadata_is_a_no_op_when_backend_is_unavailable(
+    hass: HomeAssistant,
+) -> None:
+    """Carried forward from Task 1: the is_available guard must not be bypassed."""
+    be = PgVectorBackend(hass, dsn="postgresql://x/y", table="t")
+    assert await be.update_metadata("a", {"kind": "entity"}) is False
+
+
+async def test_list_metadata_is_a_no_op_when_backend_is_unavailable(
+    hass: HomeAssistant,
+) -> None:
+    be = PgVectorBackend(hass, dsn="postgresql://x/y", table="t")
+    assert await be.list_metadata() == {}
