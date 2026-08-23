@@ -3,19 +3,25 @@
 import asyncio
 import logging
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from homeassistant.const import EVENT_HOMEASSISTANT_STARTED
 from homeassistant.core import CoreState, Event, HomeAssistant, callback
 from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
-from homeassistant.helpers.event import async_call_later
+from homeassistant.helpers.event import (
+    async_call_later,
+    async_track_state_change_event,
+    async_track_time_interval,
+)
+from homeassistant.util import dt as dt_util
 
 from ...const import (
     ENTITY_INDEX_BATCH_PAUSE_SECONDS,
     ENTITY_INDEX_BATCH_SIZE,
     ENTITY_REGISTRY_DEBOUNCE_SECONDS,
+    ENTITY_STATE_FLUSH_SECONDS,
 )
 from .config import EntitySourceConfig
 from .entity_doc import build_metadata, doc_id_for, render_catalogue
@@ -49,6 +55,8 @@ class EntityIndexer:
         self._task: asyncio.Task | None = None
         self._unsub_debounce = None
         self._removal_tasks: set[asyncio.Task] = set()
+        self._pending_states: dict[str, str] = {}
+        self._indexed_metadata: dict[str, dict[str, str]] = {}
 
     def _state_of(self, entity_id: str) -> str | None:
         if not self.config.index_states:
@@ -118,6 +126,7 @@ class EntityIndexer:
             batch = pending[index : index + ENTITY_INDEX_BATCH_SIZE]
             for cand, text, metadata in batch:
                 await self.store.add(text, metadata, doc_id=doc_id_for(cand.entity_id))
+                self._indexed_metadata[doc_id_for(cand.entity_id)] = metadata
             if index + ENTITY_INDEX_BATCH_SIZE < len(pending):
                 await asyncio.sleep(ENTITY_INDEX_BATCH_PAUSE_SECONDS)
 
@@ -137,6 +146,8 @@ class EntityIndexer:
             batch = orphans[index : index + ENTITY_INDEX_BATCH_SIZE]
             for entity_id in batch:
                 removed += await self.store.clear({"kind": "entity", "entity_id": entity_id})
+                self._indexed_metadata.pop(doc_id_for(entity_id), None)
+                self._pending_states.pop(entity_id, None)
             if index + ENTITY_INDEX_BATCH_SIZE < len(orphans):
                 await asyncio.sleep(ENTITY_INDEX_BATCH_PAUSE_SECONDS)
         return removed
@@ -157,6 +168,20 @@ class EntityIndexer:
         else:
             self._unsubs.append(
                 self.hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, self._on_hass_started)
+            )
+
+        if self.config.index_states:
+            tracked = list(resolve_candidates(self.hass, self.config))
+            if tracked:
+                self._unsubs.append(
+                    async_track_state_change_event(self.hass, tracked, self._on_state)
+                )
+            self._unsubs.append(
+                async_track_time_interval(
+                    self.hass,
+                    self._on_flush_interval,
+                    timedelta(seconds=ENTITY_STATE_FLUSH_SECONDS),
+                )
             )
 
     async def stop(self) -> None:
@@ -197,6 +222,8 @@ class EntityIndexer:
         if data.get("action") == "remove":
             entity_id = data.get("entity_id")
             if entity_id:
+                self._indexed_metadata.pop(doc_id_for(entity_id), None)
+                self._pending_states.pop(entity_id, None)
                 task = self.hass.async_create_background_task(
                     self.store.clear({"kind": "entity", "entity_id": entity_id}),
                     name="smartchain_entity_index_remove",
@@ -235,3 +262,44 @@ class EntityIndexer:
             return
         self._cancel_debounce()
         await self.reconcile()
+
+    @callback
+    def _on_state(self, event: Event) -> None:
+        """Coalesce by entity_id — a flapping sensor must not cost a write per event."""
+        new_state = event.data.get("new_state")
+        if new_state is not None:
+            self._pending_states[new_state.entity_id] = new_state.state
+
+    @callback
+    def _on_flush_interval(self, _now: datetime) -> None:
+        self.hass.async_create_background_task(
+            self._flush_states(), name="smartchain_entity_state_flush"
+        )
+
+    async def _flush_states(self) -> None:
+        """Write coalesced states as metadata. Issues no embedding call at all.
+
+        An entity is only known to have a document once this indexer has swept
+        it: `list_metadata` is the source of truth, but a store double used in
+        tests (or a backend with eventual consistency) may not yet reflect a
+        write this same process just made, so the sweep's own record of what
+        it wrote (`_indexed_metadata`) is consulted as a fallback rather than
+        writing blind.
+        """
+        if not self._pending_states or not self.store.is_available:
+            return
+        batch, self._pending_states = self._pending_states, {}
+
+        stored = await self.store.list_metadata({"kind": "entity"})
+        now = dt_util.utcnow().isoformat()
+        for entity_id, state in batch.items():
+            doc_id = doc_id_for(entity_id)
+            metadata = stored.get(doc_id) or self._indexed_metadata.get(doc_id)
+            if metadata is None:
+                continue
+            try:
+                await self.store.update_metadata(
+                    doc_id, {**metadata, "state": state, "state_updated": now}
+                )
+            except Exception:  # noqa: BLE001 — one entity must not stop the flush
+                LOGGER.exception("entity state flush failed for %s", entity_id)
