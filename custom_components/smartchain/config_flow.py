@@ -34,6 +34,9 @@ from .const import (
     CONF_CHAT_HISTORY,
     CONF_CHAT_MODEL,
     CONF_CHAT_MODEL_USER,
+    CONF_DYNAMIC_CONTEXT_ON_ASSIST,
+    CONF_DYNAMIC_CONTEXT_PRESET,
+    CONF_DYNAMIC_ENTITY_CONTEXT,
     CONF_ENABLE_HISTORY_TOOL,
     CONF_ENABLE_MULTI_AGENT_TOOLS,
     CONF_ENGINE,
@@ -49,6 +52,8 @@ from .const import (
     CONF_VERIFY_SSL,
     DEFAULT_CHAT_HISTORY,
     DEFAULT_CHAT_MODEL,
+    DEFAULT_DYNAMIC_CONTEXT_ON_ASSIST,
+    DEFAULT_DYNAMIC_ENTITY_CONTEXT,
     DEFAULT_ENABLE_HISTORY_TOOL,
     DEFAULT_ENABLE_MULTI_AGENT_TOOLS,
     DEFAULT_OLLAMA_BASE_URL,
@@ -60,6 +65,8 @@ from .const import (
     DEFAULT_VERIFY_SSL,
     DOMAIN,
     ENGINE_MODELS,
+    ENTITY_DEFAULT_PRESET,
+    ENTITY_PRESETS,
     ID_ANTHROPIC,
     ID_DEEPSEEK,
     ID_GIGACHAT,
@@ -408,6 +415,37 @@ def _subentry_schema(
                     )
                 },
                 default=DEFAULT_ENABLE_HISTORY_TOOL,
+            ): bool,
+            vol.Optional(
+                CONF_DYNAMIC_ENTITY_CONTEXT,
+                description={
+                    "suggested_value": options.get(
+                        CONF_DYNAMIC_ENTITY_CONTEXT, DEFAULT_DYNAMIC_ENTITY_CONTEXT
+                    )
+                },
+                default=DEFAULT_DYNAMIC_ENTITY_CONTEXT,
+            ): bool,
+            vol.Optional(
+                CONF_DYNAMIC_CONTEXT_PRESET,
+                description={
+                    "suggested_value": options.get(
+                        CONF_DYNAMIC_CONTEXT_PRESET, ENTITY_DEFAULT_PRESET
+                    )
+                },
+                default=ENTITY_DEFAULT_PRESET,
+            ): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    mode=SelectSelectorMode("dropdown"), options=ENTITY_PRESETS
+                )
+            ),
+            vol.Optional(
+                CONF_DYNAMIC_CONTEXT_ON_ASSIST,
+                description={
+                    "suggested_value": options.get(
+                        CONF_DYNAMIC_CONTEXT_ON_ASSIST, DEFAULT_DYNAMIC_CONTEXT_ON_ASSIST
+                    )
+                },
+                default=DEFAULT_DYNAMIC_CONTEXT_ON_ASSIST,
             ): bool,
         }
     )

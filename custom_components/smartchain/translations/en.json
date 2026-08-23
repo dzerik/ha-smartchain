@@ -104,7 +104,10 @@
             "verify_ssl": "Verify SSL Certificates",
             "process_builtin_sentences": "Process HA Builtin Sentences",
             "chat_history": "Chat History",
-            "enable_history_tool": "State History Tool (LLM can query past device states)"
+            "enable_history_tool": "State History Tool (LLM can query past device states)",
+            "dynamic_entity_context": "Dynamic entity context (send a compact map of the home plus what the message is about, instead of every entity)",
+            "dynamic_context_preset": "Which entities the map covers",
+            "dynamic_context_on_assist": "Also add matched entities when the Assist API is enabled"
           }
         },
         "reconfigure": {
@@ -120,7 +123,10 @@
             "verify_ssl": "Verify SSL Certificates",
             "process_builtin_sentences": "Process HA Builtin Sentences",
             "chat_history": "Chat History",
-            "enable_history_tool": "State History Tool (LLM can query past device states)"
+            "enable_history_tool": "State History Tool (LLM can query past device states)",
+            "dynamic_entity_context": "Dynamic entity context (send a compact map of the home plus what the message is about, instead of every entity)",
+            "dynamic_context_preset": "Which entities the map covers",
+            "dynamic_context_on_assist": "Also add matched entities when the Assist API is enabled"
           }
         }
       },

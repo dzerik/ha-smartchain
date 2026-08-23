@@ -317,3 +317,20 @@ ENTITY_MEANINGFUL_DEVICE_CLASSES = [
 # would forward-reference a name that doesn't exist yet at that point in the
 # module and raise NameError on import.
 RESERVED_TOOL_NAMES = frozenset({HISTORY_TOOL_NAME, DELEGATE_TOOL_NAME, ENTITY_TOOL_NAME})
+
+# Dynamic entity context (v5.0.0, roadmap subsystem C)
+CONF_DYNAMIC_ENTITY_CONTEXT = "dynamic_entity_context"
+DEFAULT_DYNAMIC_ENTITY_CONTEXT = True
+CONF_DYNAMIC_CONTEXT_PRESET = "dynamic_context_preset"
+CONF_DYNAMIC_CONTEXT_ON_ASSIST = "dynamic_context_on_assist"
+DEFAULT_DYNAMIC_CONTEXT_ON_ASSIST = False
+
+# How many entities the per-turn retrieval may add. A constant rather than an
+# option: every extra option is a support surface, and if 12 proves wrong it
+# should change in one place for everyone.
+ENTITY_CONTEXT_MAX_ENTITIES = 12
+# Generous — roughly 300-500 entities. Past this the skeleton stops being a map
+# and starts being the dump it replaced.
+ENTITY_SKELETON_MAX_CHARS = 6000
+# Registry events are the real invalidation; this is the backstop.
+ENTITY_SKELETON_CACHE_TTL = 300  # seconds
