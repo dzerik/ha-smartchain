@@ -12,6 +12,7 @@ from custom_components.smartchain.tools.memory.entity_context import (
     build_entity_context,
 )
 from custom_components.smartchain.tools.memory.entity_filter import EntityCandidate
+from custom_components.smartchain.tools.memory.registry import MemoryRegistry
 
 pytestmark = pytest.mark.usefixtures("enable_custom_integrations")
 
@@ -172,7 +173,7 @@ async def test_the_vector_pass_is_used_only_with_exactly_one_entity_store(
     cand = _cand("light.a", "Потолочный")
     hass.states.async_set("light.a", "on", {})
 
-    registry = MagicMock()
+    registry = MagicMock(spec=MemoryRegistry)
     registry.entity_store_names.return_value = ["a", "b"]
     hass.data[DOMAIN]["memory"] = registry
 
