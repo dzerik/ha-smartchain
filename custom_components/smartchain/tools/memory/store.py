@@ -181,6 +181,28 @@ class MemoryStore:
             LOGGER.exception("memory clear failed on backend %s", self.backend.name)
             return 0
 
+    async def list_metadata(self, where: dict[str, Any] | None = None) -> dict[str, dict[str, Any]]:
+        """Stored metadata by doc_id. Returns {} on any failure."""
+        if not self.is_available:
+            return {}
+        try:
+            async with asyncio.timeout(MEMORY_BACKEND_TIMEOUT_SECONDS):
+                return await self.backend.list_metadata(where)
+        except Exception:  # noqa: BLE001 — runtime, store stays up
+            LOGGER.exception("memory list_metadata failed")
+            return {}
+
+    async def update_metadata(self, doc_id: str, metadata: dict[str, Any]) -> bool:
+        """Refresh one document's metadata. Returns False on any failure."""
+        if not self.is_available:
+            return False
+        try:
+            async with asyncio.timeout(MEMORY_BACKEND_TIMEOUT_SECONDS):
+                return await self.backend.update_metadata(doc_id, metadata)
+        except Exception:  # noqa: BLE001 — runtime, store stays up
+            LOGGER.exception("memory update_metadata failed")
+            return False
+
     async def close(self) -> None:
         self.is_available = False
         await self.backend.close()

@@ -91,3 +91,41 @@ async def test_score_is_inverted_distance(store) -> None:
     await store.add("hello world", {"kind": "conversation", "timestamp": "t"})
     results = await store.search("hello world", top_k=1)
     assert results[0].score == pytest.approx(1.0, abs=1e-4)
+
+
+async def test_store_list_metadata_round_trips(store) -> None:
+    await store.add("hello", {"kind": "entity", "entity_id": "light.a"}, doc_id="entity:light.a")
+
+    stored = await store.list_metadata({"kind": "entity"})
+
+    assert set(stored) == {"entity:light.a"}
+    assert stored["entity:light.a"]["entity_id"] == "light.a"
+
+
+async def test_store_update_metadata_round_trips(store) -> None:
+    await store.add("hello", {"kind": "entity", "entity_id": "light.a"}, doc_id="entity:light.a")
+
+    assert (
+        await store.update_metadata(
+            "entity:light.a", {"kind": "entity", "entity_id": "light.a", "state": "on"}
+        )
+        is True
+    )
+    stored = await store.list_metadata({"kind": "entity"})
+    assert stored["entity:light.a"]["state"] == "on"
+
+
+async def test_store_metadata_helpers_are_safe_when_unavailable(store) -> None:
+    store.is_available = False
+
+    assert await store.list_metadata() == {}
+    assert await store.update_metadata("entity:light.a", {"kind": "entity"}) is False
+
+
+async def test_store_metadata_helpers_swallow_backend_failures(store, caplog) -> None:
+    store.backend.list_metadata = AsyncMock(side_effect=RuntimeError("boom"))
+    store.backend.update_metadata = AsyncMock(side_effect=RuntimeError("boom"))
+
+    assert await store.list_metadata() == {}
+    assert await store.update_metadata("x", {}) is False
+    assert store.is_available is True
