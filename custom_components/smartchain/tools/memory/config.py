@@ -35,21 +35,6 @@ class BackendConfig:
 
 
 @dataclass(frozen=True)
-class MemoryConfig:
-    """Top-level memory configuration parsed from tools.yaml."""
-
-    provider: str = "ollama"
-    model: str = ""
-    enabled: bool = True
-    base_url: str | None = None
-    api_key: str | None = None
-    retention_days: int = 90
-    ingest_conversation: bool = True
-    logbook: LogbookConfig = field(default_factory=LogbookConfig)
-    backend: BackendConfig = field(default_factory=BackendConfig)
-
-
-@dataclass(frozen=True)
 class StoreConfig:
     """One named memory store: an embeddings binding plus a vector backend."""
 

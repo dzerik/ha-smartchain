@@ -22,13 +22,12 @@ from ...const import (
     ID_YANDEX_GPT,
     MEMORY_EMBED_TIMEOUT_SECONDS,
 )
-from .config import MemoryConfig
 
 LOGGER = logging.getLogger(__name__)
 
 
 class EmbeddingsConfigError(Exception):
-    """Raised when MemoryConfig cannot be turned into a working provider."""
+    """Raised when a config entry/subentry cannot be turned into a working provider."""
 
 
 class EmbeddingsProvider(Protocol):
@@ -50,49 +49,6 @@ class _ExecutorBacked:
     async def embed_documents(self, texts: list[str]) -> list[list[float]]:
         async with asyncio.timeout(MEMORY_EMBED_TIMEOUT_SECONDS):
             return await self._hass.async_add_executor_job(self._inner.embed_documents, texts)
-
-
-def create_embeddings(hass: HomeAssistant, config: MemoryConfig) -> EmbeddingsProvider:
-    """Build an EmbeddingsProvider for the configured backend.
-
-    Raises EmbeddingsConfigError when required credentials are missing or the
-    provider name is unknown.
-    """
-    provider = config.provider
-    if provider == "ollama":
-        kwargs: dict[str, Any] = {"model": config.model}
-        if config.base_url:
-            kwargs["base_url"] = config.base_url
-        return _ExecutorBacked(hass, OllamaEmbeddings(**kwargs))
-    if provider == "openai":
-        if not config.api_key:
-            raise EmbeddingsConfigError("openai embeddings require `api_key` in memory: block")
-        return _ExecutorBacked(hass, OpenAIEmbeddings(model=config.model, api_key=config.api_key))
-    if provider == "gigachat":
-        if not config.api_key:
-            raise EmbeddingsConfigError(
-                "gigachat embeddings require `api_key` (credentials) in memory: block"
-            )
-        gc_kwargs: dict[str, Any] = {
-            "credentials": config.api_key,
-            "model": config.model,
-            "verify_ssl_certs": False,
-        }
-        if config.base_url:
-            gc_kwargs["base_url"] = config.base_url
-        return _ExecutorBacked(hass, GigaChatEmbeddings(**gc_kwargs))
-    if provider == "yandex":
-        if not config.api_key:
-            raise EmbeddingsConfigError(
-                "yandex embeddings require `api_key` (IAM token) in memory: block"
-            )
-        # Lazy import — only when actually requested.
-        from .embeddings_yandex import YandexEmbeddingsAdapter
-
-        return _ExecutorBacked(
-            hass, YandexEmbeddingsAdapter(api_key=config.api_key, model=config.model)
-        )
-    raise EmbeddingsConfigError(f"unknown provider {provider!r}")
 
 
 def create_embeddings_from_subentry(
