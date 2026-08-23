@@ -209,6 +209,10 @@ MEMORY_DIM_PROBE_TEXT = "smartchain dimension probe"
 # \Z, not $: a store name becomes a filename component for the file-based
 # backends, and $ would let a trailing newline through.
 MEMORY_STORE_NAME_PATTERN = r"^[a-z_][a-z0-9_]*\Z"
+# pgvector interpolates `table` straight into DDL/DML and qdrant puts
+# `collection` into a REST URL path, so both are constrained to the same safe
+# identifier shape. Same \Z reasoning as above.
+MEMORY_IDENTIFIER_PATTERN = r"^[a-z_][a-z0-9_]*\Z"
 MEMORY_SQLITE_SOFT_LIMIT = 50_000
 MEMORY_DEFAULT_QDRANT_COLLECTION = "smartchain_memory"
 MEMORY_DEFAULT_PG_TABLE = "smartchain_memory"

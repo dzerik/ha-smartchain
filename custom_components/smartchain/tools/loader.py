@@ -7,6 +7,7 @@ from typing import Any
 
 import voluptuous as vol
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.util.yaml import Secrets
 from homeassistant.util.yaml import load_yaml as ha_load_yaml
 
 from ..const import RESERVED_TOOL_NAMES
@@ -38,19 +39,31 @@ class LoaderResult:
     memory_settings: MemorySettings = field(default_factory=MemorySettings)
 
 
-def load_tools_file(path: Path) -> LoaderResult:
+def load_tools_file(path: Path, config_dir: Path | None = None) -> LoaderResult:
     """Read, validate and convert a tools.yaml file into CustomTool objects.
 
-    Uses HA's yaml loader so `!secret` and `!include` resolve correctly.
-    Returns an empty list if the file does not exist. Raises LoaderError on
+    Uses HA's yaml loader, so `!include` resolves. `!secret` resolves too, but
+    only when `config_dir` is supplied: HA's loader needs a `Secrets` store
+    rooted at the configuration directory, and without one it fails the whole
+    file with "Secrets not supported in this YAML file". Callers inside Home
+    Assistant pass `Path(hass.config.config_dir)`; the default keeps the
+    no-secrets behaviour for standalone callers.
+
+    Both `Secrets` construction and its lookups are plain blocking file I/O, so
+    this stays safe to run in an executor.
+
+    Returns an empty result if the file does not exist. Raises LoaderError on
     YAML parse error or schema validation failure. Duplicate-name and
     reserved-name entries are dropped with an error logged but do not raise.
     """
     if not path.is_file():
         return LoaderResult()
 
+    secrets = Secrets(config_dir) if config_dir is not None else None
     try:
-        raw = ha_load_yaml(str(path))
+        # HA renders a missing secret as "Secret <name> not defined" — the name,
+        # never the value — so this message is safe to surface to the user.
+        raw = ha_load_yaml(str(path), secrets)
     except HomeAssistantError as err:
         raise LoaderError(f"tools.yaml parse error: {err}") from err
 

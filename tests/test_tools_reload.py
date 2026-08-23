@@ -66,3 +66,62 @@ async def test_reload_invalid_yaml_raises_and_keeps_old(
 
     # Old registry intact
     assert hass.data[DOMAIN]["tools"].get("ping") is not None
+
+
+async def test_reload_resolves_secret_from_the_ha_config_dir(
+    hass: HomeAssistant, tools_dir: Path
+) -> None:
+    """`!secret` in tools.yaml resolves against <config>/secrets.yaml.
+
+    Before the config dir was threaded into the loader, HA failed the whole
+    file with "Secrets not supported in this YAML file".
+    """
+    (tools_dir.parent / "secrets.yaml").write_text("ping_reply: pong-from-secrets\n")
+    (tools_dir / "tools.yaml").write_text(
+        "tools:\n"
+        "  - name: ping\n"
+        "    description: x\n"
+        "    parameters: { type: object, properties: {} }\n"
+        "    action: { type: template, value_template: !secret ping_reply }\n"
+    )
+    await async_setup(hass, {})
+
+    await hass.services.async_call(DOMAIN, SERVICE_RELOAD_TOOLS, {}, blocking=True)
+    await hass.async_block_till_done()
+
+    tool = hass.data[DOMAIN]["tools"].get("ping")
+    assert tool is not None
+    assert tool.action.value_template == "pong-from-secrets"
+
+
+def test_services_yaml_declares_every_registered_service() -> None:
+    """Undeclared services are invisible in the HA service picker.
+
+    `clear_memory` and `reload_tools` were registered in code but missing from
+    services.yaml, so the UI offered no way to call them and the `store` field
+    never appeared.
+    """
+    import yaml
+
+    from custom_components.smartchain import SERVICE_ANALYZE_IMAGE, SERVICE_ASK
+    from custom_components.smartchain.const import (
+        SERVICE_CLEAR_MEMORY,
+        SERVICE_RELOAD_TOOLS,
+    )
+
+    path = Path(__file__).parent.parent / "custom_components" / "smartchain" / "services.yaml"
+    declared = yaml.safe_load(path.read_text())
+
+    assert set(declared) == {
+        SERVICE_ASK,
+        SERVICE_ANALYZE_IMAGE,
+        SERVICE_CLEAR_MEMORY,
+        SERVICE_RELOAD_TOOLS,
+    }
+    assert set(declared[SERVICE_CLEAR_MEMORY]["fields"]) == {"kind", "agent_id", "store"}
+    assert declared[SERVICE_CLEAR_MEMORY]["fields"]["kind"]["selector"]["select"]["options"] == [
+        "any",
+        "conversation",
+        "logbook",
+    ]
+    assert "fields" not in declared[SERVICE_RELOAD_TOOLS]

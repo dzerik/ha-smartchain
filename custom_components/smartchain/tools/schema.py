@@ -6,6 +6,7 @@ from ..const import (
     MCP_NAME_PATTERN,
     MEMORY_BACKEND_TYPES,
     MEMORY_DEFAULT_LOGBOOK_POLL_MINUTES,
+    MEMORY_IDENTIFIER_PATTERN,
     MEMORY_LOGBOOK_POLL_MAX_MINUTES,
     MEMORY_LOGBOOK_POLL_MIN_MINUTES,
     MEMORY_STORE_NAME_PATTERN,
@@ -14,6 +15,7 @@ from ..const import (
 
 _NAME = vol.All(str, vol.Match(TOOL_NAME_PATTERN))
 _NON_EMPTY_STR = vol.All(str, vol.Length(min=1))
+_MEMORY_IDENTIFIER = vol.All(str, vol.Match(MEMORY_IDENTIFIER_PATTERN))
 
 _PARAMETERS = vol.Schema(
     {
@@ -173,10 +175,13 @@ _BACKEND_SCHEMA = vol.Schema(
         vol.Optional("type", default="sqlite_numpy"): vol.In(MEMORY_BACKEND_TYPES),
         vol.Optional("path"): vol.Any(None, str),
         vol.Optional("dsn"): vol.Any(None, str),
-        vol.Optional("table"): vol.Any(None, str),
+        # `table` lands in pgvector DDL/DML and `collection` in a qdrant URL
+        # path, neither of which can be parameterised — so both are restricted
+        # to a plain identifier rather than accepted as free-form strings.
+        vol.Optional("table"): vol.Any(None, _MEMORY_IDENTIFIER),
         vol.Optional("url"): vol.Any(None, str),
         vol.Optional("api_key"): vol.Any(None, str),
-        vol.Optional("collection"): vol.Any(None, str),
+        vol.Optional("collection"): vol.Any(None, _MEMORY_IDENTIFIER),
         vol.Optional("verify_ssl", default=True): bool,
     }
 )

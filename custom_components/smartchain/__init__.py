@@ -168,7 +168,9 @@ def _memory_persist_dir(hass: HomeAssistant) -> Path:
 async def _reload_registry(hass: HomeAssistant) -> int:
     """Re-read tools.yaml into the registry. Raises LoaderError on failure."""
     path = _tools_yaml_path(hass)
-    result = await hass.async_add_executor_job(load_tools_file, path)
+    # The config dir is what lets HA's YAML loader resolve `!secret` against
+    # secrets.yaml — without it the whole file fails on the first such tag.
+    result = await hass.async_add_executor_job(load_tools_file, path, Path(hass.config.config_dir))
     registry: ToolRegistry = hass.data[DOMAIN]["tools"]
     registry.replace_all(result.yaml_tools)
 

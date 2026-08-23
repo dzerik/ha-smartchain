@@ -484,3 +484,50 @@ async def test_dimension_mismatch_names_the_collection_to_delete(
     assert "URLSECRET" not in message
     assert "hunter2" not in message
     assert "6333" not in message
+
+
+async def test_query_raises_on_non_2xx_status(hass: HomeAssistant, session_and_calls) -> None:
+    """A rejected search must not be indistinguishable from an empty result.
+
+    Returning [] here made a broken server read to the LLM as "No memories
+    matched the query". MemoryStore.search catches QdrantError, logs it and
+    returns [], so the conversation survives and the cause lands in the log.
+    """
+    session, _calls, responses = session_and_calls
+    responses["GET /collections/mem"] = _response(404, {})
+    responses["PUT /collections/mem"] = _response(200, {"result": {}})
+    responses["POST /collections/mem/points/search"] = _response(500, {})
+
+    with patch(
+        "custom_components.smartchain.tools.memory.backends.qdrant.async_get_clientsession",
+        return_value=session,
+    ):
+        be = QdrantBackend(hass, "https://qu:URLSECRET@h:6333", "mem", "hunter2", True)
+        await be.initialize(3)
+        with pytest.raises(QdrantError) as exc:
+            await be.query([1.0, 0.0, 0.0], top_k=5, where=None)
+
+    message = str(exc.value)
+    assert "500" in message
+    assert "URLSECRET" not in message
+    assert "hunter2" not in message
+
+
+async def test_store_search_degrades_to_empty_when_the_backend_raises(
+    hass: HomeAssistant, caplog
+) -> None:
+    """The raise from `query` must stay inside MemoryStore, not reach the user."""
+    from custom_components.smartchain.tools.memory.store import MemoryStore
+
+    embeddings = MagicMock()
+    embeddings.embed_query = AsyncMock(return_value=[1.0, 0.0, 0.0])
+    backend = MagicMock()
+    backend.name = "qdrant"
+    backend.query = AsyncMock(side_effect=QdrantError("qdrant search failed with status 500"))
+
+    store = MemoryStore(hass, embeddings, backend)
+    store.is_available = True
+
+    with caplog.at_level(logging.ERROR):
+        assert await store.search("anything") == []
+    assert "memory search failed" in caplog.text

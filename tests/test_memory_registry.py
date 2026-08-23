@@ -315,3 +315,103 @@ async def test_shutdown_closes_every_store(hass: HomeAssistant, tmp_path, patche
     assert registry.names() == []
     for store in patched_store:
         store.close.assert_awaited()
+
+
+async def test_bare_exception_from_embeddings_skips_only_that_store(
+    hass: HomeAssistant, tmp_path, caplog
+) -> None:
+    """A KeyError must not escape build() and take every other store with it.
+
+    create_embeddings_from_subentry indexes entry.data[CONF_API_KEY] directly
+    and builds pydantic models, so a malformed entry raises KeyError or
+    ValidationError rather than EmbeddingsConfigError. Anything escaping build()
+    reaches _reload_registry, which discards the whole new registry.
+    """
+    _entry_with_embeddings(hass, ["Embed A", "Embed B"])
+
+    def _store_factory(hass_, embeddings, backend):
+        st = MagicMock()
+        st.is_available = True
+        st.async_setup = AsyncMock()
+        st.close = AsyncMock()
+        st.backend = backend
+        return st
+
+    def _embeddings_side_effect(hass_, entry, subentry):
+        if subentry.title == "Embed A":
+            raise KeyError(CONF_API_KEY)
+        return MagicMock()
+
+    with (
+        patch(
+            "custom_components.smartchain.tools.memory.registry.MemoryStore",
+            side_effect=_store_factory,
+        ),
+        patch(
+            "custom_components.smartchain.tools.memory.registry.create_embeddings_from_subentry",
+            side_effect=_embeddings_side_effect,
+        ),
+    ):
+        registry = MemoryRegistry(hass)
+        await registry.build(
+            MemorySettings(
+                stores=[
+                    StoreConfig(name="bad", embeddings="Embed A"),
+                    StoreConfig(name="good", embeddings="Embed B"),
+                ]
+            ),
+            tmp_path,
+        )
+
+    assert registry.names() == ["good"]
+    assert "bad" in caplog.text
+    await registry.shutdown()
+
+
+async def test_bare_exception_from_create_backend_skips_only_that_store(
+    hass: HomeAssistant, tmp_path, caplog
+) -> None:
+    """Same containment for create_backend, which can raise ValueError/OSError."""
+    _entry_with_embeddings(hass, ["Embed A", "Embed B"])
+
+    def _store_factory(hass_, embeddings, backend):
+        st = MagicMock()
+        st.is_available = True
+        st.async_setup = AsyncMock()
+        st.close = AsyncMock()
+        st.backend = backend
+        return st
+
+    def _backend_side_effect(hass_, config, store_name, storage_dir):
+        if store_name == "bad":
+            raise ValueError("not a BackendInitError")
+        return MagicMock()
+
+    with (
+        patch(
+            "custom_components.smartchain.tools.memory.registry.MemoryStore",
+            side_effect=_store_factory,
+        ),
+        patch(
+            "custom_components.smartchain.tools.memory.registry.create_embeddings_from_subentry",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "custom_components.smartchain.tools.memory.registry.create_backend",
+            side_effect=_backend_side_effect,
+        ),
+    ):
+        registry = MemoryRegistry(hass)
+        await registry.build(
+            MemorySettings(
+                stores=[
+                    StoreConfig(name="bad", embeddings="Embed A"),
+                    StoreConfig(name="good", embeddings="Embed B"),
+                ]
+            ),
+            tmp_path,
+        )
+
+    assert registry.names() == ["good"]
+    assert "bad" in caplog.text
+    await registry.shutdown()

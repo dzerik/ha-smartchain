@@ -7,9 +7,9 @@ from homeassistant.config_entries import ConfigEntry, ConfigSubentry
 from homeassistant.core import HomeAssistant
 
 from ...const import DOMAIN, SUBENTRY_TYPE_EMBEDDINGS
-from .backends import BackendInitError, create_backend
+from .backends import create_backend
 from .config import MemorySettings, StoreConfig
-from .embeddings import EmbeddingsConfigError, create_embeddings_from_subentry
+from .embeddings import create_embeddings_from_subentry
 from .ingest import MemoryLogbookPoller
 from .retention import RetentionTask
 from .store import MemoryStore
@@ -76,15 +76,21 @@ class MemoryRegistry:
                 continue
 
             entry, subentry = binding
+            # Deliberately broad: create_embeddings_from_subentry indexes
+            # entry.data[CONF_API_KEY] directly and constructs pydantic models,
+            # so a malformed entry raises KeyError / ValidationError rather than
+            # EmbeddingsConfigError. Anything escaping here would propagate out
+            # of build() into _reload_registry, whose handler discards the whole
+            # new registry — one bad entry would kill every configured store.
             try:
                 embeddings = create_embeddings_from_subentry(self.hass, entry, subentry)
-            except EmbeddingsConfigError as err:
+            except Exception as err:  # noqa: BLE001 — per-store isolation
                 LOGGER.error("Memory store %r disabled: %s", config.name, err)
                 continue
 
             try:
                 backend = create_backend(self.hass, config.backend, config.name, storage_dir)
-            except BackendInitError as err:
+            except Exception as err:  # noqa: BLE001 — per-store isolation
                 LOGGER.error("Memory store %r disabled: %s", config.name, err)
                 continue
 

@@ -50,3 +50,43 @@ analyze_image:
       selector:
         entity:
           domain: notify
+
+reload_tools:
+  name: Reload Tools
+  description: >
+    Re-read /config/smartchain/tools.yaml. Restarts the MCP servers and rebuilds
+    the memory subsystem. Fires smartchain_tools_reloaded.
+
+clear_memory:
+  name: Clear Memory
+  description: >
+    Delete stored long-term memories, optionally filtered by kind, agent and
+    store. Fires smartchain_memory_cleared with the number deleted.
+  fields:
+    kind:
+      name: Kind
+      description: Which kind of memories to delete
+      required: false
+      default: any
+      selector:
+        select:
+          options:
+            - any
+            - conversation
+            - logbook
+    agent_id:
+      name: Agent ID
+      description: Delete only memories written by this agent (optional)
+      required: false
+      example: conversation.smartchain
+      selector:
+        text:
+    store:
+      name: Memory Store
+      description: >
+        Name of the memory store to clear, as configured under memory.stores in
+        tools.yaml. Omit to clear every configured store.
+      required: false
+      example: conversations
+      selector:
+        text:

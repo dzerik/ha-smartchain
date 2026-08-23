@@ -252,12 +252,17 @@ class QdrantBackend:
             payload["filter"] = flt
 
         try:
-            _status, body = await self._request(
+            status, body = await self._request(
                 "POST", f"/collections/{self.collection}/points/search", payload
             )
         except (aiohttp.ClientError, OSError, TimeoutError) as err:
             self._log_transport_failure("search", err)
             return []
+        # A rejected search must not look like an empty one: swallowing it here
+        # would report "No memories matched the query" to the LLM for a broken
+        # server. MemoryStore.search catches, logs and returns [], so the
+        # conversation still survives while the cause shows up in the log.
+        self._check_status(status, "search")
 
         hits: list[VectorHit] = []
         for item in body.get("result") or []:

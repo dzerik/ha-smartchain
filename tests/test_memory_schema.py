@@ -58,3 +58,58 @@ def test_store_rejects_unknown_backend_type() -> None:
 def test_legacy_flat_block_is_rejected() -> None:
     with pytest.raises(vol.Invalid):
         MEMORY_SCHEMA({"provider": "ollama", "model": "nomic-embed-text"})
+
+
+def test_backend_table_and_collection_accept_plain_identifiers() -> None:
+    result = MEMORY_SCHEMA(
+        {
+            "stores": [
+                {
+                    "name": "a",
+                    "embeddings": "E",
+                    "backend": {"type": "pgvector", "table": "smartchain_memory2"},
+                },
+                {
+                    "name": "b",
+                    "embeddings": "E",
+                    "backend": {"type": "qdrant", "collection": "_mem"},
+                },
+            ]
+        }
+    )
+    assert result["stores"][0]["backend"]["table"] == "smartchain_memory2"
+    assert result["stores"][1]["backend"]["collection"] == "_mem"
+
+
+@pytest.mark.parametrize(
+    "table",
+    [
+        'mem"; DROP TABLE users; --',
+        "mem memory",
+        "Memory",
+        "1mem",
+        "mem\n",
+    ],
+)
+def test_backend_table_rejects_non_identifiers(table: str) -> None:
+    """`table` is interpolated into pgvector DDL/DML and cannot be parameterised."""
+    with pytest.raises(vol.Invalid):
+        MEMORY_SCHEMA({"stores": [{"name": "a", "embeddings": "E", "backend": {"table": table}}]})
+
+
+@pytest.mark.parametrize(
+    "collection",
+    [
+        "../../collections/other",
+        "mem col",
+        "Mem",
+        "9mem",
+        "mem\n",
+    ],
+)
+def test_backend_collection_rejects_non_identifiers(collection: str) -> None:
+    """`collection` becomes a segment of the Qdrant REST URL path."""
+    with pytest.raises(vol.Invalid):
+        MEMORY_SCHEMA(
+            {"stores": [{"name": "a", "embeddings": "E", "backend": {"collection": collection}}]}
+        )

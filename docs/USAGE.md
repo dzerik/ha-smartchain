@@ -272,12 +272,21 @@ After saving, call `smartchain.reload_tools` (or restart). Now the LLM can pick 
   action:
     type: rest
     method: GET
-    url: "https://api.openweathermap.org/data/2.5/forecast?q={{ city }}&appid=!secret openweather_key"
+    url: "https://api.example.com/forecast?q={{ city }}"
+    headers:
+      Authorization: !secret weather_api_authorization
     timeout: 10
     response_format: json   # or "text"
 ```
 
-`!secret` is resolved via HA's loader. Non-2xx responses become `"Error: HTTP <status>"`. Network failures and timeouts likewise yield clean error strings — no exception text reaches the LLM.
+`!secret` is resolved by HA's loader against `secrets.yaml` (§9.2). It is a **whole-value** tag: it replaces one entire YAML scalar and cannot be spliced into the middle of a string, and it must not be quoted — `"Bearer !secret my_key"` is just a literal string that would be sent verbatim. Put the complete value in `secrets.yaml` instead, `Bearer ` prefix included:
+
+```yaml
+# <config>/secrets.yaml
+weather_api_authorization: "Bearer 0123456789abcdef"
+```
+
+Non-2xx responses become `"Error: HTTP <status>"`. Network failures and timeouts likewise yield clean error strings — no exception text reaches the LLM.
 
 ### 7.4. `script` action — invoke an HA script
 
@@ -337,7 +346,8 @@ mcp_servers:
     transport: sse
     url: https://example.com/mcp/brave
     headers:
-      Authorization: "Bearer !secret brave_api_key"
+      # Whole-value tag, unquoted; secrets.yaml holds "Bearer <token>".
+      Authorization: !secret brave_authorization
     timeout: 30
     verify_ssl: true
 
@@ -345,7 +355,7 @@ mcp_servers:
     transport: http
     url: https://api.example.com/mcp/github
     headers:
-      Authorization: "Bearer !secret github_token"
+      Authorization: !secret github_authorization
 ```
 
 After saving, call `smartchain.reload_tools`.
@@ -460,7 +470,20 @@ memory:
 
 Call `smartchain.reload_tools` after editing. Validation errors are raised there with a message naming the offending key, and the previous configuration stays live.
 
-> **`!secret` does not work in `tools.yaml`.** SmartChain reads the file without a secrets store, so a `!secret` tag fails the whole file with *"Secrets not supported in this YAML file"*. Put connection strings in the file directly and protect it with filesystem permissions.
+> **`!secret` works in `tools.yaml`.** SmartChain reads the file through Home Assistant's YAML loader with a secrets store rooted at the configuration directory, so a `!secret` tag resolves from `<config>/smartchain/secrets.yaml` if present and otherwise from `<config>/secrets.yaml` — the same lookup HA uses for `configuration.yaml`. A pgvector `dsn` or a Qdrant `api_key` belongs there rather than in `tools.yaml`:
+>
+> ```yaml
+> # <config>/secrets.yaml
+> smartchain_pg_dsn: "postgresql://smartchain:CHANGE_ME@db.example.local:5432/smartchain"
+> ```
+> ```yaml
+> # <config>/smartchain/tools.yaml
+>       backend:
+>         type: pgvector
+>         dsn: !secret smartchain_pg_dsn
+> ```
+>
+> Two rules: the tag replaces **one whole scalar**, so it cannot be spliced into the middle of a string, and it must **not** be quoted — `"!secret x"` is an ordinary string, not a tag. A name that is missing from `secrets.yaml` fails the reload with *"Secret \<name\> not defined"*; the message names the key, never any value.
 
 ### 9.3. Vector backends
 
@@ -515,15 +538,28 @@ Every backend operation is bounded by a 30 s timeout, and a backend that fails t
 
 At startup SmartChain embeds a short probe string, measures the vector length and hands that width to the backend, which records it. If the store's embeddings sub-entry later points at a model of a different width, the mismatch is detected *before* anything is written:
 
-> `stored embedding dimension is 768 but the configured model produces 1536. Clear this store with smartchain.clear_memory, then call smartchain.reload_tools.`
+> `stored embedding dimension is 768 but the configured model produces 1536. Delete the database file /config/.storage/smartchain_memory/conversations.db, then call smartchain.reload_tools.`
 
 That store is disabled and the others keep running. Vectors of different widths are never mixed, so the index cannot be silently corrupted.
 
+**`smartchain.clear_memory` cannot fix a dimension mismatch.** A store that fails to initialise never enters the registry, so the service answers *"unknown memory store"* — and clearing rows would not help anyway, because the recorded dimension (the `vector(N)` column type, the `vec0` table, the Qdrant collection's vector size) outlives a row delete. The stored artefact has to be removed by hand. Each backend's error message names exactly which one:
+
+| Backend | What the message tells you to remove |
+|---|---|
+| `sqlite_numpy` | *Delete the database file `<path>`* — the `.db` file, at `path:` or `<config>/.storage/smartchain_memory/<store name>.db`. |
+| `sqlite_vec` | *Delete the database file `<path>`* — same file and same default location. |
+| `pgvector` | *Drop the table `<table>` in the configured database* — e.g. `DROP TABLE smartchain_memory;`. |
+| `qdrant` | *Delete the collection `<collection>` on the Qdrant server* — e.g. `DELETE /collections/smartchain_memory`. |
+
+Then call `smartchain.reload_tools` and the store rebuilds at the new width.
+
 To change a store's embedding model deliberately — there is no automatic re-embedding, so the old vectors have to go:
 
-1. `smartchain.clear_memory` with `store: <name>`.
+1. Remove the store's artefact as in the table above (file, table or collection).
 2. Point the binding at the new model (**3-dot menu > Reconfigure embeddings binding**).
 3. `smartchain.reload_tools`.
+
+`smartchain.clear_memory` is the right tool for emptying a *working* store — see §9.7 — not for a width change.
 
 ### 9.5. How it surfaces to the LLM
 
@@ -733,7 +769,7 @@ The log names the missing title and lists the available ones. The `embeddings:` 
 You are carrying a v4.3.x / v4.4.x `memory:` block with `provider` / `model` / `api_key`. Follow the three migration steps in §9.8.
 
 ### Memory: dimension mismatch on startup
-The store's embeddings sub-entry now points at a model of a different width than the one already stored. Clear that store and reload — see §9.4.
+The store's embeddings sub-entry now points at a model of a different width than the one already stored. `smartchain.clear_memory` cannot fix this — the store never came up, so the service does not know it. Remove the stored artefact the error message names (the `.db` file, the pgvector table or the Qdrant collection), then call `smartchain.reload_tools` — see §9.4.
 
 ### Embeddings provider unreachable
 - The embeddings sub-entry is offered only by providers that have an embeddings API — not DeepSeek, not Anthropic (§9.1).

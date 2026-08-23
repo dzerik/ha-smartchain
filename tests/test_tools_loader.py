@@ -92,3 +92,62 @@ def test_load_reserved_name_drops_it(tmp_path: Path, caplog) -> None:
     result = load_tools_file(target)
     assert result.yaml_tools == []
     assert "reserved" in caplog.text.lower()
+
+
+def test_secret_resolves_when_the_config_dir_is_supplied(tmp_path: Path) -> None:
+    """`!secret` works once the loader is given a config dir to root Secrets at.
+
+    A pgvector DSN is exactly the value that belongs in secrets.yaml, so this
+    is what keeps credentials out of tools.yaml.
+    """
+    (tmp_path / "secrets.yaml").write_text("pg_dsn: postgresql://u:p@db.local/smartchain\n")
+    conf = tmp_path / "smartchain"
+    conf.mkdir()
+    target = conf / "tools.yaml"
+    target.write_text(
+        "memory:\n"
+        "  stores:\n"
+        "    - name: conversations\n"
+        "      embeddings: Embed\n"
+        "      backend:\n"
+        "        type: pgvector\n"
+        "        dsn: !secret pg_dsn\n"
+    )
+
+    result = load_tools_file(target, tmp_path)
+
+    assert result.memory_settings.stores[0].backend.dsn == "postgresql://u:p@db.local/smartchain"
+
+
+def test_secret_without_a_config_dir_still_fails_the_file(tmp_path: Path) -> None:
+    """Default behaviour is unchanged for callers that pass only a path."""
+    (tmp_path / "secrets.yaml").write_text("pg_dsn: postgresql://u:p@db.local/smartchain\n")
+    target = tmp_path / "tools.yaml"
+    target.write_text("memory:\n  stores: []\n  note: !secret pg_dsn\n")
+
+    with pytest.raises(LoaderError):
+        load_tools_file(target)
+
+
+def test_missing_secret_raises_without_leaking_any_secret_value(tmp_path: Path) -> None:
+    """The error names the missing key; no value from secrets.yaml appears."""
+    (tmp_path / "secrets.yaml").write_text("other_key: SUPERSECRETVALUE\n")
+    conf = tmp_path / "smartchain"
+    conf.mkdir()
+    target = conf / "tools.yaml"
+    target.write_text(
+        "memory:\n"
+        "  stores:\n"
+        "    - name: conversations\n"
+        "      embeddings: Embed\n"
+        "      backend:\n"
+        "        type: pgvector\n"
+        "        dsn: !secret pg_dsn\n"
+    )
+
+    with pytest.raises(LoaderError) as exc:
+        load_tools_file(target, tmp_path)
+
+    message = str(exc.value)
+    assert "pg_dsn" in message
+    assert "SUPERSECRETVALUE" not in message

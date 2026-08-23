@@ -272,12 +272,21 @@ tools:
   action:
     type: rest
     method: GET
-    url: "https://api.openweathermap.org/data/2.5/forecast?q={{ city }}&appid=!secret openweather_key"
+    url: "https://api.example.com/forecast?q={{ city }}"
+    headers:
+      Authorization: !secret weather_api_authorization
     timeout: 10
     response_format: json   # или "text"
 ```
 
-`!secret` резолвится HA-loader'ом. Не-2xx-ответы → `"Error: HTTP <статус>"`. Network-ошибки и таймауты тоже → чистые error-строки, без leak текста исключения в LLM.
+`!secret` резолвится загрузчиком HA из `secrets.yaml` (§9.2). Это тег **целого значения**: он подставляется вместо одного скаляра YAML целиком, его нельзя вставить в середину строки и нельзя брать в кавычки — `"Bearer !secret my_key"` это обычная строка, которая уйдёт на сервер буквально. Кладите в `secrets.yaml` готовое значение целиком, вместе с префиксом `Bearer `:
+
+```yaml
+# <config>/secrets.yaml
+weather_api_authorization: "Bearer 0123456789abcdef"
+```
+
+Не-2xx-ответы → `"Error: HTTP <статус>"`. Сетевые ошибки и таймауты тоже → чистые error-строки, без утечки текста исключения в LLM.
 
 ### 7.4. `script` action — вызов HA-скрипта
 
@@ -337,7 +346,8 @@ mcp_servers:
     transport: sse
     url: https://example.com/mcp/brave
     headers:
-      Authorization: "Bearer !secret brave_api_key"
+      # Тег целого значения, без кавычек; в secrets.yaml лежит "Bearer <токен>".
+      Authorization: !secret brave_authorization
     timeout: 30
     verify_ssl: true
 
@@ -345,7 +355,7 @@ mcp_servers:
     transport: http
     url: https://api.example.com/mcp/github
     headers:
-      Authorization: "Bearer !secret github_token"
+      Authorization: !secret github_authorization
 ```
 
 После сохранения — `smartchain.reload_tools`.
@@ -460,7 +470,20 @@ memory:
 
 После правки вызовите `smartchain.reload_tools`. Ошибки валидации поднимаются оттуда с сообщением, называющим проблемный ключ, а предыдущая конфигурация продолжает работать.
 
-> **`!secret` в `tools.yaml` не работает.** SmartChain читает файл без хранилища секретов, поэтому тег `!secret` роняет весь файл с ошибкой *«Secrets not supported in this YAML file»*. Указывайте строки подключения прямо в файле и защищайте его правами доступа файловой системы.
+> **`!secret` в `tools.yaml` работает.** SmartChain читает файл загрузчиком YAML из Home Assistant с хранилищем секретов, привязанным к каталогу конфигурации, поэтому тег `!secret` резолвится из `<config>/smartchain/secrets.yaml`, если такой файл есть, и иначе из `<config>/secrets.yaml` — тот же порядок поиска, что HA использует для `configuration.yaml`. Строке подключения pgvector (`dsn`) и ключу Qdrant (`api_key`) место именно там, а не в `tools.yaml`:
+>
+> ```yaml
+> # <config>/secrets.yaml
+> smartchain_pg_dsn: "postgresql://smartchain:CHANGE_ME@db.example.local:5432/smartchain"
+> ```
+> ```yaml
+> # <config>/smartchain/tools.yaml
+>       backend:
+>         type: pgvector
+>         dsn: !secret smartchain_pg_dsn
+> ```
+>
+> Два правила: тег подставляется вместо **одного целого скаляра**, поэтому его нельзя вставить в середину строки, и его нельзя брать в кавычки — `"!secret x"` это обычная строка, а не тег. Имя, которого нет в `secrets.yaml`, роняет перезагрузку с сообщением *«Secret \<имя\> not defined»*; в сообщение попадает только имя ключа, но никогда не значение.
 
 ### 9.3. Векторные бэкенды
 
@@ -515,15 +538,28 @@ memory:
 
 При старте SmartChain эмбеддит короткую пробную строку, измеряет длину вектора и передаёт эту ширину бэкенду, а тот её запоминает. Если позже sub-entry эмбеддингов этого хранилища начнёт указывать на модель другой ширины, расхождение обнаруживается *до* того, как что-либо будет записано:
 
-> `stored embedding dimension is 768 but the configured model produces 1536. Clear this store with smartchain.clear_memory, then call smartchain.reload_tools.`
+> `stored embedding dimension is 768 but the configured model produces 1536. Delete the database file /config/.storage/smartchain_memory/conversations.db, then call smartchain.reload_tools.`
 
 Это хранилище отключается, остальные продолжают работать. Векторы разной ширины никогда не смешиваются, поэтому индекс не может тихо испортиться.
 
+**`smartchain.clear_memory` не чинит расхождение размерности.** Хранилище, которое не смогло подняться, не попадает в реестр, поэтому сервис отвечает *«unknown memory store»*, — да и удаление строк не помогло бы: записанная размерность (тип колонки `vector(N)`, таблица `vec0`, размер вектора коллекции Qdrant) переживает удаление строк. Сохранённый артефакт нужно удалить руками. Сообщение об ошибке каждого бэкенда называет, какой именно:
+
+| Бэкенд | Что просит удалить сообщение |
+|---|---|
+| `sqlite_numpy` | *Delete the database file `<путь>`* — файл `.db` по пути из `path:` либо `<config>/.storage/smartchain_memory/<имя хранилища>.db`. |
+| `sqlite_vec` | *Delete the database file `<путь>`* — тот же файл и то же расположение по умолчанию. |
+| `pgvector` | *Drop the table `<таблица>` in the configured database* — например `DROP TABLE smartchain_memory;`. |
+| `qdrant` | *Delete the collection `<коллекция>` on the Qdrant server* — например `DELETE /collections/smartchain_memory`. |
+
+После этого вызовите `smartchain.reload_tools`, и хранилище пересоберётся с новой шириной.
+
 Чтобы осознанно сменить модель эмбеддингов у хранилища — автоматического переэмбеддинга нет, поэтому старые векторы придётся удалить:
 
-1. `smartchain.clear_memory` с `store: <имя>`.
+1. Удалите артефакт хранилища по таблице выше (файл, таблицу или коллекцию).
 2. Наведите связку на новую модель (**меню из трёх точек > Изменить связку embeddings**).
 3. `smartchain.reload_tools`.
+
+`smartchain.clear_memory` нужен, чтобы опустошить **работающее** хранилище (см. §9.7), а не для смены ширины вектора.
 
 ### 9.5. Как это видит LLM
 
@@ -733,7 +769,7 @@ Tool `search_memory` был вызван, но ни одно хранилище 
 У вас остался блок `memory:` из v4.3.x / v4.4.x с `provider` / `model` / `api_key`. Выполните три шага миграции из §9.8.
 
 ### Memory: расхождение размерности при старте
-Sub-entry эмбеддингов этого хранилища теперь указывает на модель другой ширины, чем уже сохранённая. Очистите это хранилище и перезагрузите конфигурацию — см. §9.4.
+Sub-entry эмбеддингов этого хранилища теперь указывает на модель другой ширины, чем уже сохранённая. `smartchain.clear_memory` тут не поможет: хранилище не поднялось, поэтому сервис о нём не знает. Удалите артефакт, названный в сообщении об ошибке (файл `.db`, таблицу pgvector или коллекцию Qdrant), и вызовите `smartchain.reload_tools` — см. §9.4.
 
 ### Провайдер эмбеддингов недоступен
 - Sub-entry эмбеддингов предлагают только провайдеры с API эмбеддингов — не DeepSeek и не Anthropic (§9.1).
