@@ -7,7 +7,7 @@ from homeassistant.core import HomeAssistant
 
 from custom_components.smartchain.tools.memory.config import EntitySourceConfig
 from custom_components.smartchain.tools.memory.entity_filter import EntityCandidate
-from custom_components.smartchain.tools.memory.entity_index import EntityIndexer
+from custom_components.smartchain.tools.memory.entity_index import EntityIndexer, SweepResult
 from custom_components.smartchain.tools.memory.store import MemoryStore
 
 pytestmark = pytest.mark.usefixtures("enable_custom_integrations")
@@ -198,17 +198,92 @@ async def test_state_is_indexed_only_when_asked(hass: HomeAssistant, indexer_fac
 
 
 async def test_a_failing_sweep_never_raises(hass: HomeAssistant, caplog, indexer_factory) -> None:
+    """The failure is injected *during* `_write`, which is the case that matters.
+
+    Failing at `list_metadata` would abort before a single store mutation
+    could happen, making "the previous index survived" true by construction.
+    Here the first write lands and the second raises, so the sweep is
+    genuinely interrupted half-way through mutating the store.
+    """
     store = _store()
-    store.list_metadata = AsyncMock(side_effect=RuntimeError("boom"))
+    store.list_metadata = AsyncMock(
+        return_value={
+            "entity:light.gone": {"kind": "entity", "entity_id": "light.gone", "fingerprint": "x"}
+        }
+    )
+    store.add = AsyncMock(side_effect=[["id"], RuntimeError("boom")])
+    indexer = indexer_factory(hass, store, [_cand("light.a"), _cand("light.b")])
+
+    result = await indexer.reconcile()
+
+    assert result == SweepResult()
+    assert "entity index" in caplog.text.lower()
+    assert store.add.await_count == 2
+    # The actual claim: the interrupted sweep deleted nothing, so the orphan
+    # it had not reached yet is still there for the next sweep to handle.
+    store.clear.assert_not_awaited()
+
+
+async def test_an_unreadable_store_aborts_the_sweep(
+    hass: HomeAssistant, caplog, indexer_factory
+) -> None:
+    """A failed metadata read must not be mistaken for an empty store.
+
+    `list_metadata` returning `None` means "no answer". Treating it as `{}`
+    would count every entity `new` and re-embed the whole home on a store
+    that is merely unreachable for a moment.
+    """
+    store = _store()
+    store.list_metadata = AsyncMock(return_value=None)
+    indexer = indexer_factory(hass, store, [_cand("light.a"), _cand("light.b")])
+
+    result = await indexer.reconcile()
+
+    assert result == SweepResult()
+    store.add.assert_not_awaited()
+    store.clear.assert_not_awaited()
+    assert "could not be read" in caplog.text
+
+
+async def test_a_genuinely_empty_store_still_indexes_everything(
+    hass: HomeAssistant, indexer_factory
+) -> None:
+    """The guard above must key off `None`, never off emptiness.
+
+    An over-eager check that also aborted on `{}` would break first-run
+    indexing entirely — every fresh install would index nothing, forever.
+    """
+    store = _store()
+    store.list_metadata = AsyncMock(return_value={})
+    indexer = indexer_factory(hass, store, [_cand("light.a"), _cand("light.b")])
+
+    result = await indexer.reconcile()
+
+    assert result.new == 2
+    assert store.add.await_count == 2
+
+
+async def test_removed_counts_only_what_the_store_actually_deleted(
+    hass: HomeAssistant, indexer_factory
+) -> None:
+    """`MemoryStore.clear` swallows backend failures and returns 0.
+
+    `removed` must take that number rather than counting attempts, or a sweep
+    against a broken backend would report deletions that never happened.
+    """
+    store = _store()
+    store.clear = AsyncMock(return_value=0)
+    store.list_metadata = AsyncMock(
+        return_value={
+            "entity:light.gone": {"kind": "entity", "entity_id": "light.gone", "fingerprint": "x"}
+        }
+    )
     indexer = indexer_factory(hass, store, [_cand("light.a")])
 
     result = await indexer.reconcile()
 
-    assert result.new == 0
-    assert "entity index" in caplog.text.lower()
-    # The actual claim: the previous index survived untouched.
-    store.clear.assert_not_awaited()
-    store.add.assert_not_awaited()
+    store.clear.assert_awaited_once_with({"kind": "entity", "entity_id": "light.gone"})
+    assert result.removed == 0
 
 
 async def test_a_failed_write_never_reaches_delete(hass: HomeAssistant, indexer_factory) -> None:

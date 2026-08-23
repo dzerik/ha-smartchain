@@ -217,6 +217,40 @@ async def test_state_filter_works_without_index_states(hass: HomeAssistant) -> N
     patcher.stop()
 
 
+async def test_state_filter_never_prunes_on_stale_stored_state(hass: HomeAssistant) -> None:
+    """With `index_states: true` the stored state can be half a minute old.
+
+    Filtering vector hits against it inside the store would discard exactly
+    the semantic-only matches this tool exists to find — a cover that opened
+    since the last flush would be invisible to `state="open"`, while the live
+    post-filter that runs afterwards would have kept it. So `state` must never
+    reach the store-side `where`.
+    """
+    hass.states.async_set("cover.a", "open", {})
+    hit = MemorySnippet(
+        text="…",
+        score=0.9,
+        metadata={"kind": "entity", "entity_id": "cover.a", "state": "closed"},
+    )
+    _, store, patcher = _registry(hass, [_cand("cover.a", "Штора")])
+
+    async def _search(_query, *, top_k, where):
+        """A backend that really applies the metadata filter it is handed."""
+        return [hit] if all(hit.metadata.get(k) == v for k, v in where.items()) else []
+
+    store.search = AsyncMock(side_effect=_search)
+    # The store this time really does index states.
+    reg_indexer = MagicMock(spec=EntityIndexer)
+    reg_indexer.config = MagicMock(index_states=True)
+    hass.data[DOMAIN]["memory"].indexer_for.side_effect = lambda n: reg_indexer
+
+    result = await execute_entity_search(hass, query="жалюзи в спальне", state="open")
+
+    assert "state" not in store.search.await_args.kwargs["where"]
+    assert "cover.a" in result
+    patcher.stop()
+
+
 async def test_no_match_names_the_filters(hass: HomeAssistant) -> None:
     _, _, patcher = _registry(hass, [])
     result = await execute_entity_search(hass, query="ничего", domain="light")

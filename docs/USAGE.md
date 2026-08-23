@@ -731,9 +731,9 @@ Off by default, and off is the right choice for most installations.
 
 **When on** the indexer subscribes to state changes *for the indexed entities only*, coalesces them, and writes them into each document's metadata every 30 seconds. It issues **no embedding calls** — the state is never part of the embedded text, which is precisely why a restart is free.
 
-What it buys is **filtering**: `search_entities(query="…", state="open")` becomes a metadata filter evaluated inside the vector store. What it does not buy is better search. Cosine similarity over `"on"`, `"off"` and `"23.5"` is weak, and that is not what the mode is for.
+What it buys is a `state` field in each document's metadata, for anything that reads the store directly. What it does **not** change is what `search_entities` returns: the `state=` argument is always matched against the live state, never against stored metadata. Filtering inside the store would prune vector hits against a value up to 30 seconds old — and arbitrarily older for an entity that has not changed since its last sweep — throwing away exactly the matches the search was for. What it does not buy either is better search: cosine similarity over `"on"`, `"off"` and `"23.5"` is weak, and that is not what the mode is for.
 
-**Leaving it off costs nothing in freshness.** The state that `search_entities` reports is read live from `hass.states` at answer time in either mode, so it is never stale. Passing `state=` to a store with `index_states: false` is not an error either — the filter is simply applied after the live read instead of inside the store, and the caller gets the same answer.
+**Leaving it off costs nothing in freshness.** The state that `search_entities` reports is read live from `hass.states` at answer time in either mode, so it is never stale. Passing `state=` to a store with `index_states: false` is not an error either — the filter is applied after the live read in both modes, and the caller gets the same answer.
 
 #### `search_entities`
 
@@ -760,7 +760,7 @@ The tool is added to the LLM's tool list as soon as at least one store has an en
 >
 > …then calls the Assist API to turn `switch.kitchen_socket_3` off. The tool returns entity ids, so they can be used directly in a service call.
 
-Two passes run and merge. The **lexical** pass matches case- and accent-folded text against the friendly name, the aliases, the area and the `entity_id`, exactly and by prefix or substring. The **vector** pass searches the store, with `domain` / `area` / `state` translated into a metadata filter. Exact lexical hits rank first, then prefix hits, then vector hits by score, deduplicated by `entity_id` and truncated to `top_k`.
+Two passes run and merge. The **lexical** pass matches case- and accent-folded text against the friendly name, the aliases, the area and the `entity_id`, exactly and by prefix or substring. The **vector** pass searches the store, with `domain` and `area` translated into a metadata filter — `state` is not, because stored state lags the live one; it is applied afterwards against `hass.states`. Exact lexical hits rank first, then prefix hits, then vector hits by score, deduplicated by `entity_id` and truncated to `top_k`.
 
 Lexical matching is not a consolation prize: on *"свет на кухне"* a name match is both faster and more accurate than cosine similarity. It also reads the registries directly rather than the index, which is what makes the fallback real — **`search_entities` keeps working when the store is unavailable.** A down embeddings provider degrades it to name matching instead of silencing it.
 

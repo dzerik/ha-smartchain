@@ -1,6 +1,8 @@
 """What gets embedded, and how a change in it is detected."""
 
+from custom_components.smartchain.const import ENTITY_CATALOGUE_MAX_CHARS
 from custom_components.smartchain.tools.memory.entity_doc import (
+    _ALIASES_PREFIX,
     build_metadata,
     doc_id_for,
     fingerprint,
@@ -55,9 +57,16 @@ def test_clearing_a_field_changes_the_fingerprint() -> None:
 
 
 def test_fingerprint_is_stable_and_short() -> None:
-    text = render_catalogue(_cand())
-    assert fingerprint(text) == fingerprint(text)
-    assert len(fingerprint(text)) == 16
+    """Pinned to a literal digest, because "stable" means across releases.
+
+    Comparing `fingerprint(text)` to itself is true of any pure function and
+    guards nothing. What actually matters is that the digest does not change
+    between versions: every stored fingerprint would stop matching at once and
+    the next sweep would re-embed the entire home. Changing the algorithm or
+    the truncation length must therefore break this test on purpose.
+    """
+    assert fingerprint("light.ceiling — Потолок") == "7383b0cf6343909c"
+    assert len(fingerprint(render_catalogue(_cand()))) == 16
 
 
 def test_a_pathological_alias_set_still_fits_one_chunk() -> None:
@@ -77,18 +86,24 @@ def test_a_pathological_alias_set_still_fits_one_chunk() -> None:
     assert len(chunk_text(text)) == 1
 
 
-def test_truncation_is_deterministic() -> None:
-    """A truncated catalogue must fingerprint the same way every render.
+def test_truncation_happens_and_is_deterministic() -> None:
+    """Two claims, and the first is what makes the second worth anything.
 
-    Otherwise the entity would re-embed on every sweep for a different
-    reason than the one this whole design exists to eliminate.
+    Rendering the same candidate twice is equal for any pure function, so on
+    its own that assertion passes with every line of truncation deleted. The
+    bound is the claim with teeth: the catalogue must actually be cut down,
+    and the cut must land in the same place every render — otherwise the
+    entity re-embeds on every sweep, which is what this design exists to
+    eliminate.
     """
     many_long_aliases = tuple(f"alias-{i}-{'x' * 40}" for i in range(200))
     cand = _cand(aliases=many_long_aliases)
+    untruncated = len(_ALIASES_PREFIX + ", ".join(many_long_aliases))
 
     first = render_catalogue(cand)
-    second = render_catalogue(cand)
+    second = render_catalogue(_cand(aliases=tuple(many_long_aliases)))
 
+    assert len(first) <= ENTITY_CATALOGUE_MAX_CHARS < untruncated
     assert first == second
     assert fingerprint(first) == fingerprint(second)
 

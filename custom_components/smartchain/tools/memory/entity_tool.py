@@ -124,8 +124,12 @@ async def execute_entity_search(
             where["domain"] = domain
         if area:
             where["area"] = area
-        if state and indexer.config.index_states:
-            where["state"] = state
+        # `state` is deliberately NOT a store-side filter, even when the store
+        # has index_states: true. Stored state is up to a flush interval old —
+        # and arbitrarily old for an entity that has not changed since its last
+        # sweep — so pruning vector hits against it discards exactly the
+        # semantic matches this tool exists to find. The live post-filter below
+        # is authoritative and runs unconditionally.
         try:
             for snippet in await target.search(query, top_k=top_k * 2, where=where):
                 entity_id = (snippet.metadata or {}).get("entity_id", "")

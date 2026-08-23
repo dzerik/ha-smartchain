@@ -55,6 +55,8 @@ class EntityIndexer:
         self._task: asyncio.Task | None = None
         self._unsub_debounce = None
         self._removal_tasks: set[asyncio.Task] = set()
+        self._unsub_states = None
+        self._tracked: set[str] = set()
         self._pending_states: dict[str, str] = {}
         self._indexed_metadata: dict[str, dict[str, str]] = {}
 
@@ -79,6 +81,16 @@ class EntityIndexer:
     async def _reconcile(self, full: bool = False) -> SweepResult:
         candidates = resolve_candidates(self.hass, self.config)
         stored = await self.store.list_metadata({"kind": "entity"})
+        if stored is None:
+            # A failed read is not an empty store. Proceeding would count every
+            # entity `new` and re-embed the entire home — the one cost this
+            # design exists to avoid — so the sweep aborts and the previous
+            # index stays exactly as it was.
+            LOGGER.warning(
+                "entity index sweep skipped: the store's metadata could not be read; "
+                "the existing index is left untouched"
+            )
+            return SweepResult()
         self._indexed_metadata = dict(stored)
 
         pending: list[tuple[EntityCandidate, str, dict[str, str]]] = []
@@ -107,6 +119,12 @@ class EntityIndexer:
                 seen.add(entity_id)
                 orphans.append(entity_id)
         removed = await self._remove(orphans)
+
+        if self.config.index_states:
+            # The candidate set the sweep just reconciled is also the set whose
+            # states must be tracked; an entity that joined the index here has
+            # no state listener until this runs.
+            self._track_states(set(candidates))
 
         LOGGER.info(
             "entity index: %d new, %d changed, %d removed, %d unchanged",
@@ -172,11 +190,7 @@ class EntityIndexer:
             )
 
         if self.config.index_states:
-            tracked = list(resolve_candidates(self.hass, self.config))
-            if tracked:
-                self._unsubs.append(
-                    async_track_state_change_event(self.hass, tracked, self._on_state)
-                )
+            self._track_states(set(resolve_candidates(self.hass, self.config)))
             self._unsubs.append(
                 async_track_time_interval(
                     self.hass,
@@ -185,10 +199,36 @@ class EntityIndexer:
                 )
             )
 
+    @callback
+    def _track_states(self, entity_ids: set[str]) -> None:
+        """(Re-)subscribe the state listener to exactly `entity_ids`.
+
+        `async_track_state_change_event` binds a fixed list at registration
+        time, so an entity that joins the index after startup would never
+        reach `_pending_states` unless the subscription is rebuilt. Its unsub
+        lives in its own slot rather than `_unsubs` so a rebuild cancels
+        precisely the previous subscription and nothing else; a set that has
+        not changed is left alone rather than churned every sweep.
+        """
+        if entity_ids == self._tracked:
+            return
+        if self._unsub_states is not None:
+            self._unsub_states()
+            self._unsub_states = None
+        self._tracked = set(entity_ids)
+        if entity_ids:
+            self._unsub_states = async_track_state_change_event(
+                self.hass, sorted(entity_ids), self._on_state
+            )
+
     async def stop(self) -> None:
         for unsub in self._unsubs:
             unsub()
         self._unsubs.clear()
+        if self._unsub_states is not None:
+            self._unsub_states()
+            self._unsub_states = None
+        self._tracked = set()
         self._cancel_debounce()
         if self._task is not None:
             self._task.cancel()
@@ -231,7 +271,10 @@ class EntityIndexer:
                 )
                 self._removal_tasks.add(task)
                 task.add_done_callback(self._removal_tasks.discard)
-            return
+            # Fall through: the immediate clear can be overtaken by an
+            # in-flight sweep whose `_write` still carries the removed
+            # entity, resurrecting the document. The debounced sweep is what
+            # cleans that up — nothing else would ever schedule one.
         self._debounce()
 
     @callback

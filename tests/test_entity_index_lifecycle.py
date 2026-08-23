@@ -75,6 +75,32 @@ async def test_entity_removal_deletes_immediately(hass: HomeAssistant) -> None:
     await indexer.stop()
 
 
+async def test_entity_removal_also_schedules_a_reconciling_sweep(hass: HomeAssistant) -> None:
+    """The immediate clear can be overtaken by a sweep already in flight.
+
+    If that sweep's `_write` lands after the clear, the document comes back —
+    and without a debounced sweep behind it, nothing would ever remove it
+    again. It stays invisible in results but wastes storage indefinitely.
+    """
+    indexer, sweep = _indexer(hass)
+    indexer.store.clear = AsyncMock(return_value=1)
+    indexer.start()
+    await hass.async_block_till_done()
+    sweep.reset_mock()
+
+    hass.bus.async_fire(
+        er.EVENT_ENTITY_REGISTRY_UPDATED,
+        {"action": "remove", "entity_id": "light.gone"},
+    )
+    await hass.async_block_till_done()
+
+    assert indexer._unsub_debounce is not None
+    await indexer._flush_debounce()
+
+    assert sweep.await_count == 1
+    await indexer.stop()
+
+
 async def test_registry_changes_are_debounced_into_one_sweep(hass: HomeAssistant) -> None:
     indexer, sweep = _indexer(hass)
     indexer.start()
@@ -211,7 +237,22 @@ async def test_stop_cancels_an_in_flight_removal(hass: HomeAssistant) -> None:
 
 
 async def test_stop_is_idempotent(hass: HomeAssistant) -> None:
+    """A second `stop()` must not raise — and must not tear down twice.
+
+    HA unsub callables are not safe to call again, so "idempotent" has to mean
+    the second call does no work, not merely that it survived.
+    """
     indexer, _ = _indexer(hass)
     indexer.start()
+    teardowns: list[int] = []
+    indexer._unsubs.append(lambda: teardowns.append(1))
+
     await indexer.stop()
     await indexer.stop()
+
+    assert teardowns == [1]
+    assert indexer._unsubs == []
+    assert indexer._unsub_debounce is None
+    assert indexer._unsub_states is None
+    assert indexer._task is None
+    assert indexer._removal_tasks == set()

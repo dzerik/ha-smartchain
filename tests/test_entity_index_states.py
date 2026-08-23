@@ -104,6 +104,12 @@ async def test_flush_with_nothing_pending_is_a_noop(hass: HomeAssistant) -> None
 
 
 async def test_a_failing_flush_does_not_raise(hass: HomeAssistant, caplog) -> None:
+    """And it leaves no lie behind in the cache.
+
+    `_indexed_metadata` is what the next flush and the next sweep read as the
+    truth about the store, so a write that failed must not be recorded there
+    as if it had landed.
+    """
     indexer, store, patcher = _make(hass, index_states=True)
     store.update_metadata = AsyncMock(side_effect=RuntimeError("boom"))
     indexer.start()
@@ -113,8 +119,52 @@ async def test_a_failing_flush_does_not_raise(hass: HomeAssistant, caplog) -> No
 
     await indexer._flush_states()
 
+    assert store.update_metadata.await_count == 1
+    assert "entity state flush failed" in caplog.text
+    assert indexer._indexed_metadata["entity:light.a"].get("state") != "on"
+
     await indexer.stop()
     patcher.stop()
+
+
+async def test_an_entity_added_after_startup_gets_its_states_tracked(
+    hass: HomeAssistant,
+) -> None:
+    """`async_track_state_change_event` binds a fixed list at registration.
+
+    Without re-registering after a sweep, an entity that joined the index
+    later would have its `state` metadata frozen at sweep time forever: it is
+    in `_indexed_metadata`, but no state change ever reaches
+    `_pending_states`, so no flush ever writes it.
+    """
+    indexer, store, patcher = _make(hass, index_states=True)
+    indexer.start()
+    await hass.async_block_till_done()
+
+    # A second entity appears, and the next sweep picks it up.
+    store.list_metadata = AsyncMock(
+        return_value={call.kwargs["doc_id"]: call.args[1] for call in store.add.await_args_list}
+    )
+    patcher.stop()
+    with patch(
+        "custom_components.smartchain.tools.memory.entity_index.resolve_candidates",
+        return_value={"light.a": _cand("light.a"), "light.b": _cand("light.b")},
+    ):
+        result = await indexer.reconcile()
+        assert result.new == 1
+
+        hass.states.async_set("light.b", "on", {})
+        await hass.async_block_till_done()
+
+        assert indexer._pending_states == {"light.b": "on"}
+
+        store.update_metadata.reset_mock()
+        await indexer._flush_states()
+
+    assert store.update_metadata.await_count == 1
+    assert store.update_metadata.await_args.args[0] == "entity:light.b"
+    assert store.update_metadata.await_args.args[1]["state"] == "on"
+    await indexer.stop()
 
 
 async def test_stop_cancels_the_flush_timer(hass: HomeAssistant) -> None:

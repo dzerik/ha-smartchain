@@ -118,7 +118,7 @@ async def test_store_update_metadata_round_trips(store) -> None:
 async def test_store_metadata_helpers_are_safe_when_unavailable(store) -> None:
     store.is_available = False
 
-    assert await store.list_metadata() == {}
+    assert await store.list_metadata() is None
     assert await store.update_metadata("entity:light.a", {"kind": "entity"}) is False
 
 
@@ -126,6 +126,20 @@ async def test_store_metadata_helpers_swallow_backend_failures(store, caplog) ->
     store.backend.list_metadata = AsyncMock(side_effect=RuntimeError("boom"))
     store.backend.update_metadata = AsyncMock(side_effect=RuntimeError("boom"))
 
-    assert await store.list_metadata() == {}
+    assert await store.list_metadata() is None
     assert await store.update_metadata("x", {}) is False
     assert store.is_available is True
+
+
+async def test_a_failed_read_is_not_reported_as_an_empty_store(store) -> None:
+    """`None` and `{}` must never collapse into one another.
+
+    The entity indexer reads `{}` as "the store is empty, index the whole
+    home". If a failed read returned `{}` too, one unreachable database would
+    re-embed every entity in the house.
+    """
+    assert await store.list_metadata({"kind": "entity"}) == {}  # genuinely empty
+
+    store.backend.list_metadata = AsyncMock(side_effect=RuntimeError("boom"))
+
+    assert await store.list_metadata({"kind": "entity"}) is None

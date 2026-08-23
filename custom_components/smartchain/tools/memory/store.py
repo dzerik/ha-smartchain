@@ -181,16 +181,25 @@ class MemoryStore:
             LOGGER.exception("memory clear failed on backend %s", self.backend.name)
             return 0
 
-    async def list_metadata(self, where: dict[str, Any] | None = None) -> dict[str, dict[str, Any]]:
-        """Stored metadata by doc_id. Returns {} on any failure."""
+    async def list_metadata(
+        self, where: dict[str, Any] | None = None
+    ) -> dict[str, dict[str, Any]] | None:
+        """Stored metadata by doc_id, or `None` when it could not be read.
+
+        `None` and `{}` must stay distinguishable. The entity indexer is the
+        only caller, and it reads `{}` as "the store is empty, index the whole
+        home" — so collapsing a transport failure, a locked database or a
+        closed store into `{}` would make the next sweep re-embed every entity
+        in the home, which is the exact cost incremental sweeps exist to avoid.
+        """
         if not self.is_available:
-            return {}
+            return None
         try:
             async with asyncio.timeout(MEMORY_BACKEND_TIMEOUT_SECONDS):
                 return await self.backend.list_metadata(where)
         except Exception:  # noqa: BLE001 — runtime, store stays up
             LOGGER.exception("memory list_metadata failed")
-            return {}
+            return None
 
     async def update_metadata(self, doc_id: str, metadata: dict[str, Any]) -> bool:
         """Refresh one document's metadata. Returns False on any failure."""
