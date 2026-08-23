@@ -85,6 +85,56 @@ def _lexical(
     return ranked
 
 
+async def rank_entities(
+    hass: HomeAssistant,
+    registry: Any,
+    candidates: dict[str, EntityCandidate],
+    query: str,
+    top_k: int,
+    store_name: str | None = None,
+    where_extra: dict[str, Any] | None = None,
+    degrade_on_store_failure: bool = True,
+) -> list[EntityCandidate]:
+    """Candidates ranked lexical-first, then by vector score, deduplicated.
+
+    Lexical matching always runs; the vector pass runs only when `store_name`
+    names an available store. A vector hit for an entity outside `candidates`
+    is dropped — a stale document must not resurrect an entity that no longer
+    exists, or that the caller's preset excludes.
+
+    By default a failing store degrades to lexical rather than failing the
+    caller: this function is on the path that builds a system prompt, and a
+    prompt without vector hits is far better than no prompt. Pass
+    `degrade_on_store_failure=False` to let the exception propagate instead —
+    `execute_entity_search` does this, because its own caller (the LLM tool
+    boundary) must see a fixed failure string rather than a partial result,
+    and it keeps the try/except that produces that string around its call
+    here.
+    """
+    ranked = _lexical(candidates, query)
+    seen = {cand.entity_id for _tier, _score, cand in ranked}
+
+    target = registry.get(store_name) if store_name is not None else None
+    if target is not None and target.is_available:
+        where: dict[str, Any] = {"kind": "entity"}
+        if where_extra:
+            where.update(where_extra)
+        try:
+            for snippet in await target.search(query, top_k=top_k * 2, where=where):
+                entity_id = (snippet.metadata or {}).get("entity_id", "")
+                cand = candidates.get(entity_id)
+                if cand is not None and entity_id not in seen:
+                    ranked.append((_VECTOR, snippet.score, cand))
+                    seen.add(entity_id)
+        except Exception:
+            if not degrade_on_store_failure:
+                raise
+            LOGGER.exception("entity search failed; degrading to lexical only")
+
+    ranked.sort(key=lambda item: (item[0], -item[1]))
+    return [cand for _tier, _score, cand in ranked[:top_k]]
+
+
 async def execute_entity_search(
     hass: HomeAssistant,
     query: str,
@@ -114,37 +164,44 @@ async def execute_entity_search(
         return "Entity lookup failed; see logs."
     candidates = resolve_candidates(hass, indexer.config)
 
-    ranked = _lexical(candidates, query)
-    seen = {cand.entity_id for _tier, _score, cand in ranked}
+    where_extra: dict[str, Any] = {}
+    if domain:
+        where_extra["domain"] = domain
+    if area:
+        where_extra["area"] = area
+    # `state` is deliberately NOT a store-side filter, even when the store
+    # has index_states: true. Stored state is up to a flush interval old —
+    # and arbitrarily old for an entity that has not changed since its last
+    # sweep — so pruning vector hits against it discards exactly the
+    # semantic matches this tool exists to find. The live post-filter below
+    # is authoritative and runs unconditionally.
 
-    target = registry.get(target_name)
-    if target is not None and target.is_available:
-        where: dict[str, Any] = {"kind": "entity"}
-        if domain:
-            where["domain"] = domain
-        if area:
-            where["area"] = area
-        # `state` is deliberately NOT a store-side filter, even when the store
-        # has index_states: true. Stored state is up to a flush interval old —
-        # and arbitrarily old for an entity that has not changed since its last
-        # sweep — so pruning vector hits against it discards exactly the
-        # semantic matches this tool exists to find. The live post-filter below
-        # is authoritative and runs unconditionally.
-        try:
-            for snippet in await target.search(query, top_k=top_k * 2, where=where):
-                entity_id = (snippet.metadata or {}).get("entity_id", "")
-                cand = candidates.get(entity_id)
-                if cand is not None and entity_id not in seen:
-                    ranked.append((_VECTOR, snippet.score, cand))
-                    seen.add(entity_id)
-        except Exception:
-            LOGGER.exception("entity search failed")
-            return "Entity lookup failed; see logs."
-
-    ranked.sort(key=lambda item: (item[0], -item[1]))
+    # rank_entities truncates its return to `top_k`, but this tool must not
+    # lose candidates to that truncation before domain/area/state are
+    # applied below — a match ranked just outside `top_k` may be the only
+    # one of the top matches to survive those filters. `len(candidates)` is
+    # a true upper bound on the merged, deduplicated ranking (it can never
+    # contain more distinct entities than were resolved), so passing it
+    # makes rank_entities' truncation a no-op here; this function's own loop
+    # below still stops at the caller's real `top_k` once filters are
+    # applied, exactly as before this was split out.
+    try:
+        ranked = await rank_entities(
+            hass,
+            registry,
+            candidates,
+            query,
+            top_k=max(len(candidates), 1),
+            store_name=target_name,
+            where_extra=where_extra,
+            degrade_on_store_failure=False,
+        )
+    except Exception:
+        LOGGER.exception("entity search failed")
+        return "Entity lookup failed; see logs."
 
     lines: list[str] = []
-    for _tier, _score, cand in ranked:
+    for cand in ranked:
         if domain and cand.domain != domain:
             continue
         if area and cand.area != area:
