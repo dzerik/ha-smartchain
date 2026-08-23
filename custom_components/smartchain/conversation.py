@@ -305,7 +305,7 @@ class SmartChainConversationEntity(ConversationEntity):
         memory_registry: MemoryRegistry | None = self.hass.data.get(DOMAIN, {}).get("memory")
         memory_enabled = memory_registry is not None and len(memory_registry) > 0
         if memory_enabled:
-            tools.append(get_memory_tool_definition())
+            tools.append(get_memory_tool_definition(memory_registry))
 
         registry: ToolRegistry | None = self.hass.data.get(DOMAIN, {}).get("tools")
         custom_tools = self._collect_custom_tools(registry) if registry else []
@@ -380,6 +380,7 @@ class SmartChainConversationEntity(ConversationEntity):
                                 top_k=int(args.get("top_k", 5)),
                                 kind=str(args.get("kind", "any")),
                                 subentry_id=self._subentry_id,
+                                store=args.get("store"),
                             )
                         except Exception:
                             LOGGER.exception("search_memory dispatch failed")

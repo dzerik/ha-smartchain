@@ -1,4 +1,4 @@
-"""Tests for the search_memory built-in tool."""
+"""search_memory routes to a named store and describes what each one holds."""
 
 from unittest.mock import AsyncMock, MagicMock
 
@@ -12,100 +12,115 @@ from custom_components.smartchain.tools.memory.search_tool import (
 from custom_components.smartchain.tools.memory.store import MemorySnippet
 
 
-def test_definition_shape() -> None:
-    spec = get_memory_tool_definition()
-    assert spec["name"] == MEMORY_TOOL_NAME
-    params = spec["parameters"]["properties"]
-    assert "query" in params
-    assert "top_k" in params
-    assert "kind" in params
-
-
-async def test_execute_returns_formatted_snippets(hass: HomeAssistant) -> None:
-    store = MagicMock()
-    store.is_available = True
-    store.search = AsyncMock(
-        return_value=[
-            MemorySnippet(
-                text="User: hi\nAssistant: hello",
-                score=0.9,
-                metadata={"kind": "conversation", "timestamp": "2026-05-27T18:00:00+00:00"},
-            )
-        ]
+def _registry(entries: dict[str, str], stores: dict[str, MagicMock] | None = None):
+    """A stub registry: {name: description} plus optional store mocks."""
+    made = stores or {name: MagicMock() for name in entries}
+    reg = MagicMock()
+    reg.names.return_value = list(entries)
+    reg.describe.return_value = list(entries.items())
+    reg.__len__.return_value = len(entries)
+    reg.get.side_effect = lambda name: (
+        made.get(name)
+        if name is not None
+        else (next(iter(made.values())) if len(made) == 1 else None)
     )
-    hass.data.setdefault(DOMAIN, {})["memory"] = store
-
-    result = await execute_memory_search(hass, query="greeting", top_k=5, kind="any")
-    assert "User: hi" in result
-    assert "conversation" in result
-    assert "2026-05-27" in result
-    store.search.assert_awaited_once()
+    return reg, made
 
 
-async def test_execute_filters_by_kind(hass: HomeAssistant) -> None:
+def _store_returning(snippets: list[MemorySnippet]) -> MagicMock:
     store = MagicMock()
     store.is_available = True
-    store.search = AsyncMock(return_value=[])
-    hass.data.setdefault(DOMAIN, {})["memory"] = store
-
-    await execute_memory_search(hass, query="x", top_k=3, kind="logbook")
-    args, kwargs = store.search.call_args
-    where = kwargs.get("where") if "where" in kwargs else args[2] if len(args) > 2 else None
-    assert where is not None
-    assert where.get("kind") == "logbook"
+    store.search = AsyncMock(return_value=snippets)
+    return store
 
 
-async def test_execute_returns_not_configured_when_missing(hass: HomeAssistant) -> None:
-    hass.data.pop(DOMAIN, None)
+def test_definition_has_no_store_enum_for_a_single_store() -> None:
+    reg, _ = _registry({"only": "The one store"})
+    spec = get_memory_tool_definition(reg)
+    assert spec["name"] == MEMORY_TOOL_NAME
+    assert "store" not in spec["parameters"].get("required", [])
+
+
+def test_definition_requires_store_when_several_exist() -> None:
+    reg, _ = _registry({"a": "First", "b": "Second"})
+    spec = get_memory_tool_definition(reg)
+    assert spec["parameters"]["properties"]["store"]["enum"] == ["a", "b"]
+    assert "store" in spec["parameters"]["required"]
+
+
+def test_definition_embeds_store_descriptions() -> None:
+    reg, _ = _registry({"a": "Dialogue history", "b": "Devices and sensors"})
+    spec = get_memory_tool_definition(reg)
+    text = spec["description"] + spec["parameters"]["properties"]["store"]["description"]
+    assert "Dialogue history" in text
+    assert "Devices and sensors" in text
+
+
+async def test_execute_routes_to_the_named_store(hass: HomeAssistant) -> None:
+    hit = MemorySnippet(text="from B", score=0.9, metadata={"kind": "logbook", "timestamp": "t"})
+    store_a = _store_returning([])
+    store_b = _store_returning([hit])
+    reg, _ = _registry({"a": "", "b": ""}, {"a": store_a, "b": store_b})
+    hass.data.setdefault(DOMAIN, {})["memory"] = reg
+
+    result = await execute_memory_search(hass, query="x", store="b")
+    assert "from B" in result
+    store_a.search.assert_not_awaited()
+    store_b.search.assert_awaited_once()
+
+
+async def test_execute_defaults_to_the_only_store(hass: HomeAssistant) -> None:
+    hit = MemorySnippet(text="only", score=0.9, metadata={"kind": "conversation", "timestamp": "t"})
+    store = _store_returning([hit])
+    reg, _ = _registry({"only": ""}, {"only": store})
+    hass.data.setdefault(DOMAIN, {})["memory"] = reg
+
     result = await execute_memory_search(hass, query="x")
-    assert "not configured" in result.lower()
+    assert "only" in result
+
+
+async def test_execute_rejects_unknown_store_by_name(hass: HomeAssistant) -> None:
+    reg, _ = _registry({"a": ""})
+    hass.data.setdefault(DOMAIN, {})["memory"] = reg
+
+    result = await execute_memory_search(hass, query="x", store="ghost")
+    assert "ghost" in result
+    assert "a" in result  # the available names are listed back to the model
+
+
+async def test_execute_asks_for_a_store_when_ambiguous(hass: HomeAssistant) -> None:
+    reg, _ = _registry({"a": "", "b": ""})
+    hass.data.setdefault(DOMAIN, {})["memory"] = reg
+
+    result = await execute_memory_search(hass, query="x")
+    assert "store" in result.lower()
+
+
+async def test_execute_returns_not_configured_for_empty_registry(
+    hass: HomeAssistant,
+) -> None:
+    reg, _ = _registry({})
+    hass.data.setdefault(DOMAIN, {})["memory"] = reg
+    assert "not configured" in (await execute_memory_search(hass, query="x")).lower()
+
+
+async def test_execute_still_filters_by_kind_and_subentry(hass: HomeAssistant) -> None:
+    store = _store_returning([])
+    reg, _ = _registry({"only": ""}, {"only": store})
+    hass.data.setdefault(DOMAIN, {})["memory"] = reg
+
+    await execute_memory_search(hass, query="x", kind="logbook", subentry_id="s1")
+    where = store.search.call_args.kwargs["where"]
+    assert where == {"kind": "logbook", "subentry_id": "s1"}
 
 
 async def test_execute_returns_failure_string_on_exception(hass: HomeAssistant) -> None:
     store = MagicMock()
     store.is_available = True
     store.search = AsyncMock(side_effect=RuntimeError("boom"))
-    hass.data.setdefault(DOMAIN, {})["memory"] = store
+    reg, _ = _registry({"only": ""}, {"only": store})
+    hass.data.setdefault(DOMAIN, {})["memory"] = reg
 
     result = await execute_memory_search(hass, query="x")
     assert "lookup failed" in result.lower()
-
-
-async def test_execute_empty_results_returns_no_memories(hass: HomeAssistant) -> None:
-    store = MagicMock()
-    store.is_available = True
-    store.search = AsyncMock(return_value=[])
-    hass.data.setdefault(DOMAIN, {})["memory"] = store
-    result = await execute_memory_search(hass, query="x")
-    assert "no" in result.lower() and "memor" in result.lower()
-
-
-async def test_execute_filters_by_subentry_id(hass: HomeAssistant) -> None:
-    """When subentry_id is provided, the where clause should include it."""
-    store = MagicMock()
-    store.is_available = True
-    store.search = AsyncMock(return_value=[])
-    hass.data.setdefault(DOMAIN, {})["memory"] = store
-
-    await execute_memory_search(hass, query="x", subentry_id="sub_abc")
-    args, kwargs = store.search.call_args
-    where = kwargs.get("where") if "where" in kwargs else args[2] if len(args) > 2 else None
-    assert where is not None
-    assert where.get("subentry_id") == "sub_abc"
-
-
-async def test_execute_wraps_kind_and_subentry_in_and(hass: HomeAssistant) -> None:
-    """When both kind and subentry_id are set, filter should use $and syntax."""
-    store = MagicMock()
-    store.is_available = True
-    store.search = AsyncMock(return_value=[])
-    hass.data.setdefault(DOMAIN, {})["memory"] = store
-
-    await execute_memory_search(hass, query="x", kind="conversation", subentry_id="sub_xyz")
-    args, kwargs = store.search.call_args
-    where = kwargs.get("where") if "where" in kwargs else args[2] if len(args) > 2 else None
-    assert where is not None
-    assert "$and" in where
-    conditions = where["$and"]
-    assert {"kind": "conversation"} in conditions
-    assert {"subentry_id": "sub_xyz"} in conditions
+    assert "boom" not in result

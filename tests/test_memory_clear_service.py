@@ -116,25 +116,83 @@ async def test_clear_memory_fires_event(
     assert events[0].data["stores"] == ["conversations"]
 
 
-async def test_clear_memory_unknown_store_raises(
-    hass: HomeAssistant, tools_dir: Path, patched_store
-) -> None:
-    """Naming a store that is not configured is an error, not a silent no-op."""
-    (tools_dir / "tools.yaml").write_text(
-        "tools: []\n"
-        "memory:\n"
-        "  stores:\n"
-        "    - name: conversations\n"
-        '      embeddings: "GigaChat Embeddings"\n'
-    )
+_TWO_STORES_YAML = """
+tools: []
+memory:
+  stores:
+    - name: conversations
+      embeddings: "GigaChat Embeddings"
+    - name: entities
+      embeddings: "GigaChat Embeddings"
+"""
+
+
+@pytest.fixture
+def two_stores(hass: HomeAssistant, tools_dir: Path):
+    """Two configured stores, each backed by a mock that reports 3 deletions."""
+    (tools_dir / "tools.yaml").write_text(_TWO_STORES_YAML)
     _add_embeddings_entry(hass)
+
+    def _factory(hass_, embeddings, backend):
+        st = MagicMock()
+        st.is_available = True
+        st.async_setup = AsyncMock()
+        st.close = AsyncMock()
+        st.clear = AsyncMock(return_value=3)
+        return st
+
+    with (
+        patch(
+            "custom_components.smartchain.tools.memory.registry.MemoryStore",
+            side_effect=_factory,
+        ),
+        patch(
+            "custom_components.smartchain.tools.memory.registry.create_embeddings_from_subentry",
+            return_value=MagicMock(),
+        ),
+    ):
+        yield
+
+
+async def test_clear_memory_targets_one_store(hass: HomeAssistant, two_stores) -> None:
+    """Passing `store` clears only that store."""
+    await async_setup(hass, {})
+
+    events: list = []
+    hass.bus.async_listen(EVENT_MEMORY_CLEARED, lambda e: events.append(e))
+
+    await hass.services.async_call(
+        DOMAIN, SERVICE_CLEAR_MEMORY, {"store": "conversations"}, blocking=True
+    )
+    await hass.async_block_till_done()
+
+    assert events[0].data["stores"] == ["conversations"]
+    assert events[0].data["deleted"] == 3
+
+
+async def test_clear_memory_without_store_clears_all(hass: HomeAssistant, two_stores) -> None:
+    """With no `store` the service clears every configured store."""
+    await async_setup(hass, {})
+
+    events: list = []
+    hass.bus.async_listen(EVENT_MEMORY_CLEARED, lambda e: events.append(e))
+
+    await hass.services.async_call(DOMAIN, SERVICE_CLEAR_MEMORY, {}, blocking=True)
+    await hass.async_block_till_done()
+
+    assert sorted(events[0].data["stores"]) == ["conversations", "entities"]
+    assert events[0].data["deleted"] == 6
+
+
+async def test_clear_memory_unknown_store_raises(hass: HomeAssistant, two_stores) -> None:
+    """Naming a store that is not configured is an error, not a silent no-op."""
     await async_setup(hass, {})
 
     # Assert the registry actually built: without this the empty-registry guard
     # would raise the same error and the unknown-store guard would go untested.
-    assert hass.data[DOMAIN]["memory"].names() == ["conversations"]
+    assert sorted(hass.data[DOMAIN]["memory"].names()) == ["conversations", "entities"]
 
     with pytest.raises(HomeAssistantError, match="unknown memory store"):
         await hass.services.async_call(
-            DOMAIN, SERVICE_CLEAR_MEMORY, {"store": "nope"}, blocking=True
+            DOMAIN, SERVICE_CLEAR_MEMORY, {"store": "ghost"}, blocking=True
         )
