@@ -52,3 +52,20 @@ def test_loader_rejects_legacy_flat_block_with_guidance(tmp_path: Path) -> None:
     assert "embeddings subentry" in message
     assert "stores:" in message
     assert "reload_tools" in message
+
+
+def test_loader_parses_an_entity_source(tmp_path: Path) -> None:
+    target = tmp_path / "tools.yaml"
+    target.write_text((FIXTURE_DIR / "entity_store.yaml").read_text())
+    result = load_tools_file(target)
+
+    entities, conversations = result.memory_settings.stores
+    assert entities.source is not None
+    assert entities.source.type == "entities"
+    assert entities.source.preset == "paranoid"
+    assert entities.source.index_states is True
+    assert entities.source.include == ["sensor.special_one"]
+    assert entities.source.exclude == ["update"]
+
+    assert conversations.source is None
+    assert conversations.retention_days == 30

@@ -1,0 +1,18 @@
+tools: []
+memory:
+  stores:
+    - name: entities
+      description: "Devices and sensors"
+      embeddings: "GigaChat Embeddings"
+      backend:
+        type: sqlite_numpy
+      source:
+        type: entities
+        preset: paranoid
+        index_states: true
+        include: [sensor.special_one]
+        exclude: [update]
+
+    - name: conversations
+      embeddings: "GigaChat Embeddings"
+      retention_days: 30

@@ -12,7 +12,13 @@ from homeassistant.util.yaml import load_yaml as ha_load_yaml
 
 from ..const import RESERVED_TOOL_NAMES
 from .mcp.config import HTTPConfig, MCPServerConfig, SSEConfig, StdioConfig
-from .memory.config import BackendConfig, LogbookConfig, MemorySettings, StoreConfig
+from .memory.config import (
+    BackendConfig,
+    EntitySourceConfig,
+    LogbookConfig,
+    MemorySettings,
+    StoreConfig,
+)
 from .model import (
     CustomTool,
     RESTAction,
@@ -181,6 +187,18 @@ def _memory_from_validated(validated: dict) -> MemorySettings:
     for entry in raw.get("stores") or []:
         backend_raw = entry.get("backend") or {}
         logbook_raw = entry.get("ingest_logbook") or {}
+        source_raw = entry.get("source")
+        source = (
+            EntitySourceConfig(
+                type=source_raw["type"],
+                preset=source_raw.get("preset", "optimal"),
+                index_states=source_raw.get("index_states", False),
+                include=list(source_raw.get("include") or []),
+                exclude=list(source_raw.get("exclude") or []),
+            )
+            if isinstance(source_raw, dict)
+            else None
+        )
         stores.append(
             StoreConfig(
                 name=entry["name"],
@@ -203,6 +221,7 @@ def _memory_from_validated(validated: dict) -> MemorySettings:
                     domains=list(logbook_raw.get("domains") or []),
                     poll_interval_minutes=logbook_raw.get("poll_interval_minutes", 60),
                 ),
+                source=source,
             )
         )
     return MemorySettings(stores=stores)

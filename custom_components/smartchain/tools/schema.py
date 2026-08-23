@@ -3,6 +3,9 @@
 import voluptuous as vol
 
 from ..const import (
+    ENTITY_DEFAULT_PRESET,
+    ENTITY_PRESETS,
+    ENTITY_SOURCE_TYPE,
     MCP_NAME_PATTERN,
     MEMORY_BACKEND_TYPES,
     MEMORY_DEFAULT_LOGBOOK_POLL_MINUTES,
@@ -187,6 +190,20 @@ _BACKEND_SCHEMA = vol.Schema(
 )
 
 
+# A domain (`sensor`) or a full entity_id (`sensor.kitchen_temperature`).
+_ENTITY_SELECTOR = vol.Match(r"^[a-z_]+(\.[a-z0-9_]+)?\Z")
+
+_SOURCE_SCHEMA = vol.Schema(
+    {
+        vol.Required("type"): vol.In([ENTITY_SOURCE_TYPE]),
+        vol.Optional("preset", default=ENTITY_DEFAULT_PRESET): vol.In(ENTITY_PRESETS),
+        vol.Optional("index_states", default=False): bool,
+        vol.Optional("include", default=list): [_ENTITY_SELECTOR],
+        vol.Optional("exclude", default=list): [_ENTITY_SELECTOR],
+    }
+)
+
+
 _STORE_SCHEMA = vol.Schema(
     {
         vol.Required("name"): vol.All(str, vol.Match(MEMORY_STORE_NAME_PATTERN)),
@@ -196,6 +213,7 @@ _STORE_SCHEMA = vol.Schema(
         vol.Optional("retention_days", default=90): vol.All(int, vol.Range(min=0, max=3650)),
         vol.Optional("ingest_conversation", default=True): bool,
         vol.Optional("ingest_logbook", default=dict): _LOGBOOK_SCHEMA,
+        vol.Optional("source"): _SOURCE_SCHEMA,
     }
 )
 
@@ -218,6 +236,30 @@ def _validate_memory(value: object) -> dict:
             "stores: list referencing it by name, then call smartchain.reload_tools. "
             f"Offending keys: {sorted(legacy_keys)}"
         )
+
+    # Must run against the RAW mapping, before _STORE_SCHEMA applies its
+    # defaults: `ingest_conversation` defaults to True, so a check performed
+    # after validation could not tell a user's explicit `true` from the
+    # default and would reject every entity store anyone ever wrote.
+    raw_stores = value.get("stores")
+    if isinstance(raw_stores, list):
+        for raw in raw_stores:
+            if not isinstance(raw, dict):
+                continue
+            source = raw.get("source")
+            if not isinstance(source, dict) or source.get("type") != ENTITY_SOURCE_TYPE:
+                continue
+            clashing = sorted(
+                {"retention_days", "ingest_conversation", "ingest_logbook"} & set(raw)
+            )
+            if clashing:
+                raise vol.Invalid(
+                    f"memory store {raw.get('name')!r} declares source.type: "
+                    f"{ENTITY_SOURCE_TYPE}, so these keys do not apply and were "
+                    f"rejected: {clashing}. Retention would delete indexed entities "
+                    "by age, and conversation or logbook ingest would write "
+                    "non-entity documents into the index."
+                )
 
     validated = vol.Schema({vol.Optional("stores", default=list): [_STORE_SCHEMA]})(value)
 

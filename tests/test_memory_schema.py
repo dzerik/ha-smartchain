@@ -113,3 +113,87 @@ def test_backend_collection_rejects_non_identifiers(collection: str) -> None:
         MEMORY_SCHEMA(
             {"stores": [{"name": "a", "embeddings": "E", "backend": {"collection": collection}}]}
         )
+
+
+def test_source_block_validates() -> None:
+    result = MEMORY_SCHEMA(
+        {"stores": [{"name": "e", "embeddings": "E", "source": {"type": "entities"}}]}
+    )
+    source = result["stores"][0]["source"]
+    assert source["preset"] == "optimal"
+    assert source["index_states"] is False
+    assert source["include"] == []
+
+
+def test_source_rejects_an_unknown_type() -> None:
+    with pytest.raises(vol.Invalid):
+        MEMORY_SCHEMA(
+            {"stores": [{"name": "e", "embeddings": "E", "source": {"type": "automations"}}]}
+        )
+
+
+def test_source_rejects_an_unknown_preset() -> None:
+    with pytest.raises(vol.Invalid):
+        MEMORY_SCHEMA(
+            {
+                "stores": [
+                    {
+                        "name": "e",
+                        "embeddings": "E",
+                        "source": {"type": "entities", "preset": "aggressive"},
+                    }
+                ]
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    "key,value",
+    [
+        ("retention_days", 30),
+        ("ingest_conversation", True),
+        ("ingest_conversation", False),
+        ("ingest_logbook", {"enabled": True}),
+    ],
+)
+def test_entity_store_rejects_incompatible_keys(key: str, value: object) -> None:
+    """Retention would delete the index by age; ingest would pollute it."""
+    with pytest.raises(vol.Invalid, match="do not apply"):
+        MEMORY_SCHEMA(
+            {
+                "stores": [
+                    {"name": "e", "embeddings": "E", "source": {"type": "entities"}, key: value}
+                ]
+            }
+        )
+
+
+def test_entity_store_tolerates_defaulted_ingest_conversation() -> None:
+    """The check must look at the raw keys, not at post-default values.
+
+    `ingest_conversation` defaults to True, so a validator running after
+    defaults were applied would reject every entity store ever written.
+    """
+    MEMORY_SCHEMA({"stores": [{"name": "e", "embeddings": "E", "source": {"type": "entities"}}]})
+
+
+def test_conversation_store_keeps_its_keys() -> None:
+    result = MEMORY_SCHEMA({"stores": [{"name": "c", "embeddings": "E", "retention_days": 7}]})
+    assert result["stores"][0]["retention_days"] == 7
+    assert result["stores"][0].get("source") is None
+
+
+@pytest.mark.parametrize("bad", ["Sensor", "sensor.", ".x", "sensor x", "a.b.c"])
+def test_source_include_rejects_malformed_entries(bad: str) -> None:
+    with pytest.raises(vol.Invalid):
+        MEMORY_SCHEMA(
+            {
+                "stores": [
+                    {
+                        "name": "e",
+                        "embeddings": "E",
+                        "source": {"type": "entities", "include": [bad]},
+                    }
+                ]
+            }
+        )
