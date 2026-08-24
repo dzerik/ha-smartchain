@@ -1,7 +1,5 @@
 """Config flow for the providers added by the table."""
 
-from unittest.mock import patch
-
 import pytest
 from homeassistant.data_entry_flow import FlowResultType
 
@@ -12,10 +10,8 @@ from custom_components.smartchain.const import (
     CONF_ENGINE,
     CONF_SKIP_VALIDATION,
     DOMAIN,
-    ID_GROQ,
     ID_LMSTUDIO,
     OPENAI_COMPATIBLE,
-    UNIQUE_ID,
 )
 
 pytestmark = pytest.mark.usefixtures("enable_custom_integrations")
@@ -33,25 +29,32 @@ def test_every_row_has_a_named_step():
         assert hasattr(ConfigFlow, f"async_step_{engine}"), engine
 
 
-async def test_hosted_provider_flow_creates_an_entry(hass, mock_get_client):
+@pytest.mark.parametrize("engine", sorted(OPENAI_COMPATIBLE))
+async def test_every_provider_step_creates_its_own_entry(hass, mock_get_client, engine):
+    """Each row's step must create an entry for ITS OWN engine.
+
+    This is what catches a copy-pasted id inside async_step_<provider> — e.g.
+    async_step_openrouter accidentally dispatching ID_TOGETHER. hasattr and
+    translation-presence checks can't see that; only driving the step and
+    checking what engine ends up in the created entry can.
+    """
+    row = OPENAI_COMPATIBLE[engine]
     result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
     result = await hass.config_entries.flow.async_configure(
-        result["flow_id"], {CONF_ENGINE: ID_GROQ}
+        result["flow_id"], {CONF_ENGINE: engine}
     )
     assert result["type"] is FlowResultType.FORM
-    assert result["step_id"] == ID_GROQ
+    assert result["step_id"] == engine
 
-    # The flow calls `validate_client` through the name bound in config_flow's
-    # own namespace (`from .client_util import ... validate_client`), so the
-    # patch has to target config_flow, not client_util, to take effect.
-    with patch("custom_components.smartchain.config_flow.validate_client"):
-        result = await hass.config_entries.flow.async_configure(
-            result["flow_id"],
-            {CONF_API_KEY: "k", CONF_SKIP_VALIDATION: True},
-        )
+    submission = {CONF_SKIP_VALIDATION: True}
+    if row.requires_api_key:
+        submission[CONF_API_KEY] = "k"
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], submission)
+
     assert result["type"] is FlowResultType.CREATE_ENTRY
-    assert result["title"] == UNIQUE_ID[ID_GROQ]
-    assert result["data"][CONF_ENGINE] == ID_GROQ
+    assert result["data"][CONF_ENGINE] == engine
+    assert result["title"] == row.label
+    assert result["data"][CONF_BASE_URL] == row.default_base_url
 
 
 async def test_local_provider_flow_needs_no_api_key(hass, mock_get_client):
