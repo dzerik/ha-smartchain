@@ -23,26 +23,32 @@ from .const import (
     DEFAULT_OLLAMA_BASE_URL,
     DEFAULT_PROFANITY,
     DEFAULT_VERIFY_SSL,
+    EMBEDDING_RULE_HEURISTIC,
+    EMBEDDING_RULE_OPENAI_PREFIX,
     ID_ANTHROPIC,
     ID_DEEPSEEK,
     ID_GIGACHAT,
     ID_OLLAMA,
     ID_OPENAI,
     ID_YANDEX_GPT,
+    OPENAI_COMPATIBLE,
 )
 
 LOGGER = logging.getLogger(__name__)
 
-# Which providers can serve which purpose. DeepSeek exposes no embeddings
-# endpoint; Anthropic directs users to Voyage. Neither offers the embeddings
-# subentry in the UI.
+# The four hand-written providers are literal; every OpenAI-compatible one
+# contributes its row's capabilities.
 PROVIDER_CAPABILITIES: dict[str, frozenset[str]] = {
     ID_GIGACHAT: frozenset({CAPABILITY_CHAT, CAPABILITY_EMBEDDINGS}),
     ID_YANDEX_GPT: frozenset({CAPABILITY_CHAT, CAPABILITY_EMBEDDINGS}),
-    ID_OPENAI: frozenset({CAPABILITY_CHAT, CAPABILITY_EMBEDDINGS}),
     ID_OLLAMA: frozenset({CAPABILITY_CHAT, CAPABILITY_EMBEDDINGS}),
-    ID_DEEPSEEK: frozenset({CAPABILITY_CHAT}),
     ID_ANTHROPIC: frozenset({CAPABILITY_CHAT}),
+    **{
+        engine: frozenset(
+            {CAPABILITY_CHAT, CAPABILITY_EMBEDDINGS} if row.serves_embeddings else {CAPABILITY_CHAT}
+        )
+        for engine, row in OPENAI_COMPATIBLE.items()
+    },
 }
 
 
@@ -174,8 +180,13 @@ _OLLAMA_EMBEDDING_HINT = re.compile(r"embed|bge-|gte-|e5-|minilm", re.IGNORECASE
 
 def is_embedding_model(engine: str, name: str) -> bool:
     """Whether `name` is an embedding model for `engine`."""
-    if engine == ID_OPENAI:
-        return name.startswith("text-embedding-")
+    row = OPENAI_COMPATIBLE.get(engine)
+    if row is not None:
+        if row.embedding_rule == EMBEDDING_RULE_OPENAI_PREFIX:
+            return name.startswith("text-embedding-")
+        if row.embedding_rule == EMBEDDING_RULE_HEURISTIC:
+            return bool(_OLLAMA_EMBEDDING_HINT.search(name))
+        return False
     if engine == ID_GIGACHAT:
         return name.startswith("Embeddings")
     if engine == ID_OLLAMA:

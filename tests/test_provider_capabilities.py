@@ -35,4 +35,6 @@ def test_unknown_engine_supports_nothing() -> None:
 
 def test_matrix_covers_every_known_provider() -> None:
     known = {ID_GIGACHAT, ID_YANDEX_GPT, ID_OPENAI, ID_OLLAMA, ID_DEEPSEEK, ID_ANTHROPIC}
-    assert set(PROVIDER_CAPABILITIES) == known
+    # PROVIDER_CAPABILITIES now includes all OpenAI-compatible providers from the table,
+    # so it's a superset of the known ones, not an exact match.
+    assert known <= set(PROVIDER_CAPABILITIES)

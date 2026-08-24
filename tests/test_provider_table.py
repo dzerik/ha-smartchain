@@ -1,6 +1,9 @@
 """The OpenAI-compatible provider table and the dicts derived from it."""
 
+from custom_components.smartchain.client_util import is_embedding_model, supports
 from custom_components.smartchain.const import (
+    CAPABILITY_CHAT,
+    CAPABILITY_EMBEDDINGS,
     CONF_ENGINE_OPTIONS,
     DEFAULT_MODEL,
     EMBEDDING_RULE_HEURISTIC,
@@ -8,6 +11,7 @@ from custom_components.smartchain.const import (
     EMBEDDING_RULE_OPENAI_PREFIX,
     ENGINE_MODELS,
     ID_DEEPSEEK,
+    ID_GIGACHAT,
     ID_GROQ,
     ID_LLAMACPP,
     ID_LMSTUDIO,
@@ -99,3 +103,44 @@ def test_picker_offers_every_row():
 def test_picker_has_no_duplicates():
     values = [option["value"] for option in CONF_ENGINE_OPTIONS]
     assert len(values) == len(set(values))
+
+
+def test_every_row_supports_chat():
+    for engine in OPENAI_COMPATIBLE:
+        assert supports(engine, CAPABILITY_CHAT), engine
+
+
+def test_embeddings_capability_follows_the_row():
+    for engine, row in OPENAI_COMPATIBLE.items():
+        assert supports(engine, CAPABILITY_EMBEDDINGS) is row.serves_embeddings, engine
+
+
+def test_hand_written_providers_keep_their_capabilities():
+    assert supports(ID_GIGACHAT, CAPABILITY_EMBEDDINGS) is True
+    assert supports(ID_GIGACHAT, CAPABILITY_CHAT) is True
+
+
+def test_unknown_engine_supports_nothing():
+    assert supports("nope", CAPABILITY_CHAT) is False
+
+
+def test_openai_still_uses_the_prefix_rule():
+    assert is_embedding_model(ID_OPENAI, "text-embedding-3-small") is True
+    assert is_embedding_model(ID_OPENAI, "gpt-4.1-mini") is False
+    # The heuristic would match this; the prefix rule must not.
+    assert is_embedding_model(ID_OPENAI, "some-bge-model") is False
+
+
+def test_deepseek_calls_every_name_a_chat_name():
+    assert is_embedding_model(ID_DEEPSEEK, "deepseek-chat") is False
+    assert is_embedding_model(ID_DEEPSEEK, "deepseek-embed") is False
+
+
+def test_heuristic_rule_matches_the_embedding_families():
+    for name in ("nomic-embed-text", "bge-m3", "gte-large", "e5-base", "all-minilm"):
+        assert is_embedding_model(ID_LMSTUDIO, name) is True, name
+
+
+def test_heuristic_rule_passes_chat_names_through():
+    for name in ("llama-3.3-70b", "qwen2.5-coder", "mistral-small"):
+        assert is_embedding_model(ID_OPENROUTER, name) is False, name
