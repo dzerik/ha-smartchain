@@ -331,7 +331,7 @@ Note the guard on `CONF_ENGINE_OPTIONS`: `openai` and `deepseek` are already lis
 - [ ] **Step 6: Run the new test**
 
 Run: `uv run --prerelease=allow pytest tests/test_provider_table.py -q`
-Expected: 11 passed.
+Expected: 12 passed.
 
 - [ ] **Step 7: Run the whole suite and lint**
 
