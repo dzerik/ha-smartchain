@@ -278,3 +278,62 @@ async def test_conversation_entity_subentry_options(hass: HomeAssistant, mock_ll
     assert entity._attr_name == "Test Agent"
     assert entity._agent_options[CONF_CHAT_MODEL] == "GigaChat"
     assert entity._client is mock_llm_client
+
+
+def test_every_renderable_subentry_field_has_a_label() -> None:
+    """Every field `_subentry_schema` can render must be labelled in all three files.
+
+    Home Assistant falls back to showing the raw key when a translation is
+    missing, silently — no error, no log line. Two fields shipped that way for
+    two releases (`allowed_tools`, `enable_multi_agent_tools`) because both sit
+    behind an `if` and only appear for users who configured custom tools or a
+    second agent. Enumerating the schema's source is what catches a conditional
+    branch; asserting only the keys a given change adds is what let those two
+    through.
+    """
+    import ast
+    import json
+    from pathlib import Path
+
+    from custom_components.smartchain import const as const_mod
+
+    base = Path(__file__).parent.parent / "custom_components" / "smartchain"
+    tree = ast.parse((base / "config_flow.py").read_text())
+    schema_fn = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "_subentry_schema"
+    )
+
+    keys: set[str] = set()
+    for node in ast.walk(schema_fn):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+            continue
+        if node.func.attr not in ("Optional", "Required") or not node.args:
+            continue
+        first = node.args[0]
+        if isinstance(first, ast.Name) and first.id.startswith("CONF_"):
+            keys.add(getattr(const_mod, first.id))
+
+    assert keys, "found no schema fields — the AST walk is broken, not the translations"
+
+    files = {
+        "strings.json": base / "strings.json",
+        "translations/en.json": base / "translations" / "en.json",
+        "translations/ru.json": base / "translations" / "ru.json",
+    }
+
+    missing: list[str] = []
+    for name, path in files.items():
+        data = json.loads(path.read_text())
+        conversation = data["config_subentries"]["conversation"]["step"]
+        blocks = {
+            "config_subentries.conversation.step.user": conversation["user"]["data"],
+            "config_subentries.conversation.step.reconfigure": conversation["reconfigure"]["data"],
+            "options.step.settings": data["options"]["step"]["settings"]["data"],
+        }
+        for block_name, block in blocks.items():
+            for key in sorted(keys - set(block)):
+                missing.append(f"{name} -> {block_name} -> {key}")
+
+    assert not missing, "fields rendered without a label:\n" + "\n".join(missing)

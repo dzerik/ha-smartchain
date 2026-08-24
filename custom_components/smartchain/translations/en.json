@@ -81,7 +81,9 @@
           "enable_history_tool": "State History Tool (LLM can query past device states)",
           "dynamic_entity_context": "Dynamic entity context (send a compact map of the home plus what the message is about, instead of every entity)",
           "dynamic_context_preset": "Which entities the map covers",
-          "dynamic_context_on_assist": "Also add matched entities when the Assist API is enabled"
+          "dynamic_context_on_assist": "Also add matched entities when the Assist API is enabled",
+          "allowed_tools": "Custom Tools (which YAML tools this agent may use)",
+          "enable_multi_agent_tools": "Multi-Agent Tools (agent can ask sibling agents and request a second opinion)"
         }
       }
     }
@@ -110,7 +112,9 @@
             "enable_history_tool": "State History Tool (LLM can query past device states)",
             "dynamic_entity_context": "Dynamic entity context (send a compact map of the home plus what the message is about, instead of every entity)",
             "dynamic_context_preset": "Which entities the map covers",
-            "dynamic_context_on_assist": "Also add matched entities when the Assist API is enabled"
+            "dynamic_context_on_assist": "Also add matched entities when the Assist API is enabled",
+            "allowed_tools": "Custom Tools (which YAML tools this agent may use)",
+            "enable_multi_agent_tools": "Multi-Agent Tools (agent can ask sibling agents and request a second opinion)"
           }
         },
         "reconfigure": {
@@ -129,7 +133,9 @@
             "enable_history_tool": "State History Tool (LLM can query past device states)",
             "dynamic_entity_context": "Dynamic entity context (send a compact map of the home plus what the message is about, instead of every entity)",
             "dynamic_context_preset": "Which entities the map covers",
-            "dynamic_context_on_assist": "Also add matched entities when the Assist API is enabled"
+            "dynamic_context_on_assist": "Also add matched entities when the Assist API is enabled",
+            "allowed_tools": "Custom Tools (which YAML tools this agent may use)",
+            "enable_multi_agent_tools": "Multi-Agent Tools (agent can ask sibling agents and request a second opinion)"
           }
         }
       },
