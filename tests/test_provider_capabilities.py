@@ -10,6 +10,7 @@ from custom_components.smartchain.const import (
     ID_OLLAMA,
     ID_OPENAI,
     ID_YANDEX_GPT,
+    OPENAI_COMPATIBLE,
 )
 
 
@@ -35,6 +36,6 @@ def test_unknown_engine_supports_nothing() -> None:
 
 def test_matrix_covers_every_known_provider() -> None:
     known = {ID_GIGACHAT, ID_YANDEX_GPT, ID_OPENAI, ID_OLLAMA, ID_DEEPSEEK, ID_ANTHROPIC}
-    # PROVIDER_CAPABILITIES now includes all OpenAI-compatible providers from the table,
-    # so it's a superset of the known ones, not an exact match.
-    assert known <= set(PROVIDER_CAPABILITIES)
+    # Every OpenAI-compatible provider contributes its row, so the matrix is
+    # exactly the hand-written providers plus the table.
+    assert set(PROVIDER_CAPABILITIES) == known | set(OPENAI_COMPATIBLE)
