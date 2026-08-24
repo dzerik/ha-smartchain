@@ -24,19 +24,31 @@ SmartChain — кастомная интеграция Home Assistant, пред�
 
 Поддерживаемые провайдеры:
 
+**Облачные:**
 - **GigaChat** (Сбер) — русскоязычная модель с поддержкой vision
 - **YandexGPT** — LLM от Яндекса
 - **OpenAI** — GPT-4.1, GPT-4o, o3, o4-mini
-- **Ollama** — локальные модели (Llama, Qwen, Gemma, T-Pro, DeepSeek, Home-3B)
-- **DeepSeek** — самый доступный облачный провайдер (V3, R1)
 - **Anthropic** — Claude (Sonnet, Haiku, Opus)
+- **DeepSeek** — самый доступный облачный провайдер (V3, R1)
+- **OpenRouter** *(v5.0.0+)* — единый API с маршрутизацией на сотни облачных моделей
+- **Groq** *(v5.0.0+)* — быстрый инференс open-weight моделей
+- **Together** *(v5.0.0+)* — облачный хостинг open-weight моделей
+
+**Локальные:**
+- **Ollama** — локальные модели (Llama, Qwen, Gemma, T-Pro, DeepSeek, Home-3B)
+- **LM Studio** *(v5.0.0+)* — локальный OpenAI-совместимый сервер, API-ключ не нужен
+- **llama.cpp** *(v5.0.0+)* — локальный OpenAI-совместимый сервер, API-ключ не нужен
+
+Все провайдеры, кроме GigaChat, YandexGPT, Ollama и Anthropic, говорят на OpenAI API, и у каждого из них редактируемый base URL — включая OpenAI и DeepSeek, у которых раньше был фиксированный endpoint, — так что можно направить его на зеркало, прокси или self-hosted шлюз. Существующие конфигурации это не затрагивает: значения по умолчанию не изменились.
+
+Эмбеддинги для долговременной памяти и индекса сущностей доступны у GigaChat, YandexGPT, OpenAI, Ollama, Together, LM Studio и llama.cpp — у OpenRouter и Groq API эмбеддингов нет.
 
 ![SmartChain AI Panel](img.png)
 
 ### Возможности
 
 **Диалоговый ассистент**
-- **6 LLM-провайдеров** — облачные и локальные, переключение без потери конфигурации
+- **11 LLM-провайдеров** — облачные и локальные, переключение без потери конфигурации
 - **Несколько агентов** — разные модели и промпты на одном провайдере (sub-entries)
 - **Потоковые ответы** — токен за токеном в реальном времени
 - **Управление устройствами** — Assist API (tool calling): свет, розетки, замки, климат
@@ -94,6 +106,11 @@ SmartChain — кастомная интеграция Home Assistant, пред�
 | Ollama | Адрес сервера (по умолчанию: `http://localhost:11434`) |
 | DeepSeek | API-ключ с [platform.deepseek.com](https://platform.deepseek.com) |
 | Anthropic | API-ключ с [console.anthropic.com](https://console.anthropic.com) |
+| OpenRouter | API-ключ с [openrouter.ai](https://openrouter.ai) |
+| Groq | API-ключ с [console.groq.com](https://console.groq.com) |
+| Together | API-ключ с [api.together.xyz](https://api.together.xyz) |
+| LM Studio | Адрес сервера (по умолчанию: `http://localhost:1234/v1`) — API-ключ не нужен |
+| llama.cpp | Адрес сервера (по умолчанию: `http://localhost:8080/v1`) — API-ключ не нужен |
 
 ### 3. Настройка параметров
 - **Модель** — выбор из списка или ввод произвольного имени

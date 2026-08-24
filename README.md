@@ -104,6 +104,11 @@ Embeddings for long-term memory and the entity index are available from GigaChat
 | Ollama | Base URL (default: `http://localhost:11434`) |
 | DeepSeek | API key from [platform.deepseek.com](https://platform.deepseek.com) |
 | Anthropic | API key from [console.anthropic.com](https://console.anthropic.com) |
+| OpenRouter | API key from [openrouter.ai](https://openrouter.ai) |
+| Groq | API key from [console.groq.com](https://console.groq.com) |
+| Together | API key from [api.together.xyz](https://api.together.xyz) |
+| LM Studio | Base URL (default: `http://localhost:1234/v1`) — no API key needed |
+| llama.cpp | Base URL (default: `http://localhost:8080/v1`) — no API key needed |
 
 ### 3. Configure Options
 - **Model** — select from list or type custom model name

@@ -49,8 +49,21 @@ Or click [![Open via HACS](https://my.home-assistant.io/badges/hacs_repository.s
 | Ollama | `base_url` (e.g. `http://localhost:11434`) | local install |
 | DeepSeek | `api_key` | [platform.deepseek.com](https://platform.deepseek.com) |
 | Anthropic | `api_key` | [console.anthropic.com](https://console.anthropic.com) |
+| OpenRouter *(v5.0.0+)* | `api_key` | [openrouter.ai](https://openrouter.ai) |
+| Groq *(v5.0.0+)* | `api_key` | [console.groq.com](https://console.groq.com) |
+| Together *(v5.0.0+)* | `api_key` | [api.together.xyz](https://api.together.xyz) |
+| LM Studio *(v5.0.0+)* | `base_url` (default: `http://localhost:1234/v1`) — no API key needed | local install |
+| llama.cpp *(v5.0.0+)* | `base_url` (default: `http://localhost:8080/v1`) — no API key needed | local install |
 
 After choosing a provider during setup, SmartChain auto-validates the credentials by making a tiny test call. If it fails the config flow reports the error before creating the entry.
+
+Every provider except GigaChat, YandexGPT, Ollama and Anthropic speaks the OpenAI API, and its `base_url` is editable in the config flow — point OpenRouter, Groq, Together, OpenAI or DeepSeek at a mirror, a proxy or a self-hosted gateway. Defaults are unchanged, so an existing OpenAI or DeepSeek entry that never touched the field behaves exactly as before.
+
+**Local OpenAI-compatible servers.** LM Studio and llama.cpp need no API key — leave that field empty. Load a model and start the server, then create the SmartChain entry against its `base_url`:
+- **LM Studio** — load a model in the app, start its local server (default `http://localhost:1234/v1`).
+- **llama.cpp** — run `llama-server -m <model.gguf>` (default `http://localhost:8080/v1`).
+
+Either one plugs into every SmartChain feature that consumes a chat model, and both can also serve embeddings if the loaded model supports them.
 
 ---
 
@@ -422,7 +435,7 @@ The form asks for three fields, of which you fill in two:
 
 Credentials are inherited from the config entry. There is nothing else to fill in — an embeddings binding has no prompt, no tools and no temperature.
 
-> **Capability caveat.** The **Add embeddings binding** option is only offered by providers that actually expose an embeddings API. **DeepSeek and Anthropic do not**, so the menu entry is absent on their config entries. If those are your only providers, add a second config entry for a provider that does — a local Ollama entry costs nothing and can serve embeddings only.
+> **Capability caveat.** The **Add embeddings binding** option is only offered by providers that actually expose an embeddings API. **DeepSeek, Anthropic, OpenRouter and Groq do not**, so the menu entry is absent on their config entries. If those are your only providers, add a second config entry for a provider that does — a local Ollama entry costs nothing and can serve embeddings only.
 
 | Provider | Embedding models offered |
 |---|---|
@@ -430,9 +443,10 @@ Credentials are inherited from the config entry. There is nothing else to fill i
 | YandexGPT | `text-search-doc`, `text-search-query` |
 | OpenAI | `text-embedding-3-small`, `text-embedding-3-large` |
 | Ollama | `nomic-embed-text`, `mxbai-embed-large`, `bge-m3` |
-| DeepSeek, Anthropic | — no embeddings API |
+| Together, LM Studio, llama.cpp *(v5.0.0+)* | discovered live from the provider's model list by name pattern (`embed`, `bge-`, `gte-`, `e5-`, `minilm`) — no static fallback list |
+| DeepSeek, Anthropic, OpenRouter, Groq | — no embeddings API |
 
-Model lists are fetched live from the provider where possible and filtered by purpose, so chat forms no longer offer embedding models and vice versa. The table above is the built-in fallback used when the provider's API is unreachable.
+Model lists are fetched live from the provider where possible and filtered by purpose, so chat forms no longer offer embedding models and vice versa. The table above is the built-in fallback used when the provider's API is unreachable — except for Together, LM Studio and llama.cpp, which have none: if their API is unreachable while creating the sub-entry, only the **Custom model name** field works.
 
 Recommended starting point: **Ollama + `nomic-embed-text`** — local, free, privacy-friendly. Cloud providers receive the full text of everything you embed.
 
