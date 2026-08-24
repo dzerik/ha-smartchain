@@ -375,7 +375,7 @@ reading what it always read."
 
 - [ ] **Step 1: Write the failing tests**
 
-Append to `tests/test_provider_table.py`:
+Extend `tests/test_provider_table.py`. **Merge these imports into the file's existing top-of-file import block** — do not append a second import block below the function definitions, because ruff selects `E` and `I` and would fail on E402:
 
 ```python
 from custom_components.smartchain.client_util import is_embedding_model, supports
@@ -606,6 +606,30 @@ async def test_validate_uses_the_row_base_url(hass):
     assert chat.call_args.kwargs["openai_api_base"] == OPENAI_COMPATIBLE[ID_GROQ].default_base_url
 
 
+async def test_validate_lists_models_when_the_row_has_no_default(hass):
+    # A local server has no name we could put in a chat probe.
+    fetch = AsyncMock(return_value=["local-model"])
+    with (
+        patch(
+            "custom_components.smartchain.client_util._fetch_openai_compatible_models",
+            fetch,
+        ),
+        patch("custom_components.smartchain.client_util.ChatOpenAI") as chat,
+    ):
+        await validate_client(hass, {CONF_ENGINE: ID_LMSTUDIO})
+    chat.assert_not_called()
+    assert fetch.call_args.args[2].endswith("/models")
+
+
+async def test_validate_rejects_a_server_serving_nothing(hass):
+    fetch = AsyncMock(return_value=[])
+    with patch(
+        "custom_components.smartchain.client_util._fetch_openai_compatible_models", fetch
+    ):
+        with pytest.raises(ValueError, match="no models"):
+            await validate_client(hass, {CONF_ENGINE: ID_LMSTUDIO})
+
+
 async def test_validate_is_skippable(hass):
     with patch("custom_components.smartchain.client_util.ChatOpenAI") as chat:
         await validate_client(
@@ -662,12 +686,12 @@ In `client_util.py`, above `validate_client`:
 _PLACEHOLDER_API_KEY = "not-needed"
 
 
-def _compatible_base_url(row: OpenAICompatible, data: Mapping[str, Any]) -> str:
+def compatible_base_url(row: OpenAICompatible, data: Mapping[str, Any]) -> str:
     """The provider's endpoint: the user's if set, else the row's default."""
     return (data.get(CONF_BASE_URL) or "").strip() or row.default_base_url
 
 
-def _compatible_api_key(row: OpenAICompatible, data: Mapping[str, Any]) -> str:
+def compatible_api_key(row: OpenAICompatible, data: Mapping[str, Any]) -> str:
     """The credential to send, with a placeholder for keyless local servers."""
     key = (data.get(CONF_API_KEY) or "").strip()
     if key:
@@ -688,22 +712,30 @@ In `validate_client`, insert this branch **before** the `elif engine == ID_DEEPS
 ```python
     elif engine in OPENAI_COMPATIBLE:
         row = OPENAI_COMPATIBLE[engine]
+        base_url = compatible_base_url(row, user_input)
+        api_key = compatible_api_key(row, user_input)
+        if row.default_model is None:
+            # No default model means no name we could put in a chat probe —
+            # a local server almost certainly does not serve whatever we
+            # guessed. Listing models proves reachability and credentials
+            # without guessing, and it is exactly what these servers expose.
+            models = await _fetch_openai_compatible_models(
+                hass, user_input, f"{base_url}/models"
+            )
+            if not models:
+                raise ValueError(f"{row.label} returned no models")
+            return
         client = ChatOpenAI(
             max_tokens=10,
-            model=row.default_model or DEFAULT_VALIDATION_MODEL,
-            openai_api_key=_compatible_api_key(row, user_input),
-            openai_api_base=_compatible_base_url(row, user_input),
+            model=row.default_model,
+            openai_api_key=api_key,
+            openai_api_base=base_url,
         )
 ```
 
-`DEFAULT_VALIDATION_MODEL` does not exist yet. Validation sends a ten-token probe and the model name only has to be one the provider accepts, but a row with no default has no such name. Define beside the placeholder key:
+**Why the split**, since it is the one place this task departs from a single uniform path: `DEFAULT_SKIP_VALIDATION` is `False`, so validation runs by default. A row with no default model has no name to probe with, and inventing one would fail setup for every LM Studio and llama.cpp user. Rows that do have a default keep the existing ten-token probe byte for byte, so OpenAI and DeepSeek are unaffected.
 
-```python
-# Rows with no default model still need a name for the validation probe.
-# It is never used for real traffic, and a wrong name surfaces as a clear
-# provider error at setup rather than a silent misconfiguration later.
-DEFAULT_VALIDATION_MODEL = "gpt-3.5-turbo"
-```
+Note the early `return`: the function ends with a shared `await hass.async_add_executor_job(client.invoke, ...)` line, which the listing path must not reach.
 
 Then the `else` clause at the end of `validate_client` (which builds `ChatOpenAI` for OpenAI) becomes unreachable for known engines. Keep it, and make it loud:
 
@@ -732,8 +764,8 @@ In `get_client`, insert before the `elif engine == ID_DEEPSEEK` branch and **del
                 common_args.pop("model", None)
             else:
                 common_args["model"] = row.default_model
-        common_args["openai_api_key"] = _compatible_api_key(row, entry.data)
-        common_args["openai_api_base"] = _compatible_base_url(row, entry.data)
+        common_args["openai_api_key"] = compatible_api_key(row, entry.data)
+        common_args["openai_api_base"] = compatible_base_url(row, entry.data)
         client = ChatOpenAI(**common_args)
 ```
 
@@ -756,7 +788,7 @@ In `async_fetch_models`, replace the `elif engine == ID_OPENAI:` and `elif engin
         if engine in OPENAI_COMPATIBLE:
             row = OPENAI_COMPATIBLE[engine]
             models = await _fetch_openai_compatible_models(
-                hass, data, f"{_compatible_base_url(row, data)}/models"
+                hass, data, f"{compatible_base_url(row, data)}/models"
             )
         elif engine == ID_OLLAMA:
             models = await _fetch_ollama_models(hass, data)
@@ -785,7 +817,11 @@ Run: `uv run --prerelease=allow ruff check . && uv run --prerelease=allow ruff f
 
 - [ ] **Step 9: Break-it check**
 
-Temporarily make `_compatible_base_url` ignore the user's value (`return row.default_base_url`). Both `test_entry_base_url_overrides_the_default` and `test_discovery_honours_an_overridden_base_url` must fail. Revert.
+Temporarily make `compatible_base_url` ignore the user's value (`return row.default_base_url`). Both `test_entry_base_url_overrides_the_default` and `test_discovery_honours_an_overridden_base_url` must fail. Revert.
+
+Then temporarily delete the `if not models: raise` guard in the validation branch. `test_validate_rejects_a_server_serving_nothing` must fail. Revert.
+
+Then temporarily drop the early `return` from the validation branch. `test_validate_lists_models_when_the_row_has_no_default` must fail — control would fall through to the shared `client.invoke` line with `client` unbound. Revert.
 
 - [ ] **Step 10: Commit**
 
@@ -1245,7 +1281,7 @@ with:
     if row is not None:
         kwargs: dict[str, Any] = {
             "model": model,
-            "api_key": _compatible_api_key(row, entry.data),
+            "api_key": compatible_api_key(row, entry.data),
         }
         base_url = (entry.data.get(CONF_BASE_URL) or "").strip()
         if engine != ID_OPENAI or base_url:
@@ -1255,7 +1291,7 @@ with:
         return _ExecutorBacked(hass, OpenAIEmbeddings(**kwargs))
 ```
 
-Import `OPENAI_COMPATIBLE` and `CONF_BASE_URL` from the const module, and `_compatible_api_key` from `...client_util` (adjust the relative depth — `embeddings.py` sits at `tools/memory/`, so it is `from ...client_util import _compatible_api_key`).
+Import `OPENAI_COMPATIBLE` and `CONF_BASE_URL` from the const module, and `compatible_api_key` from `...client_util` (adjust the relative depth — `embeddings.py` sits at `tools/memory/`, so it is `from ...client_util import compatible_api_key`).
 
 The `supports(...)` guard at the top of the function already refuses Groq and OpenRouter, so `serves_embeddings=False` rows never reach this branch.
 
@@ -1349,6 +1385,6 @@ embeddings for memory and the entity index."
 
 **Placeholder scan.** No "TBD" or "handle edge cases"; every code step carries the code.
 
-**Type consistency.** `OpenAICompatible` field names are identical in Tasks 1, 3, 4 and 5. `_compatible_base_url` and `_compatible_api_key` are defined in Task 3 Step 3 and reused in Tasks 3 and 5, with Task 5 naming the import path. `static_models` is `list[str]` throughout, matching `ENGINE_MODELS`'s existing list values — not the `tuple` the spec's sketch showed, because `ENGINE_MODELS` consumers index and concatenate lists.
+**Type consistency.** `OpenAICompatible` field names are identical in Tasks 1, 3, 4 and 5. `compatible_base_url` and `compatible_api_key` are defined in Task 3 Step 3 and reused in Tasks 3 and 5, with Task 5 naming the import path. `static_models` is `list[str]` throughout, matching `ENGINE_MODELS`'s existing list values — not the `tuple` the spec's sketch showed, because `ENGINE_MODELS` consumers index and concatenate lists.
 
 **Facts checked while writing this plan, so the implementer need not:** `const.py` does not yet import `dataclass`; `_fetch_openai_compatible_models` takes its URL as the third positional argument; `create_embeddings_from_subentry` is synchronous; `asyncio_mode = "auto"` is set, so async tests need no marker; `SUBENTRY_TYPE_EMBEDDINGS` exists in `const.py`; `CONF_ENGINE_OPTIONS` is a plain list, so Task 1 Step 5 can append to it; and `UNIQUE_ID`, `CONF_ENGINE_OPTIONS`, `ENGINE_MODELS`, `DEFAULT_MODEL`, `MODELS_OPENAI`, `MODELS_DEEPSEEK` and `DEFAULT_DEEPSEEK_BASE_URL` are all defined above line 148, which is why the table goes there.
