@@ -57,7 +57,7 @@
 
 При создании entry SmartChain автоматически валидирует креды миниатюрным тестовым запросом. Если фейл — config flow покажет ошибку до создания entry.
 
-Все провайдеры, кроме GigaChat, YandexGPT, Ollama и Anthropic, говорят на OpenAI API, и их `base_url` редактируется прямо в config flow — направьте OpenRouter, Groq, Together, OpenAI или DeepSeek на зеркало, прокси или self-hosted шлюз. Значения по умолчанию не изменились, так что существующий entry OpenAI или DeepSeek, где это поле никогда не трогали, ведёт себя точно так же, как раньше.
+Все провайдеры, кроме GigaChat, YandexGPT, Ollama и Anthropic, работают через OpenAI-совместимый API, а их `base_url` меняется прямо в config flow: OpenRouter, Groq, Together, OpenAI и DeepSeek можно направить на зеркало, прокси или собственный шлюз. Значения по умолчанию не изменились, поэтому уже настроенный entry OpenAI или DeepSeek, в котором это поле не трогали, ведёт себя ровно как раньше.
 
 **Локальные OpenAI-совместимые серверы.** LM Studio и llama.cpp не требуют API-ключа — оставьте это поле пустым. Загрузите модель и запустите сервер, затем создайте entry SmartChain с его `base_url`:
 - **LM Studio** — загрузите модель в приложении, запустите локальный сервер (по умолчанию `http://localhost:1234/v1`).
