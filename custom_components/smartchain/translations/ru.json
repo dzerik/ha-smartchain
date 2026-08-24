@@ -26,6 +26,7 @@
         "title": "OpenAI",
         "data": {
           "api_key": "API ключ",
+          "base_url": "Базовый URL API",
           "skip_validation": "Пропустить проверку"
         }
       },
@@ -40,6 +41,7 @@
         "title": "DeepSeek",
         "data": {
           "api_key": "API ключ",
+          "base_url": "Базовый URL API",
           "skip_validation": "Пропустить проверку"
         }
       },
@@ -47,6 +49,46 @@
         "title": "Anthropic (Claude)",
         "data": {
           "api_key": "API ключ",
+          "skip_validation": "Пропустить проверку"
+        }
+      },
+      "openrouter": {
+        "title": "Настройка OpenRouter",
+        "data": {
+          "api_key": "API-ключ",
+          "base_url": "Базовый URL API",
+          "skip_validation": "Пропустить проверку"
+        }
+      },
+      "groq": {
+        "title": "Настройка Groq",
+        "data": {
+          "api_key": "API-ключ",
+          "base_url": "Базовый URL API",
+          "skip_validation": "Пропустить проверку"
+        }
+      },
+      "together": {
+        "title": "Настройка Together",
+        "data": {
+          "api_key": "API-ключ",
+          "base_url": "Базовый URL API",
+          "skip_validation": "Пропустить проверку"
+        }
+      },
+      "lmstudio": {
+        "title": "Настройка LM Studio",
+        "data": {
+          "base_url": "URL сервера",
+          "api_key": "API-ключ (необязательно)",
+          "skip_validation": "Пропустить проверку"
+        }
+      },
+      "llamacpp": {
+        "title": "Настройка llama.cpp",
+        "data": {
+          "base_url": "URL сервера",
+          "api_key": "API-ключ (необязательно)",
           "skip_validation": "Пропустить проверку"
         }
       }
