@@ -42,6 +42,22 @@ async def test_hosted_provider_uses_its_default_base_url(hass):
     assert kwargs["model"] == "llama-3.3-70b"
 
 
+async def test_hosted_provider_never_gets_the_placeholder_key(hass):
+    # A fake credential must never reach a paid API: an empty key makes the
+    # provider return its own auth error, which is the honest outcome.
+    entry = _entry(hass, ID_GROQ, {})
+    with patch("custom_components.smartchain.client_util.ChatOpenAI") as chat:
+        await get_client(hass, ID_GROQ, entry, {"model": "m"})
+    assert chat.call_args.kwargs["openai_api_key"] == ""
+
+
+async def test_hosted_provider_with_a_blank_key_gets_no_placeholder(hass):
+    entry = _entry(hass, ID_GROQ, {CONF_API_KEY: "   "})
+    with patch("custom_components.smartchain.client_util.ChatOpenAI") as chat:
+        await get_client(hass, ID_GROQ, entry, {"model": "m"})
+    assert chat.call_args.kwargs["openai_api_key"] == ""
+
+
 async def test_entry_base_url_overrides_the_default(hass):
     entry = _entry(hass, ID_GROQ, {CONF_API_KEY: "k", CONF_BASE_URL: "http://mirror/v1"})
     with patch("custom_components.smartchain.client_util.ChatOpenAI") as chat:

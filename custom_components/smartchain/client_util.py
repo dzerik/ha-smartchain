@@ -303,7 +303,7 @@ async def _fetch_ollama_models(hass: HomeAssistant, data: dict) -> list[str]:
 
 
 async def _fetch_openai_compatible_models(hass: HomeAssistant, data: dict, url: str) -> list[str]:
-    """Fetch models from OpenAI-compatible API (OpenAI, DeepSeek)."""
+    """Fetch models from any OpenAI-compatible /models endpoint."""
     import aiohttp
     from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
