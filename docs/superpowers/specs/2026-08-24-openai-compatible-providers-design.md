@@ -45,7 +45,7 @@ class OpenAICompatible:
     default_base_url: str          # pre-filled, always editable
     requires_api_key: bool         # False for a local server
     serves_embeddings: bool        # whether an embeddings sub-entry is offered
-    embedding_rule: str            # "openai_prefix" | "heuristic"
+    embedding_rule: str            # "openai_prefix" | "heuristic" | "none"
     static_models: tuple[str, ...] # fallback when /models is unreachable
     default_model: str | None      # None => let the provider decide (§3.2)
 
@@ -64,7 +64,7 @@ three-line config-flow step (§5) and three translation strings.
 | id | base URL | key | embeddings | rule |
 |---|---|---|---|---|
 | `openai` | `https://api.openai.com/v1` | yes | yes | `openai_prefix` |
-| `deepseek` | `https://api.deepseek.com` | yes | no | `heuristic` |
+| `deepseek` | `https://api.deepseek.com` | yes | no | `none` |
 | `openrouter` | `https://openrouter.ai/api/v1` | yes | no | `heuristic` |
 | `groq` | `https://api.groq.com/openai/v1` | yes | no | `heuristic` |
 | `together` | `https://api.together.xyz/v1` | yes | yes | `heuristic` |
@@ -131,11 +131,22 @@ from that:
   entries. Built once at import.
 - **`async_fetch_models`** — one branch calling the existing
   `_fetch_openai_compatible_models` against `{base_url}/models`.
-- **`is_embedding_model`** — dispatches on `embedding_rule`. `openai_prefix`
-  is today's `text-embedding-` test; `heuristic` is the regex already used for
-  Ollama (`embed|bge-|gte-|e5-|minilm`), which is the right default because
-  these providers serve whatever the user or the proxy names, not a curated
-  OpenAI catalogue.
+- **`is_embedding_model`** — dispatches on `embedding_rule`, of which there
+  are three. `openai_prefix` is today's `text-embedding-` test. `heuristic` is
+  the regex already used for Ollama (`embed|bge-|gte-|e5-|minilm`), and it is
+  the right default for the new rows because they serve whatever the user or
+  the proxy names, not a curated OpenAI catalogue. `none` answers `False` for
+  every name.
+
+  **DeepSeek gets `none`, not `heuristic`.** Today it falls through to the
+  function's final `return False`, so every name is a chat name. Handing it the
+  heuristic would change that — a future `deepseek-embed` would silently drop
+  out of the chat list — and §7 forbids changing an existing provider's
+  behaviour. `none` reproduces today's answer exactly.
+
+  The five new rows take `heuristic` even where `serves_embeddings` is `False`:
+  the rule still runs when filtering the **chat** list, and an embedding model
+  proxied by OpenRouter should not be offered as a chat model.
 - **`config_flow.ENGINE_SCHEMA`** — built from the table, `requires_api_key`
   choosing between the key-and-URL schema and the URL-only one.
 - **`CONF_ENGINE_OPTIONS`** — the provider picker, extended from the table.
