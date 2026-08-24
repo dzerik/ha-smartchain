@@ -47,6 +47,7 @@ class OpenAICompatible:
     serves_embeddings: bool        # whether an embeddings sub-entry is offered
     embedding_rule: str            # "openai_prefix" | "heuristic"
     static_models: tuple[str, ...] # fallback when /models is unreachable
+    default_model: str | None      # None => let the provider decide (§3.2)
 
 
 OPENAI_COMPATIBLE: dict[str, OpenAICompatible] = { ... }
@@ -72,6 +73,34 @@ three-line config-flow step (§5) and three translation strings.
 
 `openai` and `deepseek` reproduce today's behaviour exactly.
 
+### 3.2 `default_model`, and why five rows have none
+
+`get_client` substitutes a default when the user picked no model. Today that
+comes from `DEFAULT_MODEL`, where GigaChat and YandexGPT are already `None` and
+the code pops the argument so the provider applies its own.
+
+`openai` keeps `gpt-4.1-mini` and `deepseek` keeps `deepseek-chat`. **The five
+new rows are `None`**, and deliberately: OpenRouter fronts hundreds of models
+so no default is defensible, and a local server runs whatever the user loaded,
+which we cannot know. A row with no default follows the GigaChat path — the
+`model` argument is omitted rather than passed as `None`.
+
+### 3.3 The existing dicts are derived, not replaced
+
+`UNIQUE_ID`, `ENGINE_MODELS`, `DEFAULT_MODEL`, `CONF_ENGINE_OPTIONS` and
+`PROVIDER_CAPABILITIES` all have consumers beyond this subsystem — the config
+flow builds an entry's unique id from `UNIQUE_ID`, the sub-entry form reads
+`ENGINE_MODELS[unique_id]`, and `tests/test_fetch_models.py` asserts against
+`ENGINE_MODELS` directly.
+
+So the table does not replace them: **it populates them at import**, with a
+loop over `OPENAI_COMPATIBLE` adding each row's entry. Every existing consumer
+keeps working untouched, the five facts still live in exactly one place, and
+adding a provider is still one row.
+
+A consequence worth stating: the row's `label` **is** its `UNIQUE_ID`, so the
+two cannot drift.
+
 **The five new rows are stated from knowledge, not from a live check**, and
 both the base URLs and the embeddings flags can be wrong. Two decisions follow
 from that:
@@ -89,7 +118,12 @@ from that:
 ## 4. What reads the table
 
 - **`client_util.get_client` and `validate_client`** — one branch replacing the
-  per-provider ones: `ChatOpenAI` with `openai_api_base` from the entry's
+  per-provider ones. Note that **OpenAI is today the `else` fallback in both**,
+  not a named branch, so an unrecognised engine currently becomes OpenAI
+  silently and is handed the user's key. The fold keeps that fallback so
+  behaviour does not change, but adds a `LOGGER.warning` naming the engine —
+  it can now only be reached by a corrupted entry or a downgrade, and it should
+  not be silent. The new branch is: `ChatOpenAI` with `openai_api_base` from the entry's
   `base_url` (falling back to the row's default) and `openai_api_key` from the
   entry, or a placeholder when `requires_api_key` is `False`.
 - **`PROVIDER_CAPABILITIES`** — the rows contribute `{chat}` or
