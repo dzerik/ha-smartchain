@@ -9,7 +9,7 @@ from langchain_gigachat import GigaChatEmbeddings
 from langchain_ollama import OllamaEmbeddings
 from langchain_openai import OpenAIEmbeddings
 
-from ...client_util import compatible_api_key, compatible_base_url, supports
+from ...client_util import compatible_api_key, compatible_endpoint, supports
 from ...const import (
     CAPABILITY_EMBEDDINGS,
     CONF_API_KEY,
@@ -18,7 +18,6 @@ from ...const import (
     CONF_FOLDER_ID,
     ID_GIGACHAT,
     ID_OLLAMA,
-    ID_OPENAI,
     ID_YANDEX_GPT,
     MEMORY_EMBED_TIMEOUT_SECONDS,
     OPENAI_COMPATIBLE,
@@ -88,11 +87,9 @@ def create_embeddings_from_subentry(
             "model": model,
             "api_key": compatible_api_key(row, entry.data),
         }
-        raw = (entry.data.get(CONF_BASE_URL) or "").strip()
-        if engine != ID_OPENAI or raw:
-            # OpenAI keeps its client default when the user set nothing; every
-            # other row always needs an explicit endpoint.
-            kwargs["base_url"] = compatible_base_url(row, entry.data)
+        endpoint = compatible_endpoint(engine, row, entry.data)
+        if endpoint is not None:
+            kwargs["base_url"] = endpoint
         return _ExecutorBacked(hass, OpenAIEmbeddings(**kwargs))
 
     if engine == ID_GIGACHAT:

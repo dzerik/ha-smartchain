@@ -79,6 +79,19 @@ def compatible_api_key(row: OpenAICompatible, data: Mapping[str, Any]) -> str:
     return _PLACEHOLDER_API_KEY
 
 
+def compatible_endpoint(engine: str, row: OpenAICompatible, data: Mapping[str, Any]) -> str | None:
+    """The endpoint to pass, or None to let the client's own default stand.
+
+    OpenAI had no explicit base URL before the provider table existed, so an
+    OPENAI_BASE_URL environment variable applied. Passing one now — even the
+    correct one — would override it. Every other row always needs an endpoint.
+    """
+    raw = (data.get(CONF_BASE_URL) or "").strip()
+    if engine == ID_OPENAI and not raw:
+        return None
+    return raw or row.default_base_url
+
+
 async def validate_client(
     hass: HomeAssistant,
     user_input: dict,
@@ -127,16 +140,21 @@ async def validate_client(
             # a local server almost certainly does not serve whatever we
             # guessed. Listing models proves reachability and credentials
             # without guessing, and it is exactly what these servers expose.
-            models = await _fetch_openai_compatible_models(hass, user_input, f"{base_url}/models")
+            models = await _fetch_openai_compatible_models(
+                hass, user_input, f"{base_url}/models", api_key
+            )
             if not models:
                 raise ValueError(f"{row.label} returned no models")
             return
-        client = ChatOpenAI(
-            max_tokens=10,
-            model=row.default_model,
-            openai_api_key=api_key,
-            openai_api_base=base_url,
-        )
+        chat_kwargs: dict[str, Any] = {
+            "max_tokens": 10,
+            "model": row.default_model,
+            "openai_api_key": api_key,
+        }
+        endpoint = compatible_endpoint(engine, row, user_input)
+        if endpoint is not None:
+            chat_kwargs["openai_api_base"] = endpoint
+        client = ChatOpenAI(**chat_kwargs)
     else:
         LOGGER.warning("Unrecognised engine %r during validation; treating it as OpenAI", engine)
         client = ChatOpenAI(
@@ -203,7 +221,9 @@ async def get_client(
             else:
                 common_args["model"] = row.default_model
         common_args["openai_api_key"] = compatible_api_key(row, entry.data)
-        common_args["openai_api_base"] = compatible_base_url(row, entry.data)
+        endpoint = compatible_endpoint(engine, row, entry.data)
+        if endpoint is not None:
+            common_args["openai_api_base"] = endpoint
         client = ChatOpenAI(**common_args)
     else:
         LOGGER.warning("Unrecognised engine %r; treating it as OpenAI", engine)
@@ -265,7 +285,10 @@ async def async_fetch_models(
         if engine in OPENAI_COMPATIBLE:
             row = OPENAI_COMPATIBLE[engine]
             models = await _fetch_openai_compatible_models(
-                hass, data, f"{compatible_base_url(row, data)}/models"
+                hass,
+                data,
+                f"{compatible_base_url(row, data)}/models",
+                compatible_api_key(row, data),
             )
         elif engine == ID_OLLAMA:
             models = await _fetch_ollama_models(hass, data)
@@ -302,13 +325,16 @@ async def _fetch_ollama_models(hass: HomeAssistant, data: dict) -> list[str]:
     return sorted(m["name"] for m in result.get("models", []))
 
 
-async def _fetch_openai_compatible_models(hass: HomeAssistant, data: dict, url: str) -> list[str]:
+async def _fetch_openai_compatible_models(
+    hass: HomeAssistant, data: dict, url: str, api_key: str | None = None
+) -> list[str]:
     """Fetch models from any OpenAI-compatible /models endpoint."""
     import aiohttp
     from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
     session = async_get_clientsession(hass)
-    headers = {"Authorization": f"Bearer {data[CONF_API_KEY]}"}
+    key = api_key if api_key is not None else data.get(CONF_API_KEY, "")
+    headers = {"Authorization": f"Bearer {key}"}
     resp = await session.get(
         url,
         headers=headers,
