@@ -24,17 +24,29 @@ SmartChain is a Home Assistant custom integration that provides an intelligent v
 
 Supported providers:
 
+**Hosted:**
 - **GigaChat** (Sber) — Russian-focused LLM with vision support
 - **YandexGPT** — Yandex Cloud LLM
 - **OpenAI** — GPT-4.1, GPT-4o, o3, o4-mini
-- **Ollama** — local models (Llama, Qwen, Gemma, T-Pro, DeepSeek, Home-3B)
-- **DeepSeek** — cheapest cloud provider (V3, R1)
 - **Anthropic** — Claude (Sonnet, Haiku, Opus)
+- **DeepSeek** — cheapest cloud provider (V3, R1)
+- **OpenRouter** *(v5.0.0+)* — routes to hundreds of hosted models behind one API
+- **Groq** *(v5.0.0+)* — low-latency inference for open-weight models
+- **Together** *(v5.0.0+)* — hosted open-weight models
+
+**Local:**
+- **Ollama** — local models (Llama, Qwen, Gemma, T-Pro, DeepSeek, Home-3B)
+- **LM Studio** *(v5.0.0+)* — local OpenAI-compatible server, no API key required
+- **llama.cpp** *(v5.0.0+)* — local OpenAI-compatible server, no API key required
+
+Every provider except GigaChat, YandexGPT, Ollama and Anthropic speaks the OpenAI API, and every one of them has an editable base URL — including OpenAI and DeepSeek, which previously used a fixed endpoint — so you can point it at a mirror, a proxy, or a self-hosted gateway. Existing configurations are unaffected: the defaults haven't changed.
+
+Embeddings for long-term memory and the entity index are available from GigaChat, YandexGPT, OpenAI, Ollama, Together, LM Studio and llama.cpp — OpenRouter and Groq don't offer an embeddings API.
 
 ### Key Features
 
 **Conversation**
-- **6 LLM providers** — cloud and local, switch without losing configuration
+- **11 LLM providers** — cloud and local, switch without losing configuration
 - **Multiple agents** — different models and prompts per provider (sub-entries)
 - **Streaming responses** — real-time token-by-token output
 - **Device control** — Assist API (tool calling): lights, switches, locks, climate
