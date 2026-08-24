@@ -1,5 +1,7 @@
 """Constants for the SmartChain integration."""
 
+from dataclasses import dataclass
+
 from homeassistant.helpers import selector
 
 DOMAIN = "smartchain"
@@ -58,12 +60,22 @@ ID_OPENAI = "openai"
 ID_OLLAMA = "ollama"
 ID_DEEPSEEK = "deepseek"
 ID_ANTHROPIC = "anthropic"
+ID_OPENROUTER = "openrouter"
+ID_GROQ = "groq"
+ID_TOGETHER = "together"
+ID_LMSTUDIO = "lmstudio"
+ID_LLAMACPP = "llamacpp"
 UNIQUE_ID_GIGACHAT = "GigaChat"
 UNIQUE_ID_YANDEX_GPT = "YandexGPT"
 UNIQUE_ID_OPENAI = "OpenAI"
 UNIQUE_ID_OLLAMA = "Ollama"
 UNIQUE_ID_DEEPSEEK = "DeepSeek"
 UNIQUE_ID_ANTHROPIC = "Anthropic"
+UNIQUE_ID_OPENROUTER = "OpenRouter"
+UNIQUE_ID_GROQ = "Groq"
+UNIQUE_ID_TOGETHER = "Together"
+UNIQUE_ID_LMSTUDIO = "LM Studio"
+UNIQUE_ID_LLAMACPP = "llama.cpp"
 
 UNIQUE_ID = {
     ID_GIGACHAT: UNIQUE_ID_GIGACHAT,
@@ -146,6 +158,125 @@ DEFAULT_MODEL = {
 CONF_BASE_URL = "base_url"
 DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
 DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com"
+
+# --- OpenAI-compatible providers (v5.0.0) -------------------------------
+#
+# Every provider reachable through the OpenAI API shape lives in one table.
+# Adding a provider is one row here, one three-line config-flow step, and
+# two translation entries. See the design doc for why the base URLs are all
+# user-editable and why five rows carry no default model.
+
+EMBEDDING_RULE_OPENAI_PREFIX = "openai_prefix"
+EMBEDDING_RULE_HEURISTIC = "heuristic"
+EMBEDDING_RULE_NONE = "none"
+
+
+@dataclass(frozen=True)
+class OpenAICompatible:
+    """One provider reachable through the OpenAI API shape."""
+
+    label: str
+    """Display name, and the config entry's unique id."""
+
+    default_base_url: str
+    """Pre-filled in the config flow, and always editable there."""
+
+    requires_api_key: bool
+    """False for a local server, which gets an optional key field instead."""
+
+    serves_embeddings: bool
+    """Whether an embeddings sub-entry is offered for this provider."""
+
+    embedding_rule: str
+    """How to tell an embedding model name from a chat one."""
+
+    static_models: list[str]
+    """Fallback when the provider's /models endpoint is unreachable."""
+
+    default_model: str | None
+    """None means the provider decides; the model argument is then omitted."""
+
+
+OPENAI_COMPATIBLE: dict[str, OpenAICompatible] = {
+    ID_OPENAI: OpenAICompatible(
+        label=UNIQUE_ID_OPENAI,
+        default_base_url="https://api.openai.com/v1",
+        requires_api_key=True,
+        serves_embeddings=True,
+        embedding_rule=EMBEDDING_RULE_OPENAI_PREFIX,
+        static_models=MODELS_OPENAI,
+        default_model="gpt-4.1-mini",
+    ),
+    ID_DEEPSEEK: OpenAICompatible(
+        label=UNIQUE_ID_DEEPSEEK,
+        default_base_url=DEFAULT_DEEPSEEK_BASE_URL,
+        requires_api_key=True,
+        serves_embeddings=False,
+        # Falls through to `return False` today; the heuristic would change
+        # which names count as chat models.
+        embedding_rule=EMBEDDING_RULE_NONE,
+        static_models=MODELS_DEEPSEEK,
+        default_model="deepseek-chat",
+    ),
+    ID_OPENROUTER: OpenAICompatible(
+        label=UNIQUE_ID_OPENROUTER,
+        default_base_url="https://openrouter.ai/api/v1",
+        requires_api_key=True,
+        serves_embeddings=False,
+        embedding_rule=EMBEDDING_RULE_HEURISTIC,
+        # OpenRouter proxies hundreds of models; any list written here is
+        # wrong within weeks, so discovery does the work.
+        static_models=[""],
+        default_model=None,
+    ),
+    ID_GROQ: OpenAICompatible(
+        label=UNIQUE_ID_GROQ,
+        default_base_url="https://api.groq.com/openai/v1",
+        requires_api_key=True,
+        serves_embeddings=False,
+        embedding_rule=EMBEDDING_RULE_HEURISTIC,
+        static_models=[""],
+        default_model=None,
+    ),
+    ID_TOGETHER: OpenAICompatible(
+        label=UNIQUE_ID_TOGETHER,
+        default_base_url="https://api.together.xyz/v1",
+        requires_api_key=True,
+        serves_embeddings=True,
+        embedding_rule=EMBEDDING_RULE_HEURISTIC,
+        static_models=[""],
+        default_model=None,
+    ),
+    ID_LMSTUDIO: OpenAICompatible(
+        label=UNIQUE_ID_LMSTUDIO,
+        default_base_url="http://localhost:1234/v1",
+        requires_api_key=False,
+        serves_embeddings=True,
+        embedding_rule=EMBEDDING_RULE_HEURISTIC,
+        static_models=[""],
+        default_model=None,
+    ),
+    ID_LLAMACPP: OpenAICompatible(
+        label=UNIQUE_ID_LLAMACPP,
+        default_base_url="http://localhost:8080/v1",
+        requires_api_key=False,
+        serves_embeddings=True,
+        embedding_rule=EMBEDDING_RULE_HEURISTIC,
+        static_models=[""],
+        default_model=None,
+    ),
+}
+
+# The table is the single source for these; the dicts stay so that existing
+# consumers (config flow, model fetch, tests) keep reading what they always
+# read. A row's label IS its unique id, so the two cannot drift.
+for _engine, _row in OPENAI_COMPATIBLE.items():
+    UNIQUE_ID[_engine] = _row.label
+    ENGINE_MODELS[_row.label] = _row.static_models
+    DEFAULT_MODEL[_engine] = _row.default_model
+    if not any(_option["value"] == _engine for _option in CONF_ENGINE_OPTIONS):
+        CONF_ENGINE_OPTIONS.append(selector.SelectOptionDict(value=_engine, label=_row.label))
+del _engine, _row
 
 CONF_LLM_HASS_API = "llm_hass_api"
 CONF_API_KEY = "api_key"

@@ -26,6 +26,7 @@
         "title": "OpenAI configuration",
         "data": {
           "api_key": "API Key",
+          "base_url": "API base URL",
           "skip_validation": "Skip validation"
         }
       },
@@ -40,6 +41,7 @@
         "title": "DeepSeek configuration",
         "data": {
           "api_key": "API Key",
+          "base_url": "API base URL",
           "skip_validation": "Skip validation"
         }
       },
@@ -47,6 +49,46 @@
         "title": "Anthropic (Claude) configuration",
         "data": {
           "api_key": "API Key",
+          "skip_validation": "Skip validation"
+        }
+      },
+      "openrouter": {
+        "title": "OpenRouter configuration",
+        "data": {
+          "api_key": "API Key",
+          "base_url": "API base URL",
+          "skip_validation": "Skip validation"
+        }
+      },
+      "groq": {
+        "title": "Groq configuration",
+        "data": {
+          "api_key": "API Key",
+          "base_url": "API base URL",
+          "skip_validation": "Skip validation"
+        }
+      },
+      "together": {
+        "title": "Together configuration",
+        "data": {
+          "api_key": "API Key",
+          "base_url": "API base URL",
+          "skip_validation": "Skip validation"
+        }
+      },
+      "lmstudio": {
+        "title": "LM Studio configuration",
+        "data": {
+          "base_url": "Server URL",
+          "api_key": "API Key (optional)",
+          "skip_validation": "Skip validation"
+        }
+      },
+      "llamacpp": {
+        "title": "llama.cpp configuration",
+        "data": {
+          "base_url": "Server URL",
+          "api_key": "API Key (optional)",
           "skip_validation": "Skip validation"
         }
       }

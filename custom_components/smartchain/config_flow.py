@@ -70,9 +70,15 @@ from .const import (
     ID_ANTHROPIC,
     ID_DEEPSEEK,
     ID_GIGACHAT,
+    ID_GROQ,
+    ID_LLAMACPP,
+    ID_LMSTUDIO,
     ID_OLLAMA,
     ID_OPENAI,
+    ID_OPENROUTER,
+    ID_TOGETHER,
     ID_YANDEX_GPT,
+    OPENAI_COMPATIBLE,
     SUBENTRY_TYPE_CONVERSATION,
     SUBENTRY_TYPE_EMBEDDINGS,
     UNIQUE_ID,
@@ -108,13 +114,32 @@ STEP_OLLAMA_SCHEMA = vol.Schema(
     }
 )
 
+
+def _compatible_schema(engine: str) -> vol.Schema:
+    """Step schema for an OpenAI-compatible provider.
+
+    The base URL is always editable and pre-filled from the table, so a stale
+    default or a mirror costs the user one field rather than the integration.
+    A local server's key is optional; a hosted one's is required.
+    """
+    row = OPENAI_COMPATIBLE[engine]
+    fields: dict[Any, Any] = {}
+    if row.requires_api_key:
+        fields[vol.Required(CONF_API_KEY)] = str
+    fields[vol.Required(CONF_BASE_URL, default=row.default_base_url)] = str
+    if not row.requires_api_key:
+        # Some local deployments sit behind a proxy that still wants one.
+        fields[vol.Optional(CONF_API_KEY)] = str
+    fields[vol.Optional(CONF_SKIP_VALIDATION, default=DEFAULT_SKIP_VALIDATION)] = bool
+    return vol.Schema(fields)
+
+
 ENGINE_SCHEMA = {
     ID_GIGACHAT: STEP_API_KEY_SCHEMA,
     ID_YANDEX_GPT: STEP_YANDEXGPT_SCHEMA,
-    ID_OPENAI: STEP_API_KEY_SCHEMA,
     ID_OLLAMA: STEP_OLLAMA_SCHEMA,
-    ID_DEEPSEEK: STEP_API_KEY_SCHEMA,
     ID_ANTHROPIC: STEP_API_KEY_SCHEMA,
+    **{engine: _compatible_schema(engine) for engine in OPENAI_COMPATIBLE},
 }
 
 DEFAULT_OPTIONS = MappingProxyType(
@@ -185,6 +210,33 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         return await self._common_model_async_step(ID_ANTHROPIC, user_input)
+
+    # Home Assistant dispatches a flow step by method name, so each provider
+    # needs its own even though the bodies are identical. A setattr loop would
+    # work until HA introspects the class.
+
+    async def async_step_openrouter(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        return await self._common_model_async_step(ID_OPENROUTER, user_input)
+
+    async def async_step_groq(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        return await self._common_model_async_step(ID_GROQ, user_input)
+
+    async def async_step_together(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        return await self._common_model_async_step(ID_TOGETHER, user_input)
+
+    async def async_step_lmstudio(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        return await self._common_model_async_step(ID_LMSTUDIO, user_input)
+
+    async def async_step_llamacpp(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        return await self._common_model_async_step(ID_LLAMACPP, user_input)
 
     async def _common_model_async_step(
         self, engine: str, user_input: dict[str, Any] | None
