@@ -16,14 +16,6 @@ export const SC_STYLES = `
 
   .sc-hidden { display: none !important; }
 
-  .sc-camera-container {
-    max-width: 800px;
-    margin: 0 auto;
-    padding: 24px;
-    font-family: var(--sc-font);
-    color: var(--primary-text-color, #212121);
-  }
-
   .sc-card {
     background: var(--card-background-color, #fff);
     border-radius: var(--sc-radius-lg);
@@ -153,5 +145,11 @@ export const SC_STYLES = `
     color: var(--primary-color, #03a9f4);
     border-bottom-color: var(--primary-color, #03a9f4);
   }
-  .sc-tab-body { padding: 16px; }
+  .sc-tab-body {
+    max-width: 800px;
+    margin: 0 auto;
+    padding: 24px;
+    font-family: var(--sc-font);
+    color: var(--primary-text-color, #212121);
+  }
 `;
