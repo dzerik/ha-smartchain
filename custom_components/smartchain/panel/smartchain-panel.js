@@ -1,10 +1,26 @@
 import { callWS, showToast } from "./services.js";
 import { SC_STYLES } from "./styles.js";
-import "./components/camera-tab.js";
-import "./components/agents-tab.js";
-import "./components/settings-tab.js";
-import "./components/embeddings-tab.js";
-import "./components/tools-tab.js";
+
+// Carry this module's own cache-busting query down to every component it
+// pulls in. Home Assistant appends `?v=<version>.<digest>` to the panel's
+// module_url; a static `import "./components/x.js"` would drop it, so the
+// shell could be fresh while its components came from an old cache — which
+// fails in ways that look like data problems, not caching.
+//
+// Every import of a given module must use the SAME query, always or never:
+// ESM keys the module registry by URL, so importing one file both with and
+// without `?v=` instantiates it twice, and the second `customElements.define`
+// throws. `services.js` and `styles.js` above are imported without a query
+// everywhere, which is equally consistent.
+const _v = new URL(import.meta.url).searchParams.get("v") || "";
+const _q = _v ? `?v=${_v}` : "";
+await Promise.all([
+  import(`./components/camera-tab.js${_q}`),
+  import(`./components/agents-tab.js${_q}`),
+  import(`./components/settings-tab.js${_q}`),
+  import(`./components/embeddings-tab.js${_q}`),
+  import(`./components/tools-tab.js${_q}`),
+]);
 
 const TABS = [
   { id: "agents", label: "Agents", tag: "sc-agents-tab", adminOnly: true },

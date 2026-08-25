@@ -1,5 +1,9 @@
 import { escapeHtml } from "../services.js";
-import "./config-form.js";
+// Same cache-busting query this module was loaded with — importing
+// config-form.js both with and without `?v=` would instantiate it twice
+// and the second customElements.define would throw.
+const _v = new URL(import.meta.url).searchParams.get("v") || "";
+await import(`./config-form.js${_v ? `?v=${_v}` : ""}`);
 
 const SETTINGS_COMMANDS = {
   schema: "smartchain/settings/get",
