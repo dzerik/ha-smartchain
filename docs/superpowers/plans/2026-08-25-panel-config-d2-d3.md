@@ -655,7 +655,7 @@ Write these out in full, following the shape of `tests/test_ws_settings.py` from
     if taken is not None:
         connection.send_result(
             msg["id"],
-            {"ok": False, "message": f"The title {title!r} is already used", "field": "name"},
+            msg["id"], "invalid_data", f"invalid_data: name ({title!r} is already used)"
         )
         return
 ```
