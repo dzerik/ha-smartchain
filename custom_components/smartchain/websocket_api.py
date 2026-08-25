@@ -36,6 +36,8 @@ def async_register(hass: HomeAssistant) -> None:
     """Register every panel command."""
     websocket_api.async_register_command(hass, ws_agent_schema)
     websocket_api.async_register_command(hass, ws_agent_save)
+    websocket_api.async_register_command(hass, ws_agent_duplicate)
+    websocket_api.async_register_command(hass, ws_agent_delete)
     websocket_api.async_register_command(hass, ws_overview)
 
 
@@ -164,6 +166,76 @@ async def ws_agent_save(
 
     hass.config_entries.async_update_subentry(entry, subentry, data=data, title=title)
     connection.send_result(msg["id"], {"subentry_id": subentry.subentry_id})
+
+
+def _resolve_agent(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> tuple[ConfigEntry, Any] | None:
+    """Entry and agent subentry named by the message, or None after sending an error."""
+    entry = _get_entry(hass, msg["entry_id"])
+    if entry is None:
+        connection.send_error(msg["id"], "not_found", "Unknown config entry")
+        return None
+    subentry = entry.subentries.get(msg["subentry_id"])
+    if subentry is None or subentry.subentry_type != SUBENTRY_TYPE_CONVERSATION:
+        connection.send_error(msg["id"], "not_found", "Unknown agent")
+        return None
+    return entry, subentry
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "smartchain/agent/duplicate",
+        vol.Required("entry_id"): str,
+        vol.Required("subentry_id"): str,
+    }
+)
+@websocket_api.async_response
+async def ws_agent_duplicate(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Copy an agent, so a tuned prompt can be reused without retyping it."""
+    resolved = _resolve_agent(hass, connection, msg)
+    if resolved is None:
+        return
+    entry, subentry = resolved
+
+    copy = ConfigSubentry(
+        data=dict(subentry.data),
+        subentry_type=SUBENTRY_TYPE_CONVERSATION,
+        # A copy sharing the original's title is indistinguishable in a list.
+        title=f"{subentry.title} (copy)",
+        unique_id=None,
+    )
+    hass.config_entries.async_add_subentry(entry, copy)
+    connection.send_result(msg["id"], {"subentry_id": copy.subentry_id})
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "smartchain/agent/delete",
+        vol.Required("entry_id"): str,
+        vol.Required("subentry_id"): str,
+    }
+)
+@websocket_api.async_response
+async def ws_agent_delete(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Remove an agent."""
+    resolved = _resolve_agent(hass, connection, msg)
+    if resolved is None:
+        return
+    entry, subentry = resolved
+
+    hass.config_entries.async_remove_subentry(entry, subentry.subentry_id)
+    connection.send_result(msg["id"], {})
 
 
 @websocket_api.require_admin
