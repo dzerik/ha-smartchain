@@ -183,6 +183,21 @@ def _resolve_agent(
     return entry, subentry
 
 
+def _unique_copy_title(entry: ConfigEntry, base: str) -> str:
+    """A copy title not already in use on this entry.
+
+    Duplicating twice must not produce two identically-titled agents — that is
+    the ambiguity the suffix exists to prevent.
+    """
+    existing = {subentry.title for subentry in entry.subentries.values()}
+    candidate = f"{base} (copy)"
+    counter = 2
+    while candidate in existing:
+        candidate = f"{base} (copy {counter})"
+        counter += 1
+    return candidate
+
+
 @websocket_api.require_admin
 @websocket_api.websocket_command(
     {
@@ -207,7 +222,7 @@ async def ws_agent_duplicate(
         data=dict(subentry.data),
         subentry_type=SUBENTRY_TYPE_CONVERSATION,
         # A copy sharing the original's title is indistinguishable in a list.
-        title=f"{subentry.title} (copy)",
+        title=_unique_copy_title(entry, subentry.title),
         unique_id=None,
     )
     hass.config_entries.async_add_subentry(entry, copy)
