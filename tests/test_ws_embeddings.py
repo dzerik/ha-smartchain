@@ -11,6 +11,7 @@ bound to a title, and is a candidate title already claimed elsewhere.
 """
 
 import json
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -19,6 +20,7 @@ from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.smartchain.const import (
+    CAPABILITY_CHAT,
     CAPABILITY_EMBEDDINGS,
     CONF_API_KEY,
     CONF_ENGINE,
@@ -43,15 +45,34 @@ memory:
       ingest_conversation: true
 """
 
+# The real translation file, read directly rather than duplicated as string
+# literals — F1's regression test compares against these, not a second copy
+# that could drift out of sync with what the panel actually receives.
+_TRANSLATIONS_EN = json.loads(
+    (
+        Path(__file__).parents[1] / "custom_components" / "smartchain" / "translations" / "en.json"
+    ).read_text()
+)
+
+# Disjoint on purpose (F2): a fake that returned the same list for both
+# purposes could never tell a chat-purpose fetch from an embeddings-purpose
+# one apart, so a mutation that fetches the wrong purpose — or a cache key
+# that stops distinguishing them — would leave every test in this file
+# passing regardless.
+_CHAT_MODELS = ["", "gpt-4.1-mini"]
+_EMBEDDING_MODELS = ["", "text-embedding-3-small"]
+
+
+async def _fake_fetch_models(hass, engine, data, *, purpose=CAPABILITY_CHAT, **kwargs):
+    return _EMBEDDING_MODELS if purpose == CAPABILITY_EMBEDDINGS else _CHAT_MODELS
+
 
 @pytest.fixture(autouse=True)
 def _models():
-    """A stand-in model list. Individual tests still assert on the *purpose*
-    the fetch was called with — this fixture only avoids a real network call.
-    """
+    """A purpose-aware stand-in model list — see `_fake_fetch_models`."""
     with patch(
         "custom_components.smartchain.websocket_api.async_fetch_models",
-        return_value=["", "text-embedding-3-small"],
+        side_effect=_fake_fetch_models,
     ) as fetch:
         yield fetch
 
@@ -164,6 +185,88 @@ async def test_schema_command_returns_renderable_fields(hass, hass_ws_client, en
     assert msg["result"]["title_taken_by"] is None
 
 
+async def test_schema_serves_the_embeddings_label_not_the_conversation_one(
+    hass, hass_ws_client, entry
+):
+    """F1: `config_subentries` holds both conversation and embeddings, which
+    declare the field names `model` and `model_user` with different meanings
+    (`Embedding model` vs `Completion Model`). Flattening the whole category
+    with `setdefault` let whichever type's keys the translation loader
+    iterated first win for *both* forms — a real label, just for the wrong
+    form. Checked against the actual translations/en.json content, not
+    merely for "the two differ", since two labels can differ and both still
+    be wrong.
+    """
+    client = await hass_ws_client(hass)
+    await client.send_json_auto_id(
+        {"type": "smartchain/embeddings/schema", "entry_id": entry.entry_id}
+    )
+    msg = await client.receive_json()
+    assert msg["success"], msg
+
+    labels = msg["result"]["labels"]
+    embeddings_data = _TRANSLATIONS_EN["config_subentries"]["embeddings"]["step"]["user"]["data"]
+    conversation_data = _TRANSLATIONS_EN["config_subentries"]["conversation"]["step"]["user"][
+        "data"
+    ]
+    # The file itself must actually diverge, or this test would prove nothing.
+    assert embeddings_data["model"] != conversation_data["model"]
+    assert embeddings_data["model_user"] != conversation_data["model_user"]
+
+    assert labels["name"] == embeddings_data["name"]
+    assert labels["model"] == embeddings_data["model"]
+    assert labels["model_user"] == embeddings_data["model_user"]
+    assert labels["model"] != conversation_data["model"]
+    assert labels["model_user"] != conversation_data["model_user"]
+
+
+async def test_save_uses_the_embeddings_model_purpose(hass, hass_ws_client, entry, _models):
+    """The mirror of the schema purpose test: save must fetch with
+    CAPABILITY_EMBEDDINGS too, not just the form that renders it."""
+    client = await hass_ws_client(hass)
+    await client.send_json_auto_id(
+        {
+            "type": "smartchain/embeddings/save",
+            "entry_id": entry.entry_id,
+            "data": {"name": "Purpose Check", "model": "text-embedding-3-small"},
+        }
+    )
+    msg = await client.receive_json()
+    assert msg["success"], msg
+    assert _models.call_args.kwargs["purpose"] == CAPABILITY_EMBEDDINGS
+
+
+async def test_embeddings_save_still_works_after_visiting_the_agent_tab(
+    hass, hass_ws_client, entry, _models
+):
+    """F2: with a purpose-blind cache key (or a save that quietly fetched the
+    chat list), the embeddings tab becomes unusable — no embedding model
+    accepted — the moment a user had already opened the Agents tab in the
+    same session, because the per-entry model cache is already warm with the
+    wrong list by the time the embeddings command asks for one.
+    """
+    client = await hass_ws_client(hass)
+
+    # Visiting the Agents tab first warms the per-entry model cache under the
+    # chat purpose.
+    await client.send_json_auto_id({"type": "smartchain/agent/schema", "entry_id": entry.entry_id})
+    agent_msg = await client.receive_json()
+    assert agent_msg["success"], agent_msg
+
+    # An embedding-only model name: absent from the chat list this fixture
+    # serves, so a save that reused (or refetched under) the chat purpose
+    # could not have accepted it.
+    await client.send_json_auto_id(
+        {
+            "type": "smartchain/embeddings/save",
+            "entry_id": entry.entry_id,
+            "data": {"name": "After Agents Tab", "model": "text-embedding-3-small"},
+        }
+    )
+    embed_msg = await client.receive_json()
+    assert embed_msg["success"], embed_msg
+
+
 async def test_save_creates_a_new_embeddings_subentry(hass, hass_ws_client, entry):
     client = await hass_ws_client(hass)
     await client.send_json_auto_id(
@@ -223,8 +326,64 @@ async def test_save_reports_a_title_already_taken(hass, hass_ws_client):
     msg = await client.receive_json()
     assert not msg["success"], msg
     assert msg["error"]["code"] == "invalid_data"
+    # F3: names *where* the title is already used, not just that it is.
+    assert "OpenAI A" in msg["error"]["message"]
     # Nothing was written: entry_b still has no subentries at all.
     assert entry_b.subentries == {}
+
+
+async def test_a_taken_title_and_a_missing_name_get_different_messages(hass, hass_ws_client):
+    """F3: both used to render the identical 'invalid_data: name', so a user
+    was told a name was wrong but never why."""
+    entry_a = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_ENGINE: ID_OPENAI, CONF_API_KEY: SECRET},
+        unique_id="OpenAI A",
+        title="OpenAI A",
+        subentries_data=[
+            ConfigSubentryData(
+                data={"model": "m"},
+                subentry_type=SUBENTRY_TYPE_EMBEDDINGS,
+                title="Taken",
+                unique_id=None,
+            )
+        ],
+    )
+    entry_a.add_to_hass(hass)
+    entry_b = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_ENGINE: ID_OPENAI, CONF_API_KEY: SECRET},
+        unique_id="OpenAI B",
+        title="OpenAI B",
+    )
+    entry_b.add_to_hass(hass)
+    assert await async_setup_component(hass, DOMAIN, {})
+
+    client = await hass_ws_client(hass)
+
+    await client.send_json_auto_id(
+        {
+            "type": "smartchain/embeddings/save",
+            "entry_id": entry_b.entry_id,
+            "data": {"name": "Taken", "model": "text-embedding-3-small"},
+        }
+    )
+    taken_msg = await client.receive_json()
+
+    await client.send_json_auto_id(
+        {
+            "type": "smartchain/embeddings/save",
+            "entry_id": entry_b.entry_id,
+            "data": {"model": "text-embedding-3-small"},
+        }
+    )
+    missing_msg = await client.receive_json()
+
+    assert not taken_msg["success"] and not missing_msg["success"]
+    assert taken_msg["error"]["code"] == missing_msg["error"]["code"] == "invalid_data"
+    assert taken_msg["error"]["message"] != missing_msg["error"]["message"]
+    assert "OpenAI A" in taken_msg["error"]["message"]
+    assert "OpenAI A" not in missing_msg["error"]["message"]
 
 
 async def test_save_permits_keeping_an_agents_own_title(hass, hass_ws_client, entry):
@@ -325,7 +484,117 @@ async def test_schema_reports_a_pre_existing_title_collision(hass, hass_ws_clien
     )
     msg = await client.receive_json()
     assert msg["success"], msg
-    assert msg["result"]["title_taken_by"] is not None
+    # F3: the entry title that already holds it, not merely a signal that
+    # something does.
+    assert msg["result"]["title_taken_by"] == "OpenAI B"
+
+
+async def test_save_with_a_new_unique_title_succeeds_despite_an_existing_collision(
+    hass, hass_ws_client
+):
+    """The recovery path named in the review: two bindings already share a
+    title, and one of them is renamed away to a title nobody else holds."""
+    entry_a = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_ENGINE: ID_OPENAI, CONF_API_KEY: SECRET},
+        unique_id="OpenAI A",
+        title="OpenAI A",
+        subentries_data=[
+            ConfigSubentryData(
+                data={"model": "m"},
+                subentry_type=SUBENTRY_TYPE_EMBEDDINGS,
+                title="Dup",
+                unique_id=None,
+            )
+        ],
+    )
+    entry_a.add_to_hass(hass)
+    entry_b = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_ENGINE: ID_OPENAI, CONF_API_KEY: SECRET},
+        unique_id="OpenAI B",
+        title="OpenAI B",
+        subentries_data=[
+            ConfigSubentryData(
+                data={"model": "m"},
+                subentry_type=SUBENTRY_TYPE_EMBEDDINGS,
+                title="Dup",
+                unique_id=None,
+            )
+        ],
+    )
+    entry_b.add_to_hass(hass)
+    assert await async_setup_component(hass, DOMAIN, {})
+
+    subentry_a_id = next(iter(entry_a.subentries))
+    client = await hass_ws_client(hass)
+    await client.send_json_auto_id(
+        {
+            "type": "smartchain/embeddings/save",
+            "entry_id": entry_a.entry_id,
+            "subentry_id": subentry_a_id,
+            "data": {"name": "Totally New Title", "model": "text-embedding-3-small"},
+        }
+    )
+    msg = await client.receive_json()
+    assert msg["success"], msg
+    assert entry_a.subentries[subentry_a_id].title == "Totally New Title"
+
+
+async def test_save_can_keep_its_own_title_while_a_collision_with_someone_else_persists(
+    hass, hass_ws_client
+):
+    """F4: `_title_claimed_by_another` used to return its "more than one
+    claimant" sentinel before ever excluding the subentry being edited, so
+    resaving a binding under its own unchanged title — the one edit possible
+    without first deciding how to rename — was refused even though this
+    write does not change who holds what. Renaming away (the test above) was
+    never actually blocked; only this no-op-on-the-title case was.
+    """
+    entry_a = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_ENGINE: ID_OPENAI, CONF_API_KEY: SECRET},
+        unique_id="OpenAI A",
+        title="OpenAI A",
+        subentries_data=[
+            ConfigSubentryData(
+                data={"model": "m"},
+                subentry_type=SUBENTRY_TYPE_EMBEDDINGS,
+                title="Dup",
+                unique_id=None,
+            )
+        ],
+    )
+    entry_a.add_to_hass(hass)
+    entry_b = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_ENGINE: ID_OPENAI, CONF_API_KEY: SECRET},
+        unique_id="OpenAI B",
+        title="OpenAI B",
+        subentries_data=[
+            ConfigSubentryData(
+                data={"model": "m"},
+                subentry_type=SUBENTRY_TYPE_EMBEDDINGS,
+                title="Dup",
+                unique_id=None,
+            )
+        ],
+    )
+    entry_b.add_to_hass(hass)
+    assert await async_setup_component(hass, DOMAIN, {})
+
+    subentry_a_id = next(iter(entry_a.subentries))
+    client = await hass_ws_client(hass)
+    await client.send_json_auto_id(
+        {
+            "type": "smartchain/embeddings/save",
+            "entry_id": entry_a.entry_id,
+            "subentry_id": subentry_a_id,
+            "data": {"name": "Dup", "model": "text-embedding-3-small"},
+        }
+    )
+    msg = await client.receive_json()
+    assert msg["success"], msg
 
 
 async def test_delete_reports_bound_stores_rather_than_silently_breaking_them(

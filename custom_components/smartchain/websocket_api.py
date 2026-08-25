@@ -85,12 +85,24 @@ async def _models_for(
     return cache[key]
 
 
-async def async_field_labels(hass: HomeAssistant, category: str) -> dict[str, str]:
-    """Translated labels for the fields of one flow category.
+async def async_field_labels(
+    hass: HomeAssistant, category: str, *, subentry_type: str | None = None
+) -> dict[str, str]:
+    """Translated labels for the fields of one flow, not a whole category.
 
     The schema's field names are exactly the keys in the integration's
     translation files, so no mapping table is needed — and none should be added,
     because a mapping table is a second place for the field list to live.
+
+    `config_subentries` holds every subentry type in one translation file, and
+    two of them — conversation and embeddings — declare fields with the same
+    name (`model`, `model_user`) that mean different things. Flattening the
+    whole category with `setdefault`, as this used to, let whichever type's
+    keys were iterated first win for both forms — a real translation, just for
+    the wrong form (F1). Passing `subentry_type` scopes matching to the keys
+    under that type's own subtree, so a caller asks for the labels of one form
+    rather than of everything sharing its translation category. Leave it None
+    for a category with no such split, e.g. `options`.
 
     Returns whatever it can. A field with no translation is simply absent, and
     the panel falls back to the raw name: a field added without a translation
@@ -99,8 +111,11 @@ async def async_field_labels(hass: HomeAssistant, category: str) -> dict[str, st
     resources = await translation.async_get_translations(
         hass, hass.config.language, category, [DOMAIN]
     )
+    prefix = f"component.{DOMAIN}.{category}.{subentry_type}." if subentry_type else None
     labels: dict[str, str] = {}
     for key, value in resources.items():
+        if prefix is not None and not key.startswith(prefix):
+            continue
         # Keys look like `component.smartchain.<category>.….data.<field>`.
         marker = ".data."
         index = key.rfind(marker)
@@ -159,7 +174,9 @@ async def ws_agent_schema(
         {
             "schema": voluptuous_serialize.convert(schema, custom_serializer=cv.custom_serializer),
             "data": served,
-            "labels": await async_field_labels(hass, "config_subentries"),
+            "labels": await async_field_labels(
+                hass, "config_subentries", subentry_type=SUBENTRY_TYPE_CONVERSATION
+            ),
         },
     )
 
@@ -543,7 +560,9 @@ async def ws_embeddings_schema(
         {
             "schema": voluptuous_serialize.convert(schema, custom_serializer=cv.custom_serializer),
             "data": served,
-            "labels": await async_field_labels(hass, "config_subentries"),
+            "labels": await async_field_labels(
+                hass, "config_subentries", subentry_type=SUBENTRY_TYPE_EMBEDDINGS
+            ),
             # A memory store binds by title. Both fields let the panel warn
             # before a write, not after: bound_stores names what a rename would
             # unbind, title_taken_by flags that this subentry's *current*
@@ -562,27 +581,38 @@ async def ws_embeddings_schema(
 def _title_claimed_by_another(
     hass: HomeAssistant, title: str, subentry_id: str | None
 ) -> str | None:
-    """Subentry id already claiming this title elsewhere, or None if free.
+    """The entry title of another SmartChain entry whose embeddings subentry
+    already claims this title, or None if no *other* subentry holds it.
 
-    Reuses MemoryRegistry._embeddings_subentries — the exact walk
-    MemoryRegistry.build uses to resolve a store's binding — rather than
-    restating "collect embeddings subentries by title across every SmartChain
-    entry" a second time here.
+    `subentry_id` is excluded before anything is counted, not after.
+    MemoryRegistry._embeddings_subentries collapses a title held by two or
+    more subentries down to a bare None, discarding which subentries they
+    were — so filtering `subentry_id` out of that already-collapsed result is
+    not possible (F4): editing either half of an existing collision could
+    never be saved again, not even to fix something unrelated, because
+    "someone else has this title" could no longer be told apart from "I am
+    one of the two someones". This walks entries directly instead — the same
+    walk _embeddings_subentries does — keeping every claimant so self can be
+    dropped before anything is collapsed.
+
+    The return value also carries what ws_embeddings_save's error message
+    needs (F3): which entry already holds the name, not just that someone
+    does — a `title_taken_by` nobody could read either misleads or ships
+    dead.
     """
-    registry: MemoryRegistry = hass.data[DOMAIN]["memory"]
-    subentries = registry._embeddings_subentries()  # noqa: SLF001 — see docstring
-    if title not in subentries:
+    others = [
+        (entry, subentry)
+        for entry in hass.config_entries.async_entries(DOMAIN)
+        for subentry in (entry.subentries or {}).values()
+        if subentry.subentry_type == SUBENTRY_TYPE_EMBEDDINGS
+        and subentry.title == title
+        and subentry.subentry_id != subentry_id
+    ]
+    if not others:
         return None
-    binding = subentries[title]
-    if binding is None:
-        # Already claimed by more than one subentry elsewhere. Which one
-        # claimed it first is no longer recoverable from this map, but it is
-        # still taken — a truthy sentinel is enough for the caller's check.
-        return "duplicate"
-    _entry, subentry = binding
-    if subentry.subentry_id == subentry_id:
-        return None
-    return subentry.subentry_id
+    if len(others) == 1:
+        return others[0][0].title
+    return "more than one existing embeddings binding"
 
 
 @websocket_api.require_admin
@@ -639,10 +669,21 @@ async def ws_embeddings_save(
         return
 
     title = data["name"]
-    taken = _title_claimed_by_another(hass, title, subentry_id)
-    if taken is not None:
-        connection.send_error(msg["id"], "invalid_data", "invalid_data: name")
-        return
+    # A save that keeps the subentry's own current title changes nothing
+    # about who holds what, even if that title is already contested by a
+    # different subentry — refusing it here would block the one edit a user
+    # could make without touching the name field at all. Renaming away from a
+    # contested title (the branch below) is the actual fix for the collision
+    # itself, and that path is unaffected by this shortcut.
+    if subentry is None or title != subentry.title:
+        taken_by = _title_claimed_by_another(hass, title, subentry_id)
+        if taken_by is not None:
+            connection.send_error(
+                msg["id"],
+                "invalid_data",
+                f"invalid_data: name (already used by {taken_by})",
+            )
+            return
 
     stored = {"model": model, "model_user": data.get("model_user", "")}
 
