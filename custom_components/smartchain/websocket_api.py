@@ -6,15 +6,18 @@ config flow builds, so the field list has one definition rather than two.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from pathlib import Path
 from typing import Any
 
 import voluptuous as vol
 import voluptuous_serialize
+import yaml
 from homeassistant.components import websocket_api
 from homeassistant.config_entries import ConfigEntry, ConfigSubentry
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import translation
 
@@ -793,6 +796,11 @@ def _read_tools_file(path: Path) -> dict[str, Any]:
     name (`!secret my_key`), which is what `smartchain/tools/get` may
     safely return.
 
+    `hash` is the sha256 hex digest of exactly the text served, `None` when
+    the file does not exist (or couldn't be read as text). Task 2's save
+    path compares a client-supplied `base_hash` against this to detect a
+    file that changed underneath the editor.
+
     `exists=False` means the normal first-run state — no file at all — and
     is not an error. A file that *is* there but can't be read as text (wrong
     permissions, a directory sitting at that path, non-UTF-8 bytes) reports
@@ -802,14 +810,21 @@ def _read_tools_file(path: Path) -> dict[str, Any]:
     leaving the panel with no way to tell the user what's actually wrong.
     """
     if not path.exists():
-        return {"text": "", "exists": False, "error": None}
+        return {"text": "", "exists": False, "error": None, "hash": None}
     try:
-        return {"text": path.read_text(), "exists": True, "error": None}
+        text = path.read_text()
+        return {
+            "text": text,
+            "exists": True,
+            "error": None,
+            "hash": hashlib.sha256(text.encode()).hexdigest(),
+        }
     except (OSError, UnicodeDecodeError) as err:
         return {
             "text": "",
             "exists": True,
             "error": f"{type(err).__name__}: {path.name} could not be read",
+            "hash": None,
         }
 
 
@@ -834,12 +849,32 @@ async def ws_tools_get(
     connection.send_result(msg["id"], {"path": str(path), **result})
 
 
+# A parse failure comes from Home Assistant's YAML reader (or, in principle,
+# a bare yaml.YAMLError), which fails *before* any `!secret` is resolved — its
+# message carries a line and column and no credential. A schema failure comes
+# from voluptuous (`vol.Invalid` / `MultipleInvalid`), whose messages embed the
+# offending value, and HA resolves `!secret` on mapping *keys* as well as
+# values, so that value can be a live credential.
+#
+# Whitelist the safe case, never blacklist the unsafe one: forward the message
+# only when the cause is a known parse-error type, and fall back to the bare
+# type name for everything else, including causes nobody enumerated. A
+# blacklist inverts the failure mode — an unfamiliar exception would be
+# forwarded rather than withheld — and this file has already shipped one leak
+# from exactly that shape (see the `.path` note below).
+_PARSE_ERROR_CAUSES = (yaml.YAMLError, HomeAssistantError)
+
+
 def _safe_loader_error(err: LoaderError) -> str:
     """A validation failure summary that cannot carry a resolved secret.
 
-    Only the exception type name crosses the wire. Nothing about the
-    underlying voluptuous error or `HomeAssistantError` — not its message,
-    not its `.path` — is safe to forward:
+    A YAML *syntax* error (`HomeAssistantError` from HA's loader, or a bare
+    `yaml.YAMLError`) is safe to forward verbatim: the parser fails before any
+    `!secret` is resolved, so its message carries a line and column and no
+    credential — and a text editor without a line number is much harder to
+    use. Everything else — in particular a schema failure from voluptuous —
+    reports only the exception's type name. Nothing about a `vol.Invalid` /
+    `MultipleInvalid` — not its message, not its `.path` — is safe to forward:
 
     - `str(err)` / `.msg`: two of this schema's own validators
       (`_validate_action`, `_validate_mcp_server` in tools/schema.py) build
@@ -862,10 +897,20 @@ def _safe_loader_error(err: LoaderError) -> str:
     to sub-schemas this module doesn't own and that aren't structured for
     generic introspection — an allowlist built by hand would silently drift
     out of sync as tools/schema.py changes. Rather than approximate that,
-    only the exception type is reported. The full original message is
-    logged server-side by the caller, where only an admin can read it.
+    only the exception type is reported for a schema failure. The full
+    original message is logged server-side by the caller, where only an
+    admin can read it.
+
+    `vol.Invalid` is a subclass of neither whitelist entry today, so a schema
+    failure cannot satisfy the `isinstance` check above — the explicit
+    `not isinstance(cause, vol.Invalid)` guard is redundant against the
+    current class hierarchy. It stays anyway: it is free, and it stops a
+    future Home Assistant that reparented `Invalid` under `HomeAssistantError`
+    from silently turning this whitelist into a leak.
     """
     cause = err.__cause__
+    if isinstance(cause, _PARSE_ERROR_CAUSES) and not isinstance(cause, vol.Invalid):
+        return str(cause)
     return type(cause).__name__ if cause is not None else type(err).__name__
 
 
