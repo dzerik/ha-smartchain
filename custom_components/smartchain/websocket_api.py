@@ -1048,6 +1048,11 @@ def _restore_after_failed_reload(path: Path) -> None:
     rather than leaving a file nothing backs up.
     """
     if not _restore_backup(path):
+        # No prior file means nothing here has adopted this text yet, and a
+        # file that fails to reload now will fail identically at Home
+        # Assistant's next startup — leaving it on disk doesn't preserve the
+        # user's work, it schedules a breakage for their next restart. The
+        # panel still holds their text, so removing it loses nothing visible.
         path.unlink(missing_ok=True)
 
 

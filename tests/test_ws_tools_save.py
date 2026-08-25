@@ -227,6 +227,43 @@ async def test_failing_reload_restores_the_previous_file(
     assert not (tools_dir / "tools.yaml.tmp").exists()
 
 
+async def test_a_failed_first_save_leaves_no_file_behind(
+    hass: HomeAssistant, hass_ws_client, tools_dir: Path
+):
+    """The fresh-install case: nothing to restore, so the file must go.
+
+    The user's live system has no tools.yaml at all right now, so this is
+    the branch their very first save hits if the reload fails. A file that
+    failed to reload will fail identically at Home Assistant's next
+    startup, so leaving it on disk would not preserve the user's work — it
+    would schedule a breakage for their next restart.
+    """
+    # No tools.yaml, no .bak — the state of a fresh install.
+    assert not (tools_dir / "tools.yaml").exists()
+    assert not (tools_dir / "tools.yaml.bak").exists()
+    await async_setup_component(hass, DOMAIN, {})
+
+    client = await hass_ws_client(hass)
+    base_hash = await _get_hash(client)
+    assert base_hash is None
+
+    with patch(
+        "custom_components.smartchain._reload_registry",
+        new=AsyncMock(side_effect=LoaderError("boom")),
+    ):
+        await client.send_json_auto_id(
+            {"type": "smartchain/tools/save", "text": VALID_TOOL, "base_hash": base_hash}
+        )
+        msg = await client.receive_json()
+
+    assert msg["success"], msg
+    assert msg["result"]["ok"] is False
+    assert msg["result"]["reason"] == "reload_failed"
+    assert not (tools_dir / "tools.yaml").exists()
+    assert not (tools_dir / "tools.yaml.tmp").exists()
+    assert not (tools_dir / "tools.yaml.bak").exists()
+
+
 async def test_smartchain_directory_is_created_on_a_fresh_install(
     hass: HomeAssistant, hass_ws_client, config_dir: Path
 ):
