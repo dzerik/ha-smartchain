@@ -561,7 +561,7 @@ def subentry_schema(
     return schema
 
 
-def _embeddings_subentry_schema(
+def embeddings_subentry_schema(
     models: list[str], defaults: dict[str, Any] | None = None
 ) -> vol.Schema:
     """Schema for an embeddings binding: a name and a model, nothing more.
@@ -604,7 +604,7 @@ class EmbeddingsSubentryFlow(ConfigSubentryFlow):
         models = await async_fetch_models(
             self.hass, engine, entry.data, purpose=CAPABILITY_EMBEDDINGS
         )
-        schema = _embeddings_subentry_schema(models)
+        schema = embeddings_subentry_schema(models)
 
         if user_input is not None:
             return self._create(user_input, schema)
@@ -621,7 +621,7 @@ class EmbeddingsSubentryFlow(ConfigSubentryFlow):
             self.hass, engine, entry.data, purpose=CAPABILITY_EMBEDDINGS
         )
         defaults = {**subentry.data, "name": subentry.title}
-        schema = _embeddings_subentry_schema(models, defaults)
+        schema = embeddings_subentry_schema(models, defaults)
 
         if user_input is not None:
             model = _resolve_embeddings_model(user_input)

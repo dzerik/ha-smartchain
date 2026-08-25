@@ -27,8 +27,10 @@ from .const import (
     DOMAIN,
     ID_GIGACHAT,
     SUBENTRY_TYPE_CONVERSATION,
+    SUBENTRY_TYPE_EMBEDDINGS,
     UNIQUE_ID,
 )
+from .tools.memory.registry import MemoryRegistry
 
 _MODEL_CACHE = "panel_model_cache"
 
@@ -42,6 +44,9 @@ def async_register(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_settings_save)
     websocket_api.async_register_command(hass, ws_agent_duplicate)
     websocket_api.async_register_command(hass, ws_agent_delete)
+    websocket_api.async_register_command(hass, ws_embeddings_schema)
+    websocket_api.async_register_command(hass, ws_embeddings_save)
+    websocket_api.async_register_command(hass, ws_embeddings_delete)
     websocket_api.async_register_command(hass, ws_overview)
 
 
@@ -449,3 +454,215 @@ def _describe_agent(subentry: Any) -> dict[str, Any]:
         # cannot know without building the registry.
         "tool_count": len(allowed) if allowed is not None else None,
     }
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "smartchain/embeddings/schema",
+        vol.Required("entry_id"): str,
+        vol.Optional("subentry_id"): str,
+        vol.Optional("refresh", default=False): bool,
+    }
+)
+@websocket_api.async_response
+async def ws_embeddings_schema(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Serialise the embeddings form's schema, with current values when editing.
+
+    Fetches with purpose=CAPABILITY_EMBEDDINGS, not the chat list ws_agent_schema
+    uses — a chat model here would offer models that cannot embed.
+    """
+    from .config_flow import embeddings_subentry_schema
+
+    entry = _get_entry(hass, msg["entry_id"])
+    if entry is None:
+        connection.send_error(msg["id"], "not_found", "Unknown config entry")
+        return
+
+    defaults: dict[str, Any] = {}
+    subentry = None
+    subentry_id = msg.get("subentry_id")
+    if subentry_id is not None:
+        subentry = entry.subentries.get(subentry_id)
+        if subentry is None or subentry.subentry_type != SUBENTRY_TYPE_EMBEDDINGS:
+            connection.send_error(msg["id"], "not_found", "Unknown embeddings binding")
+            return
+        defaults = {**subentry.data, "name": subentry.title}
+
+    models = await _models_for(hass, entry, refresh=msg["refresh"], purpose=CAPABILITY_EMBEDDINGS)
+    schema = embeddings_subentry_schema(models, defaults)
+
+    # Same trap as ws_agent_schema (see F1): only serve fields the schema
+    # still declares.
+    declared = {str(key.schema) for key in schema.schema}
+    served = {name: value for name, value in defaults.items() if name in declared}
+
+    registry: MemoryRegistry = hass.data[DOMAIN]["memory"]
+
+    connection.send_result(
+        msg["id"],
+        {
+            "schema": voluptuous_serialize.convert(schema, custom_serializer=cv.custom_serializer),
+            "data": served,
+            "labels": await async_field_labels(hass, "config_subentries"),
+            # A memory store binds by title. Both fields let the panel warn
+            # before a write, not after: bound_stores names what a rename would
+            # unbind, title_taken_by flags that this subentry's *current*
+            # title already collides elsewhere (possible even before any edit,
+            # e.g. two entries independently given the same title).
+            "bound_stores": registry.stores_bound_to(subentry.title) if subentry else [],
+            "title_taken_by": (
+                _title_claimed_by_another(hass, subentry.title, subentry.subentry_id)
+                if subentry
+                else None
+            ),
+        },
+    )
+
+
+def _title_claimed_by_another(
+    hass: HomeAssistant, title: str, subentry_id: str | None
+) -> str | None:
+    """Subentry id already claiming this title elsewhere, or None if free.
+
+    Reuses MemoryRegistry._embeddings_subentries — the exact walk
+    MemoryRegistry.build uses to resolve a store's binding — rather than
+    restating "collect embeddings subentries by title across every SmartChain
+    entry" a second time here.
+    """
+    registry: MemoryRegistry = hass.data[DOMAIN]["memory"]
+    subentries = registry._embeddings_subentries()  # noqa: SLF001 — see docstring
+    if title not in subentries:
+        return None
+    binding = subentries[title]
+    if binding is None:
+        # Already claimed by more than one subentry elsewhere. Which one
+        # claimed it first is no longer recoverable from this map, but it is
+        # still taken — a truthy sentinel is enough for the caller's check.
+        return "duplicate"
+    _entry, subentry = binding
+    if subentry.subentry_id == subentry_id:
+        return None
+    return subentry.subentry_id
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "smartchain/embeddings/save",
+        vol.Required("entry_id"): str,
+        vol.Optional("subentry_id"): str,
+        vol.Required("data"): dict,
+    }
+)
+@websocket_api.async_response
+async def ws_embeddings_save(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Create or update an embeddings binding, refusing an already-taken title.
+
+    A title claimed by a second subentry maps to None in
+    MemoryRegistry._embeddings_subentries, which silently unbinds every store
+    that referenced it — exactly as a rename does. The panel shows every entry
+    at once, so this is checked before anything is written, not discovered
+    later when a store quietly stops resolving.
+    """
+    from .config_flow import _resolve_embeddings_model, embeddings_subentry_schema
+
+    entry = _get_entry(hass, msg["entry_id"])
+    if entry is None:
+        connection.send_error(msg["id"], "not_found", "Unknown config entry")
+        return
+
+    subentry_id = msg.get("subentry_id")
+    subentry = None
+    if subentry_id is not None:
+        subentry = entry.subentries.get(subentry_id)
+        if subentry is None or subentry.subentry_type != SUBENTRY_TYPE_EMBEDDINGS:
+            connection.send_error(msg["id"], "not_found", "Unknown embeddings binding")
+            return
+
+    models = await _models_for(hass, entry, refresh=False, purpose=CAPABILITY_EMBEDDINGS)
+    defaults = {**subentry.data, "name": subentry.title} if subentry is not None else {}
+    schema = embeddings_subentry_schema(models, defaults)
+
+    try:
+        data = dict(schema(dict(msg["data"])))
+    except vol.Invalid as err:
+        connection.send_error(msg["id"], "invalid_data", _describe_invalid(err))
+        return
+
+    model = _resolve_embeddings_model(data)
+    if not model:
+        connection.send_error(msg["id"], "invalid_data", "model_required")
+        return
+
+    title = data["name"]
+    taken = _title_claimed_by_another(hass, title, subentry_id)
+    if taken is not None:
+        connection.send_error(msg["id"], "invalid_data", "invalid_data: name")
+        return
+
+    stored = {"model": model, "model_user": data.get("model_user", "")}
+
+    if subentry is None:
+        new = ConfigSubentry(
+            data=stored,
+            subentry_type=SUBENTRY_TYPE_EMBEDDINGS,
+            title=title,
+            unique_id=None,
+        )
+        hass.config_entries.async_add_subentry(entry, new)
+        connection.send_result(msg["id"], {"subentry_id": new.subentry_id})
+        return
+
+    hass.config_entries.async_update_subentry(entry, subentry, data=stored, title=title)
+    connection.send_result(msg["id"], {"subentry_id": subentry.subentry_id})
+
+
+def _resolve_embeddings(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> tuple[ConfigEntry, Any] | None:
+    """Entry and embeddings subentry named by the message, or None after sending an error."""
+    entry = _get_entry(hass, msg["entry_id"])
+    if entry is None:
+        connection.send_error(msg["id"], "not_found", "Unknown config entry")
+        return None
+    subentry = entry.subentries.get(msg["subentry_id"])
+    if subentry is None or subentry.subentry_type != SUBENTRY_TYPE_EMBEDDINGS:
+        connection.send_error(msg["id"], "not_found", "Unknown embeddings binding")
+        return None
+    return entry, subentry
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "smartchain/embeddings/delete",
+        vol.Required("entry_id"): str,
+        vol.Required("subentry_id"): str,
+    }
+)
+@websocket_api.async_response
+async def ws_embeddings_delete(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Remove an embeddings binding, reporting what it unbinds before it does."""
+    resolved = _resolve_embeddings(hass, connection, msg)
+    if resolved is None:
+        return
+    entry, subentry = resolved
+
+    registry: MemoryRegistry = hass.data[DOMAIN]["memory"]
+    bound_stores = registry.stores_bound_to(subentry.title)
+
+    hass.config_entries.async_remove_subentry(entry, subentry.subentry_id)
+    connection.send_result(msg["id"], {"bound_stores": bound_stores})

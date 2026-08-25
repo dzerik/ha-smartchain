@@ -52,6 +52,14 @@ class MemoryRegistry:
                     found[subentry.title] = (entry, subentry)
         return found
 
+    def stores_bound_to(self, title: str) -> list[str]:
+        """Names of configured memory stores bound to this embeddings title.
+
+        Stores bind by title, so renaming or duplicating a title silently
+        unbinds them. The panel asks this before writing, never after.
+        """
+        return [name for name, config in self._configs.items() if config.embeddings == title]
+
     async def build(self, settings: MemorySettings, storage_dir: Path) -> None:
         """Construct every configured store. Never raises."""
         available = self._embeddings_subentries()
