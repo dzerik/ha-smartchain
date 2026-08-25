@@ -42,6 +42,7 @@ from .const import (
     EVENT_TOOLS_RELOADED,
     ID_GIGACHAT,
     MEMORY_PERSIST_DIRNAME,
+    PANEL_STATIC_PATH,
     SERVICE_CLEAR_MEMORY,
     SERVICE_REINDEX_ENTITIES,
     SERVICE_RELOAD_TOOLS,
@@ -408,7 +409,12 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         from homeassistant.components.http import StaticPathConfig
 
         await hass.http.async_register_static_paths(
-            [StaticPathConfig("/smartchain", str(panel_dir), False)]
+            # A distinct prefix from `frontend_url_path` below. Registering both
+            # at "/smartchain" made a page refresh return 403: the browser asks
+            # the server for /smartchain, the static handler answers first and is
+            # asked to serve a directory. Client-side navigation hid it, so it
+            # only showed up on reload.
+            [StaticPathConfig(PANEL_STATIC_PATH, str(panel_dir), False)]
         )
         import json
 
@@ -432,7 +438,7 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
                 "_panel_custom": {
                     "name": "smartchain-panel",
                     "module_url": (
-                        f"/smartchain/smartchain-panel.js?v={panel_version}.{panel_build}"
+                        f"{PANEL_STATIC_PATH}/smartchain-panel.js?v={panel_version}.{panel_build}"
                     ),
                 },
                 "version": panel_version,

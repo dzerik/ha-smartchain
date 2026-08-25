@@ -296,6 +296,11 @@ DELEGATE_TOOL_NAME = "ask_agent"
 
 # Custom tools (v4.1.0)
 # Relative to hass.config.config_dir
+# Static assets live under a different prefix than the panel's own URL path.
+# Sharing one prefix makes a page refresh 403, because the static handler is
+# asked to serve the panel directory instead of the frontend answering.
+PANEL_STATIC_PATH = "/smartchain_panel"
+
 TOOLS_YAML_PATH = "smartchain/tools.yaml"
 CONF_ALLOWED_TOOLS = "allowed_tools"
 SERVICE_RELOAD_TOOLS = "reload_tools"

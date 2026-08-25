@@ -122,7 +122,21 @@ export const SC_STYLES = `
   @keyframes sc-toast-out { from { opacity: 1; } to { transform: translateY(10px); opacity: 0; } }
 
   /* ========== Tab Shell ========== */
-  .sc-tabs {
+  .sc-tabs-row {
+  display: flex;
+  align-items: center;
+  border-bottom: 1px solid var(--divider-color, #e0e0e0);
+  background: var(--primary-background-color, #fafafa);
+}
+.sc-tabs-row .sc-tabs { border-bottom: none; background: none; flex: 1; }
+.sc-version {
+  padding: 0 16px;
+  font-size: 12px;
+  color: var(--secondary-text-color);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.sc-tabs {
     display: flex;
     gap: 4px;
     padding: 0 16px;

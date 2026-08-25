@@ -37,6 +37,16 @@ class SmartChainPanel extends HTMLElement {
 
   set panel(panel) {
     this._panel = panel;
+    // Read from the panel config rather than a constant in this file, so what
+    // it shows is the version actually installed — which is the point of
+    // showing it at all.
+    this._version = (panel && panel.config && panel.config.version) || "";
+    this._paintVersion();
+  }
+
+  _paintVersion() {
+    const slot = this.querySelector(".sc-version");
+    if (slot) slot.textContent = this._version ? `v${this._version}` : "";
   }
 
   set hass(hass) {
@@ -120,7 +130,10 @@ class SmartChainPanel extends HTMLElement {
   _initialize() {
     this.innerHTML = `
       <style>${SC_STYLES}</style>
-      <div class="sc-tabs" role="tablist"></div>
+      <div class="sc-tabs-row">
+        <div class="sc-tabs" role="tablist"></div>
+        <span class="sc-version" title="Installed SmartChain version"></span>
+      </div>
       <div class="sc-tab-body" role="tabpanel" id="${TAB_PANEL_ID}"></div>
     `;
     this.querySelector(".sc-tabs").addEventListener("keydown", (ev) => this._onTabKeydown(ev));
@@ -131,6 +144,7 @@ class SmartChainPanel extends HTMLElement {
     this._visibleTabs = this._visibleTabList();
     this._active = this._visibleTabs[0]?.id;
     this._buildBar();
+    this._paintVersion();
     this._select(this._active);
   }
 
