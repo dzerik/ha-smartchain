@@ -236,24 +236,43 @@ export const SC_STYLES = `
     overflow-wrap: anywhere;
   }
   .sc-tools-spacer { flex: 1; }
-  .sc-tools-text {
+  .sc-tools-editor {
+    display: block;
+    width: 100%;
+    min-height: 480px;
     margin: 0;
     padding: 16px;
     font-family: var(--code-font-family, monospace);
     font-size: 13px;
     line-height: 1.6;
-    white-space: pre-wrap;
-    overflow-x: auto;
+    white-space: pre;
+    overflow: auto;
     background: var(--code-editor-background-color, #1e1e1e);
     color: #d4d4d4;
+    border: 1px solid var(--divider-color, #e0e0e0);
     border-radius: var(--sc-radius-md);
-    /* Read-only display, not a form field: no border, no focus ring, no
-       cursor affordance that would invite editing. */
-    user-select: text;
+    box-sizing: border-box;
+    resize: vertical;
+    tab-size: 2;
+  }
+  .sc-tools-editor:focus {
+    outline: none;
+    border-color: var(--primary-color, #03a9f4);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary-color) 20%, transparent);
+  }
+  .sc-tools-banner {
+    display: flex; align-items: center; gap: 8px;
+    padding: 10px 14px;
+    margin-bottom: 12px;
+    border-radius: var(--sc-radius-sm);
+    font-size: 14px;
   }
   .sc-tools-error {
-    display: flex; align-items: center; gap: 8px;
     color: var(--error-color, #f44336);
-    font-size: 14px;
+    background: color-mix(in srgb, var(--error-color, #f44336) 10%, transparent);
+  }
+  .sc-tools-info {
+    color: var(--secondary-text-color);
+    background: var(--primary-background-color, #fafafa);
   }
 `;
