@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -59,6 +61,8 @@ def async_register(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_tools_get)
     websocket_api.async_register_command(hass, ws_tools_validate)
     websocket_api.async_register_command(hass, ws_tools_reload)
+    websocket_api.async_register_command(hass, ws_tools_save)
+    websocket_api.async_register_command(hass, ws_tools_rollback)
 
 
 def _get_entry(hass: HomeAssistant, entry_id: str) -> ConfigEntry | None:
@@ -959,3 +963,207 @@ async def ws_tools_reload(
         connection.send_error(msg["id"], "invalid_data", _safe_loader_error(err))
         return
     connection.send_result(msg["id"], {"tools": count})
+
+
+def _backup_path(path: Path) -> Path:
+    return path.with_name(path.name + ".bak")
+
+
+def _tmp_path(path: Path) -> Path:
+    return path.with_name(path.name + ".tmp")
+
+
+def _restore_backup(path: Path) -> bool:
+    """Restore `.bak` onto `path` through the same atomic replace `save` uses.
+
+    Deliberately does **not** validate the backup first: it is, by
+    construction, a file that once passed `load_tools_file` (nothing but a
+    successful save ever creates one), and refusing to restore it would
+    strand the user exactly when they most need the escape hatch.
+
+    Returns False, doing nothing, when there is no backup to restore.
+    """
+    backup = _backup_path(path)
+    if not backup.is_file():
+        return False
+    os.replace(backup, path)
+    return True
+
+
+def _write_tools_file(path: Path, text: str, config_dir: Path) -> tuple[str, str | None]:
+    """Blocking half of a save: write, validate, back up, atomically replace.
+
+    Runs entirely off the event loop — the temp-file write, the real
+    `load_tools_file` validation (the integration's own loader, so what
+    passes here is what will load at startup), and the backup copy are all
+    blocking I/O.
+
+    Returns `(status, error)`:
+    - `("ok", None)` — the file is now on disk at `path`.
+    - `("invalid", detail)` — the submitted text failed to load; nothing was
+      written to `path`. `detail` is already `_safe_loader_error`'s output,
+      never a raw exception message.
+    - `("write_failed", detail)` — a filesystem error; `detail` is only the
+      exception's type name, never its message (which can embed a path or,
+      in principle, other detail not meant for the wire).
+
+    The temp file is removed on every exit path: a stray `.tmp` beside a
+    config file is confusing at best, and `os.replace` already consumes it
+    on the success path, so `missing_ok=True` covers both.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = _tmp_path(path)
+    try:
+        try:
+            tmp.write_text(text)
+        except OSError as err:
+            return "write_failed", type(err).__name__
+
+        try:
+            load_tools_file(tmp, config_dir)
+        except LoaderError as err:
+            LOGGER.warning("tools.yaml save validation failed: %s", err)  # server-side only
+            return "invalid", _safe_loader_error(err)
+
+        try:
+            backup = _backup_path(path)
+            if path.exists():
+                shutil.copy2(path, backup)
+            os.replace(tmp, path)
+        except OSError as err:
+            return "write_failed", type(err).__name__
+
+        return "ok", None
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def _restore_after_failed_reload(path: Path) -> None:
+    """Undo a save whose reload failed.
+
+    Ordinarily there is a `.bak` — the pre-save file — to put back. The one
+    case there is not is a first-ever save on a fresh install, where `path`
+    did not exist before this save either; then "restore" means removing
+    the file `save` just wrote, returning to that same fresh-install state
+    rather than leaving a file nothing backs up.
+    """
+    if not _restore_backup(path):
+        path.unlink(missing_ok=True)
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "smartchain/tools/save",
+        vol.Required("text"): str,
+        vol.Required("base_hash"): vol.Any(str, None),
+    }
+)
+@websocket_api.async_response
+async def ws_tools_save(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Write `text` to tools.yaml, refusing anything that could take the
+    integration down.
+
+    The order below is the safety argument and must not be rearranged:
+
+    1. Refuse if the file's hash no longer matches `base_hash` — someone may
+       be editing through a file editor, SSH, or a second tab. Refusing is
+       the whole behaviour; there is no merge and no last-write-wins.
+    2. Write the submitted text to a temp file beside the target, so the
+       later `os.replace` stays on one filesystem and therefore stays
+       atomic.
+    3. Validate the temp file with `load_tools_file` — what passes here is
+       what will load at startup.
+    4. Back up the current file, before the replace.
+    5. `os.replace` the temp file onto the target — atomic, so a crash
+       mid-write cannot leave a truncated file.
+    6. Reload the registry. If the reload raises, restore from the backup
+       and reload again, then report: the user asked to save a file, not to
+       lose their tools. A file can validate and still fail to load — an MCP
+       server that will not start, an embeddings binding that no longer
+       resolves.
+
+    Nothing here parses `text` into a structure and re-serialises it — raw
+    text in, raw text out — which is what lets `!secret openai_key` survive
+    a save as a reference instead of being written back as the resolved
+    key.
+    """
+    from . import _reload_registry, _tools_yaml_path
+
+    path = _tools_yaml_path(hass)
+    config_dir = Path(hass.config.config_dir)
+
+    # 1. Refuse a stale edit.
+    current = await hass.async_add_executor_job(_read_tools_file, path)
+    if current["hash"] != msg["base_hash"]:
+        connection.send_result(msg["id"], {"ok": False, "reason": "stale"})
+        return
+
+    # 2-5: write, validate, back up, atomically replace — all in one executor
+    # job so the sequence stays one uninterrupted piece of blocking I/O.
+    status, error = await hass.async_add_executor_job(
+        _write_tools_file, path, msg["text"], config_dir
+    )
+    if status != "ok":
+        connection.send_result(msg["id"], {"ok": False, "reason": status, "error": error})
+        return
+
+    # 6. Reload; on failure, restore and report.
+    try:
+        await _reload_registry(hass)
+    except LoaderError as err:
+        LOGGER.warning(  # detail stays server-side
+            "tools.yaml reload after save failed; restoring previous file: %s", err
+        )
+        await hass.async_add_executor_job(_restore_after_failed_reload, path)
+        try:
+            await _reload_registry(hass)
+        except LoaderError:
+            LOGGER.exception("tools.yaml reload after restoring the backup also failed")
+        connection.send_result(
+            msg["id"],
+            {"ok": False, "reason": "reload_failed", "error": _safe_loader_error(err)},
+        )
+        return
+
+    new = await hass.async_add_executor_job(_read_tools_file, path)
+    connection.send_result(msg["id"], {"ok": True, "hash": new["hash"]})
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): "smartchain/tools/rollback"})
+@websocket_api.async_response
+async def ws_tools_rollback(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Restore `tools.yaml.bak` onto `tools.yaml` and reload.
+
+    Does not validate the backup first — see `_restore_backup`. Refuses with
+    `no_backup` when there is none.
+    """
+    from . import _reload_registry, _tools_yaml_path
+
+    path = _tools_yaml_path(hass)
+    restored = await hass.async_add_executor_job(_restore_backup, path)
+    if not restored:
+        connection.send_result(msg["id"], {"ok": False, "reason": "no_backup"})
+        return
+
+    try:
+        await _reload_registry(hass)
+    except LoaderError as err:
+        LOGGER.warning("tools.yaml reload after rollback failed: %s", err)  # server-side only
+        connection.send_result(
+            msg["id"],
+            {"ok": False, "reason": "reload_failed", "error": _safe_loader_error(err)},
+        )
+        return
+
+    new = await hass.async_add_executor_job(_read_tools_file, path)
+    connection.send_result(msg["id"], {"ok": True, "hash": new["hash"]})
