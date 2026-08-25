@@ -61,8 +61,12 @@ export class ScAgentsTab extends HTMLElement {
       const form = root.querySelector("sc-config-form");
       form.hass = this._hass;
       form.commands = AGENT_COMMANDS;
-      form.entryId = this._editing.entryId;
+      // subentryId before entryId: config-form starts loading the moment
+      // hass/commands/entryId are all set, so an Edit form's subentryId
+      // must already be in place by then — otherwise it would load
+      // create-mode defaults and silently discard the existing agent.
       if (this._editing.subentryId) form.subentryId = this._editing.subentryId;
+      form.entryId = this._editing.entryId;
       form.addEventListener("sc-saved", () => {
         this._editing = null;
         this._requestRefresh();

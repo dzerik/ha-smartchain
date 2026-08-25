@@ -70,8 +70,12 @@ export class ScEmbeddingsTab extends HTMLElement {
       const form = root.querySelector("sc-config-form");
       form.hass = this._hass;
       form.commands = EMBEDDINGS_COMMANDS;
-      form.entryId = this._editing.entryId;
+      // subentryId before entryId: config-form starts loading the moment
+      // hass/commands/entryId are all set, so an Edit form's subentryId
+      // must already be in place by then — otherwise it would load
+      // create-mode defaults and silently discard the existing binding.
       if (this._editing.subentryId) form.subentryId = this._editing.subentryId;
+      form.entryId = this._editing.entryId;
 
       // Seeded from the overview's own copy, then replaced with a fresh one
       // the moment the form's schema load resolves — the overview snapshot

@@ -11,7 +11,8 @@ import { callWS, showToast } from "../services.js";
  * payload the backend sends. Adding a field to a config flow makes it appear
  * here with no change to this file.
  *
- * Properties: .hass, .commands ({schema, save}), .entryId, .subentryId
+ * Properties: .hass, .commands ({schema, save}), .entryId, .subentryId,
+ *             .showCancel (default true — a generic UI toggle, not a field)
  *
  * Events:
  *   sc-loaded      — detail: the full schema-command result (schema, data,
@@ -40,23 +41,36 @@ export class ScConfigForm extends HTMLElement {
     this._data = {};
     this._labels = {};
     this._fieldErrors = null;
+    this._showCancel = true;
+    // Guards only the *automatic* load triggered by property arrival (see
+    // _loadIfReady) — it does not affect explicit calls to load(), which is
+    // how the Refresh control keeps working after the first load.
+    this._loaded = false;
   }
 
   set hass(val) {
     this._hass = val;
+    this._loadIfReady();
   }
 
   set commands(val) {
     // {schema: "smartchain/agent/schema", save: "smartchain/agent/save"}
     this._commands = val;
+    this._loadIfReady();
   }
 
   set entryId(val) {
     this._entryId = val;
+    this._loadIfReady();
   }
 
   set subentryId(val) {
     this._subentryId = val;
+  }
+
+  set showCancel(val) {
+    this._showCancel = val !== false;
+    this._syncCancelVisibility();
   }
 
   connectedCallback() {
@@ -64,7 +78,34 @@ export class ScConfigForm extends HTMLElement {
       this._render();
       this._rendered = true;
     }
+    this._loadIfReady();
+  }
+
+  /**
+   * `root.innerHTML = "<sc-config-form></sc-config-form>"` connects this
+   * element synchronously, so connectedCallback can run before a host has
+   * finished setting `.hass` / `.commands` / `.entryId` on the following
+   * lines — at that point `load()` would silently no-op and nothing would
+   * ever call it again, leaving the form permanently blank. Every property
+   * a load actually depends on re-checks readiness here; whichever setter
+   * happens to complete the set is the one that starts it. `.hass` also
+   * arrives continuously afterward as Home Assistant ticks, so this must
+   * fire the automatic load at most once per element — `_loaded` is that
+   * gate. `.subentryId` deliberately does not participate: it is optional
+   * (absent means "create"), so it cannot gate readiness, but hosts must
+   * still set it before whichever of hass/commands/entryId completes the
+   * three — otherwise an Edit form would load create-mode defaults.
+   */
+  _loadIfReady() {
+    if (!this._rendered || !this._hass || !this._commands || !this._entryId) return;
+    if (this._loaded) return;
+    this._loaded = true;
     this.load();
+  }
+
+  _syncCancelVisibility() {
+    const button = this.querySelector("#sc-form-cancel");
+    if (button) button.classList.toggle("sc-hidden", !this._showCancel);
   }
 
   async load(refresh = false) {
@@ -171,6 +212,8 @@ export class ScConfigForm extends HTMLElement {
     this.querySelector("#sc-form-refresh").addEventListener("click", () => {
       this.load(true);
     });
+
+    this._syncCancelVisibility();
   }
 
   async _trySave() {

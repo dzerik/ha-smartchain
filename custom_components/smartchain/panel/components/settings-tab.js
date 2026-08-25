@@ -94,9 +94,11 @@ export class ScSettingsTab extends HTMLElement {
     const form = root.querySelector("sc-config-form");
     form.hass = this._hass;
     form.commands = SETTINGS_COMMANDS;
+    // With a single entry there is no picker to cancel back to — hide the
+    // control rather than leave it as a silent no-op.
+    form.showCancel = this._entries.length > 1;
     form.entryId = entryId;
     form.addEventListener("sc-cancelled", () => {
-      // With a single entry there is no picker to go back to.
       if (this._entries.length > 1) {
         this._selected = null;
         this._paint();
