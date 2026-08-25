@@ -42,10 +42,16 @@ export class ScAgentForm extends HTMLElement {
     if (!this._hass || !this._entryId) return;
     const payload = { entry_id: this._entryId, refresh };
     if (this._subentryId) payload.subentry_id = this._subentryId;
-    const result = await callWS(this._hass, "smartchain/agent/schema", payload);
-    this._schema = result.schema;
-    this._data = result.data || {};
-    this._apply();
+    try {
+      const result = await callWS(this._hass, "smartchain/agent/schema", payload);
+      this._schema = result.schema;
+      this._data = result.data || {};
+      this._apply();
+    } catch (err) {
+      // Leave whatever schema/data we already had in place — a failed
+      // refresh should not blank out a form the user was mid-edit on.
+      showToast(err.message || "Could not load the agent form", "error");
+    }
   }
 
   _render() {
