@@ -812,16 +812,34 @@ def _read_tools_file(path: Path) -> dict[str, Any]:
     exception escape the executor job: uncaught, it would reach HA's generic
     websocket exception handler and collapse to an opaque "Unknown error",
     leaving the panel with no way to tell the user what's actually wrong.
+
+    `backup_exists` lets `smartchain/tools/get` tell the panel whether
+    `smartchain/tools/rollback` has anything to do — otherwise the panel can
+    only guess from its own session, and a backup made before a restart
+    would never surface the Rollback button.
+
+    Read and hashed as UTF-8 explicitly, not the platform locale encoding:
+    `load_tools_file` and the hash this is compared against both assume
+    UTF-8, and a Cyrillic file under a non-UTF-8 locale must not silently
+    mismatch or mojibake.
     """
+    backup_exists = _backup_path(path).is_file()
     if not path.exists():
-        return {"text": "", "exists": False, "error": None, "hash": None}
+        return {
+            "text": "",
+            "exists": False,
+            "error": None,
+            "hash": None,
+            "backup_exists": backup_exists,
+        }
     try:
-        text = path.read_text()
+        text = path.read_text(encoding="utf-8")
         return {
             "text": text,
             "exists": True,
             "error": None,
-            "hash": hashlib.sha256(text.encode()).hexdigest(),
+            "hash": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+            "backup_exists": backup_exists,
         }
     except (OSError, UnicodeDecodeError) as err:
         return {
@@ -829,6 +847,7 @@ def _read_tools_file(path: Path) -> dict[str, Any]:
             "exists": True,
             "error": f"{type(err).__name__}: {path.name} could not be read",
             "hash": None,
+            "backup_exists": backup_exists,
         }
 
 
@@ -869,7 +888,7 @@ async def ws_tools_get(
 _PARSE_ERROR_CAUSES = (yaml.YAMLError, HomeAssistantError)
 
 
-def _safe_loader_error(err: LoaderError) -> str:
+def _safe_loader_error(err: Exception) -> str:
     """A validation failure summary that cannot carry a resolved secret.
 
     A YAML *syntax* error (`HomeAssistantError` from HA's loader, or a bare
@@ -911,6 +930,13 @@ def _safe_loader_error(err: LoaderError) -> str:
     current class hierarchy. It stays anyway: it is free, and it stops a
     future Home Assistant that reparented `Invalid` under `HomeAssistantError`
     from silently turning this whitelist into a leak.
+
+    `save` and `rollback` also pass a plain exception here that isn't a
+    `LoaderError` at all — `_reload_registry` can raise more than
+    `LoaderError` (an MCP server that won't start, a memory backend that
+    won't build), and none of that is a `LoaderError` either. The same logic
+    still applies unchanged: no whitelisted cause, so only the type name of
+    whatever was raised crosses the wire.
     """
     cause = err.__cause__
     if isinstance(cause, _PARSE_ERROR_CAUSES) and not isinstance(cause, vol.Invalid):
@@ -974,49 +1000,92 @@ def _tmp_path(path: Path) -> Path:
 
 
 def _restore_backup(path: Path) -> bool:
-    """Restore `.bak` onto `path` through the same atomic replace `save` uses.
+    """Restore `.bak` onto `path`, swapping rather than consuming it.
 
     Deliberately does **not** validate the backup first: it is, by
     construction, a file that once passed `load_tools_file` (nothing but a
     successful save ever creates one), and refusing to restore it would
     strand the user exactly when they most need the escape hatch.
 
+    That is *not* the same as saying the backup is known-good at the moment
+    of restore. `save` copies whatever is currently on disk to `.bak`
+    *before* validating the new text — by design, so a bad current file
+    doesn't block writing a fix — which means the backup can itself be the
+    broken file the user is trying to get away from. If a plain
+    `os.replace(backup, path)` then consumed it, a rollback that lands on a
+    bad backup would destroy the good file it just overwrote, with no way
+    back: exactly the case rollback exists to protect against. So the file
+    being replaced becomes the *new* backup instead of being discarded — a
+    swap, not a one-way move. That makes every rollback its own undo: one
+    that lands on a bad file is itself recoverable with a second rollback.
+
     Returns False, doing nothing, when there is no backup to restore.
     """
     backup = _backup_path(path)
     if not backup.is_file():
         return False
-    os.replace(backup, path)
+    if path.exists():
+        tmp = _tmp_path(path)
+        try:
+            shutil.copy2(path, tmp)
+            os.replace(backup, path)
+            os.replace(tmp, backup)
+        finally:
+            tmp.unlink(missing_ok=True)
+    else:
+        os.replace(backup, path)
     return True
 
 
-def _write_tools_file(path: Path, text: str, config_dir: Path) -> tuple[str, str | None]:
-    """Blocking half of a save: write, validate, back up, atomically replace.
+def _write_tools_file(
+    path: Path, text: str, base_hash: str | None, config_dir: Path
+) -> tuple[str, str | None]:
+    """Blocking body of a save: check staleness, write, validate, back up,
+    atomically replace — all inside one executor job.
 
-    Runs entirely off the event loop — the temp-file write, the real
-    `load_tools_file` validation (the integration's own loader, so what
-    passes here is what will load at startup), and the backup copy are all
-    blocking I/O.
+    The staleness check lives here rather than in a separate executor call
+    before this one so that nothing can slip in between "the file matches
+    base_hash" and "the file is being written": two hops give the event loop
+    a yield point between them where another save could land; one hop
+    doesn't.
+
+    The temp-file write, the real `load_tools_file` validation (the
+    integration's own loader, so what passes here is what will load at
+    startup), and the backup copy are all blocking I/O, which is why this
+    whole thing runs off the event loop as a unit.
 
     Returns `(status, error)`:
     - `("ok", None)` — the file is now on disk at `path`.
+    - `("stale", None)` — `base_hash` no longer matches the file on disk;
+      nothing was touched.
     - `("invalid", detail)` — the submitted text failed to load; nothing was
       written to `path`. `detail` is already `_safe_loader_error`'s output,
       never a raw exception message.
-    - `("write_failed", detail)` — a filesystem error; `detail` is only the
-      exception's type name, never its message (which can embed a path or,
-      in principle, other detail not meant for the wire).
+    - `("write_failed", detail)` — a filesystem or encoding error; `detail`
+      is only the exception's type name, never its message (which can embed
+      a path or other detail not meant for the wire).
 
-    The temp file is removed on every exit path: a stray `.tmp` beside a
-    config file is confusing at best, and `os.replace` already consumes it
-    on the success path, so `missing_ok=True` covers both.
+    Reads and writes as UTF-8 explicitly, not the platform locale encoding
+    — `load_tools_file` and the hash comparison above both assume UTF-8, so
+    a Cyrillic `tools.yaml` under a non-UTF-8 locale must not mojibake, and
+    a `UnicodeEncodeError` (not an `OSError`) must still land in
+    `write_failed` rather than escape uncaught.
+
+    The temp file is removed on every exit path, including `mkdir` and
+    `write_text` failures: a stray `.tmp` beside a config file is confusing
+    at best, and `os.replace` already consumes it on the success path, so
+    `missing_ok=True` covers both.
     """
-    path.parent.mkdir(parents=True, exist_ok=True)
+    current = _read_tools_file(path)
+    if current["hash"] != base_hash:
+        return "stale", None
+
     tmp = _tmp_path(path)
     try:
         try:
-            tmp.write_text(text)
-        except OSError as err:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp.write_text(text, encoding="utf-8")
+        except (OSError, UnicodeError) as err:
             return "write_failed", type(err).__name__
 
         try:
@@ -1030,22 +1099,33 @@ def _write_tools_file(path: Path, text: str, config_dir: Path) -> tuple[str, str
             if path.exists():
                 shutil.copy2(path, backup)
             os.replace(tmp, path)
-        except OSError as err:
+        except (OSError, UnicodeError) as err:
             return "write_failed", type(err).__name__
 
         return "ok", None
     finally:
-        tmp.unlink(missing_ok=True)
+        # Best-effort: `missing_ok=True` only swallows FileNotFoundError.
+        # When `path.parent` itself turned out not to be a directory (the
+        # write_failed case exercised by
+        # test_write_failure_is_reported_as_write_failed), unlinking a path
+        # beneath it raises NotADirectoryError instead — cleanup must not
+        # itself raise and mask the real status this function already
+        # decided on.
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def _restore_after_failed_reload(path: Path) -> None:
     """Undo a save whose reload failed.
 
-    Ordinarily there is a `.bak` — the pre-save file — to put back. The one
-    case there is not is a first-ever save on a fresh install, where `path`
-    did not exist before this save either; then "restore" means removing
-    the file `save` just wrote, returning to that same fresh-install state
-    rather than leaving a file nothing backs up.
+    Ordinarily there is a `.bak` — the pre-save file — to put back, via the
+    same swap `_restore_backup` always does. The one case there is not is a
+    first-ever save on a fresh install, where `path` did not exist before
+    this save either; then "restore" means removing the file `save` just
+    wrote, returning to that same fresh-install state rather than leaving a
+    file nothing backs up.
     """
     if not _restore_backup(path):
         # No prior file means nothing here has adopted this text yet, and a
@@ -1077,7 +1157,10 @@ async def ws_tools_save(
 
     1. Refuse if the file's hash no longer matches `base_hash` — someone may
        be editing through a file editor, SSH, or a second tab. Refusing is
-       the whole behaviour; there is no merge and no last-write-wins.
+       the whole behaviour; there is no merge and no last-write-wins. This
+       check and the write below both happen inside `_write_tools_file`'s
+       single executor job, not two separate ones — see its docstring for
+       why two hops would leave a race the event loop could step into.
     2. Write the submitted text to a temp file beside the target, so the
        later `os.replace` stays on one filesystem and therefore stays
        atomic.
@@ -1086,11 +1169,13 @@ async def ws_tools_save(
     4. Back up the current file, before the replace.
     5. `os.replace` the temp file onto the target — atomic, so a crash
        mid-write cannot leave a truncated file.
-    6. Reload the registry. If the reload raises, restore from the backup
-       and reload again, then report: the user asked to save a file, not to
-       lose their tools. A file can validate and still fail to load — an MCP
-       server that will not start, an embeddings binding that no longer
-       resolves.
+    6. Reload the registry. If the reload raises *anything* — not only a
+       `LoaderError`; `_reload_registry` also runs unguarded MCP and memory
+       shutdown/startup calls that can raise their own exceptions — restore
+       from the backup and reload again, then report: the user asked to
+       save a file, not to lose their tools. A file can validate and still
+       fail to load — an MCP server that will not start, an embeddings
+       binding that no longer resolves.
 
     Nothing here parses `text` into a structure and re-serialises it — raw
     text in, raw text out — which is what lets `!secret openai_key` survive
@@ -1102,32 +1187,27 @@ async def ws_tools_save(
     path = _tools_yaml_path(hass)
     config_dir = Path(hass.config.config_dir)
 
-    # 1. Refuse a stale edit.
-    current = await hass.async_add_executor_job(_read_tools_file, path)
-    if current["hash"] != msg["base_hash"]:
-        connection.send_result(msg["id"], {"ok": False, "reason": "stale"})
-        return
-
-    # 2-5: write, validate, back up, atomically replace — all in one executor
-    # job so the sequence stays one uninterrupted piece of blocking I/O.
+    # 1-5: check staleness, write, validate, back up, atomically replace —
+    # all in one executor job. See _write_tools_file for why.
     status, error = await hass.async_add_executor_job(
-        _write_tools_file, path, msg["text"], config_dir
+        _write_tools_file, path, msg["text"], msg["base_hash"], config_dir
     )
     if status != "ok":
         connection.send_result(msg["id"], {"ok": False, "reason": status, "error": error})
         return
 
-    # 6. Reload; on failure, restore and report.
+    # 6. Reload; on failure, restore and report. Deliberately `Exception`,
+    # not `LoaderError`: see the docstring note above.
     try:
         await _reload_registry(hass)
-    except LoaderError as err:
+    except Exception as err:  # noqa: BLE001
         LOGGER.warning(  # detail stays server-side
             "tools.yaml reload after save failed; restoring previous file: %s", err
         )
         await hass.async_add_executor_job(_restore_after_failed_reload, path)
         try:
             await _reload_registry(hass)
-        except LoaderError:
+        except Exception:  # noqa: BLE001
             LOGGER.exception("tools.yaml reload after restoring the backup also failed")
         connection.send_result(
             msg["id"],
@@ -1147,10 +1227,14 @@ async def ws_tools_rollback(
     connection: websocket_api.ActiveConnection,
     msg: dict[str, Any],
 ) -> None:
-    """Restore `tools.yaml.bak` onto `tools.yaml` and reload.
+    """Swap `tools.yaml.bak` onto `tools.yaml` and reload.
 
     Does not validate the backup first — see `_restore_backup`. Refuses with
-    `no_backup` when there is none.
+    `no_backup` when there is none. On a reload failure the file that was
+    just replaced (which may itself have been a good config, if the backup
+    it swapped in turns out to be broken) is left in place as the *new*
+    backup by `_restore_backup`'s swap — not restored a second time here —
+    so a second rollback can undo this one.
     """
     from . import _reload_registry, _tools_yaml_path
 
@@ -1162,7 +1246,7 @@ async def ws_tools_rollback(
 
     try:
         await _reload_registry(hass)
-    except LoaderError as err:
+    except Exception as err:  # noqa: BLE001
         LOGGER.warning("tools.yaml reload after rollback failed: %s", err)  # server-side only
         connection.send_result(
             msg["id"],

@@ -41,6 +41,10 @@ VALID_TOOL_V2 = (
     "    action: { type: template, value_template: ping }\n"
 )
 
+# Syntactically broken — the loader fails on this before any schema check,
+# which is exactly the state a user is editing away from in the panel.
+BROKEN_YAML = "tools:\n  - name: ping\n    action: [unterminated\n"
+
 
 @pytest.fixture
 def tools_dir(hass: HomeAssistant, tmp_path_factory) -> Path:
@@ -288,6 +292,28 @@ async def test_smartchain_directory_is_created_on_a_fresh_install(
     assert (smartchain_dir / "tools.yaml").read_text() == VALID_TOOL
 
 
+async def test_write_failure_is_reported_as_write_failed(
+    hass: HomeAssistant, hass_ws_client, config_dir: Path
+):
+    """A plain file sitting where the smartchain directory should be:
+    `path.parent.mkdir` must run inside the same try as the write, or this
+    escapes the handler entirely instead of producing a clean refusal."""
+    (config_dir / "smartchain").write_text("not a directory")
+    await async_setup_component(hass, DOMAIN, {})
+
+    client = await hass_ws_client(hass)
+    base_hash = await _get_hash(client)
+
+    await client.send_json_auto_id(
+        {"type": "smartchain/tools/save", "text": VALID_TOOL, "base_hash": base_hash}
+    )
+    msg = await client.receive_json()
+
+    assert msg["success"], msg
+    assert msg["result"]["ok"] is False
+    assert msg["result"]["reason"] == "write_failed"
+
+
 async def test_save_of_a_secret_used_as_an_extra_key_leaks_nothing(
     hass: HomeAssistant, hass_ws_client, tools_dir: Path
 ):
@@ -395,3 +421,77 @@ async def test_rollback_without_a_backup_is_refused(
     assert msg["success"], msg
     assert msg["result"]["ok"] is False
     assert msg["result"]["reason"] == "no_backup"
+
+
+async def test_saving_a_fix_over_a_broken_file_does_not_lose_the_fix_on_rollback(
+    hass: HomeAssistant, hass_ws_client, tools_dir: Path
+):
+    """The state that hid the original bug: a broken tools.yaml is exactly
+    what someone is editing in the panel in the first place. Saving a fix
+    backs the broken file up unvalidated, by design — `save` never refuses
+    to back up a bad file, only to write one. But a rollback that then lands
+    back on that broken backup must not destroy the good config it just
+    replaced: the file being overwritten has to become the *new* backup
+    (a swap), not be discarded, or the fix the user just made is gone too.
+    """
+    tools_path = tools_dir / "tools.yaml"
+    tools_path.write_text(BROKEN_YAML)
+    await async_setup_component(hass, DOMAIN, {})
+
+    client = await hass_ws_client(hass)
+    base_hash = await _get_hash(client)
+
+    await client.send_json_auto_id(
+        {"type": "smartchain/tools/save", "text": VALID_TOOL, "base_hash": base_hash}
+    )
+    msg = await client.receive_json()
+    assert msg["success"], msg
+    assert msg["result"]["ok"] is True
+    assert tools_path.read_text() == VALID_TOOL
+    backup = tools_dir / "tools.yaml.bak"
+    assert backup.read_text() == BROKEN_YAML
+
+    # Rollback lands on the broken backup: the reload must fail, but the fix
+    # just saved must survive it, not be silently discarded.
+    await client.send_json_auto_id({"type": "smartchain/tools/rollback"})
+    msg = await client.receive_json()
+    assert msg["success"], msg
+    assert msg["result"]["ok"] is False
+    assert msg["result"]["reason"] == "reload_failed"
+    assert tools_path.read_text() == BROKEN_YAML
+    assert backup.is_file()
+    assert backup.read_text() == VALID_TOOL
+
+
+async def test_a_rollback_landing_on_a_broken_file_is_recoverable_by_a_second_rollback(
+    hass: HomeAssistant, hass_ws_client, tools_dir: Path
+):
+    """Continues the scenario above: once a rollback has landed on a broken
+    file, the user is not stuck. Because the file it replaced became the new
+    backup rather than being discarded, a second rollback swaps back to the
+    working config."""
+    tools_path = tools_dir / "tools.yaml"
+    tools_path.write_text(BROKEN_YAML)
+    await async_setup_component(hass, DOMAIN, {})
+
+    client = await hass_ws_client(hass)
+    base_hash = await _get_hash(client)
+
+    await client.send_json_auto_id(
+        {"type": "smartchain/tools/save", "text": VALID_TOOL, "base_hash": base_hash}
+    )
+    msg = await client.receive_json()
+    assert msg["success"] and msg["result"]["ok"] is True
+
+    await client.send_json_auto_id({"type": "smartchain/tools/rollback"})
+    msg = await client.receive_json()
+    assert msg["success"], msg
+    assert msg["result"]["ok"] is False
+    assert tools_path.read_text() == BROKEN_YAML
+
+    await client.send_json_auto_id({"type": "smartchain/tools/rollback"})
+    msg = await client.receive_json()
+
+    assert msg["success"], msg
+    assert msg["result"]["ok"] is True
+    assert tools_path.read_text() == VALID_TOOL
