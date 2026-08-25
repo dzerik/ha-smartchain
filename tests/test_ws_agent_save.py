@@ -3,7 +3,7 @@
 from unittest.mock import patch
 
 import pytest
-from homeassistant.config_entries import ConfigSubentryData
+from homeassistant.config_entries import ConfigSubentry, ConfigSubentryData
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -15,6 +15,7 @@ from custom_components.smartchain.const import (
     DOMAIN,
     ID_OPENAI,
     SUBENTRY_TYPE_CONVERSATION,
+    SUBENTRY_TYPE_EMBEDDINGS,
     UNIQUE_ID_OPENAI,
 )
 
@@ -153,6 +154,37 @@ async def test_save_requires_admin(hass, hass_ws_client, hass_admin_user, entry)
     msg = await client.receive_json()
     assert not msg["success"]
     assert msg["error"]["code"] == "unauthorized"
+
+
+async def test_save_rejects_an_embeddings_subentry(hass, hass_ws_client, entry):
+    """F2: save must not resolve an embeddings subentry_id — overwriting its
+    name/model and retitling it would break the title-based binding the
+    memory store relies on. Not reachable from the panel UI today, but the
+    guard is the same one duplicate/delete already use."""
+    embeddings = ConfigSubentry(
+        data={"name": "Embeddings", "model": "text-embedding-3-small"},
+        subentry_type=SUBENTRY_TYPE_EMBEDDINGS,
+        title="Embeddings",
+        unique_id=None,
+    )
+    hass.config_entries.async_add_subentry(entry, embeddings)
+    before_data = dict(embeddings.data)
+    before_title = embeddings.title
+
+    client = await hass_ws_client(hass)
+    await client.send_json_auto_id(
+        {
+            "type": "smartchain/agent/save",
+            "entry_id": entry.entry_id,
+            "subentry_id": embeddings.subentry_id,
+            "data": {CONF_CHAT_MODEL: "gpt-4.1"},
+        }
+    )
+    msg = await client.receive_json()
+    assert not msg["success"]
+    assert msg["error"]["code"] == "not_found"
+    assert dict(embeddings.data) == before_data
+    assert embeddings.title == before_title
 
 
 async def test_error_message_carries_no_credential(hass, hass_ws_client, entry):

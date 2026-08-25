@@ -17,6 +17,7 @@ from homeassistant.helpers import config_validation as cv
 
 from .client_util import async_fetch_models, supports
 from .const import (
+    CAPABILITY_CHAT,
     CAPABILITY_EMBEDDINGS,
     CONF_ALLOWED_TOOLS,
     CONF_CHAT_MODEL,
@@ -48,18 +49,24 @@ def _get_entry(hass: HomeAssistant, entry_id: str) -> ConfigEntry | None:
     return entry
 
 
-async def _models_for(hass: HomeAssistant, entry: ConfigEntry, *, refresh: bool) -> list[str]:
+async def _models_for(
+    hass: HomeAssistant, entry: ConfigEntry, *, refresh: bool, purpose: str = CAPABILITY_CHAT
+) -> list[str]:
     """Model list for an entry, fetched once and reused until asked to refresh.
 
     A flow dialog pays the network cost once per open. The panel would pay it on
     every click between agents, so the list is cached and an explicit refresh is
-    the only invalidation.
+    the only invalidation. Keyed by entry id *and* purpose — a chat fetch and an
+    embeddings fetch on the same entry must not serve each other's list.
     """
-    cache: dict[str, list[str]] = hass.data.setdefault(DOMAIN, {}).setdefault(_MODEL_CACHE, {})
-    if refresh or entry.entry_id not in cache:
+    cache: dict[tuple[str, str], list[str]] = hass.data.setdefault(DOMAIN, {}).setdefault(
+        _MODEL_CACHE, {}
+    )
+    key = (entry.entry_id, purpose)
+    if refresh or key not in cache:
         engine = entry.data.get(CONF_ENGINE, ID_GIGACHAT)
-        cache[entry.entry_id] = await async_fetch_models(hass, engine, entry.data)
-    return cache[entry.entry_id]
+        cache[key] = await async_fetch_models(hass, engine, entry.data, purpose=purpose)
+    return cache[key]
 
 
 @websocket_api.require_admin
@@ -89,19 +96,28 @@ async def ws_agent_schema(
     subentry_id = msg.get("subentry_id")
     if subentry_id is not None:
         subentry = entry.subentries.get(subentry_id)
-        if subentry is None:
+        if subentry is None or subentry.subentry_type != SUBENTRY_TYPE_CONVERSATION:
             connection.send_error(msg["id"], "not_found", "Unknown agent")
             return
         defaults = dict(subentry.data)
 
-    models = await _models_for(hass, entry, refresh=msg["refresh"])
+    models = await _models_for(hass, entry, refresh=msg["refresh"], purpose=CAPABILITY_CHAT)
     schema = subentry_schema(hass, entry.unique_id, defaults, models=models)
+
+    # The schema is conditional (multi-agent tools, allowed tools, GigaChat-only
+    # fields all come and go with entry state). Serving a stale key the schema
+    # no longer declares would make <ha-form> echo it back, and PREVENT_EXTRA in
+    # ws_agent_save would then reject it forever — see F1. Deriving the allowed
+    # set from the schema itself, rather than a hand-written list, keeps this
+    # correct as the schema changes.
+    declared = {str(key.schema) for key in schema.schema}
+    served = {name: value for name, value in defaults.items() if name in declared}
 
     connection.send_result(
         msg["id"],
         {
             "schema": voluptuous_serialize.convert(schema, custom_serializer=cv.custom_serializer),
-            "data": defaults,
+            "data": served,
         },
     )
 
@@ -133,11 +149,11 @@ async def ws_agent_save(
     subentry = None
     if subentry_id is not None:
         subentry = entry.subentries.get(subentry_id)
-        if subentry is None:
+        if subentry is None or subentry.subentry_type != SUBENTRY_TYPE_CONVERSATION:
             connection.send_error(msg["id"], "not_found", "Unknown agent")
             return
 
-    models = await _models_for(hass, entry, refresh=False)
+    models = await _models_for(hass, entry, refresh=False, purpose=CAPABILITY_CHAT)
     defaults = dict(subentry.data) if subentry is not None else {}
     schema = subentry_schema(hass, entry.unique_id, defaults, models=models)
 

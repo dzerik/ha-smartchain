@@ -218,6 +218,37 @@ async def test_agents_excludes_non_conversation_subentries(hass, hass_ws_client)
     assert agents[0]["title"] == "Home"
 
 
+async def test_model_reports_model_user_when_set(hass, hass_ws_client):
+    """F4: the five OpenAI-compatible providers added last week ship
+    static_models=[""], so their model always lives in model_user. Dropping
+    CONF_CHAT_MODEL_USER from _describe_agent would silently blank every one
+    of them, and the whitespace-only test above cannot catch that because it
+    falls back to the same result either way."""
+    await async_setup_component(hass, DOMAIN, {})
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_ENGINE: ID_OPENAI, CONF_API_KEY: "k"},
+        unique_id=UNIQUE_ID_OPENAI,
+        title=UNIQUE_ID_OPENAI,
+        subentries_data=[
+            ConfigSubentryData(
+                data={CONF_CHAT_MODEL: "", CONF_CHAT_MODEL_USER: "my-custom-model"},
+                subentry_type=SUBENTRY_TYPE_CONVERSATION,
+                title="Custom",
+                unique_id=None,
+            )
+        ],
+    )
+    entry.add_to_hass(hass)
+
+    client = await hass_ws_client(hass)
+    await client.send_json_auto_id({"type": "smartchain/overview"})
+    msg = await client.receive_json()
+
+    agent = msg["result"]["entries"][0]["agents"][0]
+    assert agent["model"] == "my-custom-model"
+
+
 async def test_model_falls_back_when_model_user_is_whitespace(hass, hass_ws_client):
     """A whitespace-only override must not shadow the real model — a truthiness
     check on the raw string would wrongly treat "   " as a set override."""
