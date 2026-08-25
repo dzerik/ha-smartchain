@@ -1,6 +1,11 @@
 import { SC_STYLES } from "./styles.js";
 import "./components/camera-tab.js";
-import "./components/agent-form.js";
+import "./components/agents-tab.js";
+
+const TABS = [
+  { id: "agents", label: "Agents", tag: "sc-agents-tab" },
+  { id: "camera", label: "Camera", tag: "sc-camera-tab" },
+];
 
 class SmartChainPanel extends HTMLElement {
   constructor() {
@@ -8,6 +13,7 @@ class SmartChainPanel extends HTMLElement {
     this._hass = null;
     this._panel = null;
     this._initialized = false;
+    this._active = TABS[0].id;
   }
 
   set panel(panel) {
@@ -24,33 +30,40 @@ class SmartChainPanel extends HTMLElement {
   }
 
   _propagateHass() {
-    const cam = this.querySelector("sc-camera-tab");
-    if (cam) cam.hass = this._hass;
-    const form = this.querySelector("sc-agent-form");
-    if (form) form.hass = this._hass;
+    // Only the visible tab is in the DOM, so this reaches whichever it is.
+    for (const tab of TABS) {
+      const el = this.querySelector(tab.tag);
+      if (el) el.hass = this._hass;
+    }
   }
 
   _initialize() {
-    // Task 1 scaffolding only: there is no overview command yet (Task 2), so
-    // the entry id can't be discovered from the panel itself. Read it from
-    // the URL hash as a temporary way to exercise <sc-agent-form> in a
-    // browser. Task 5 replaces this whole block with the real tab shell.
-    const entryId = new URLSearchParams(location.hash.slice(1)).get("entry");
     this.innerHTML = `
       <style>${SC_STYLES}</style>
-      ${entryId ? `<sc-agent-form></sc-agent-form>` : ""}
-      <div class="sc-camera-container">
-        <sc-camera-tab></sc-camera-tab>
-      </div>
+      <div class="sc-tabs" role="tablist"></div>
+      <div class="sc-tab-body"></div>
     `;
-    if (entryId) {
-      const form = this.querySelector("sc-agent-form");
-      form.entryId = entryId;
-    } else {
-      console.info(
-        "SmartChain: no entry id in URL hash — open /smartchain#entry=<entry_id> to preview the agent form."
-      );
+    const bar = this.querySelector(".sc-tabs");
+    for (const tab of TABS) {
+      const button = document.createElement("button");
+      button.className = "sc-tab";
+      button.textContent = tab.label;
+      button.setAttribute("role", "tab");
+      button.addEventListener("click", () => this._select(tab.id));
+      bar.appendChild(button);
     }
+    this._select(this._active);
+  }
+
+  _select(id) {
+    this._active = id;
+    const tab = TABS.find((t) => t.id === id) || TABS[0];
+    const bar = this.querySelector(".sc-tabs");
+    [...bar.children].forEach((button, i) => {
+      button.classList.toggle("sc-tab-active", TABS[i].id === id);
+    });
+    const body = this.querySelector(".sc-tab-body");
+    body.innerHTML = `<${tab.tag}></${tab.tag}>`;
     this._propagateHass();
   }
 }

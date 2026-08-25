@@ -128,4 +128,30 @@ export const SC_STYLES = `
   .sc-toast-out { animation: sc-toast-out 0.25s ease-in forwards; }
   @keyframes sc-toast-in { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
   @keyframes sc-toast-out { from { opacity: 1; } to { transform: translateY(10px); opacity: 0; } }
+
+  /* ========== Tab Shell ========== */
+  .sc-tabs {
+    display: flex;
+    gap: 4px;
+    padding: 0 16px;
+    border-bottom: 1px solid var(--divider-color, #e0e0e0);
+    background: var(--primary-background-color, #fafafa);
+  }
+  .sc-tab {
+    appearance: none;
+    border: none;
+    background: none;
+    padding: 14px 16px;
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--secondary-text-color);
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+  }
+  .sc-tab:hover { color: var(--primary-text-color); }
+  .sc-tab-active {
+    color: var(--primary-color, #03a9f4);
+    border-bottom-color: var(--primary-color, #03a9f4);
+  }
+  .sc-tab-body { padding: 16px; }
 `;
