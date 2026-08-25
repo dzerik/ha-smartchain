@@ -8,13 +8,16 @@ from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.smartchain.const import (
+    CONF_ALLOWED_TOOLS,
     CONF_API_KEY,
     CONF_CHAT_MODEL,
+    CONF_CHAT_MODEL_USER,
     CONF_ENGINE,
     CONF_FOLDER_ID,
     DOMAIN,
     ID_OPENAI,
     SUBENTRY_TYPE_CONVERSATION,
+    SUBENTRY_TYPE_EMBEDDINGS,
     UNIQUE_ID_OPENAI,
 )
 
@@ -116,3 +119,128 @@ async def test_embeddings_capability_follows_the_provider(hass, hass_ws_client):
 
     served = next(e for e in msg["result"]["entries"] if e["entry_id"] == entry.entry_id)
     assert served["supports_embeddings"] is False
+
+
+async def test_tool_count_is_none_when_unrestricted(hass, hass_ws_client, entry):
+    """No allowed_tools key means every tool; the panel shows "all tools"."""
+    client = await hass_ws_client(hass)
+    await client.send_json_auto_id({"type": "smartchain/overview"})
+    msg = await client.receive_json()
+
+    agent = msg["result"]["entries"][0]["agents"][0]
+    assert agent["tool_count"] is None
+
+
+async def test_tool_count_is_zero_when_restricted_to_nothing(hass, hass_ws_client):
+    """An explicit empty list means no tool at all — the opposite of None."""
+    await async_setup_component(hass, DOMAIN, {})
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_ENGINE: ID_OPENAI, CONF_API_KEY: "k"},
+        unique_id=UNIQUE_ID_OPENAI,
+        title=UNIQUE_ID_OPENAI,
+        subentries_data=[
+            ConfigSubentryData(
+                data={CONF_CHAT_MODEL: "gpt-4.1-mini", CONF_ALLOWED_TOOLS: []},
+                subentry_type=SUBENTRY_TYPE_CONVERSATION,
+                title="No Tools",
+                unique_id=None,
+            )
+        ],
+    )
+    entry.add_to_hass(hass)
+
+    client = await hass_ws_client(hass)
+    await client.send_json_auto_id({"type": "smartchain/overview"})
+    msg = await client.receive_json()
+
+    agent = msg["result"]["entries"][0]["agents"][0]
+    assert agent["tool_count"] == 0
+
+
+async def test_tool_count_counts_a_restricted_list(hass, hass_ws_client):
+    await async_setup_component(hass, DOMAIN, {})
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_ENGINE: ID_OPENAI, CONF_API_KEY: "k"},
+        unique_id=UNIQUE_ID_OPENAI,
+        title=UNIQUE_ID_OPENAI,
+        subentries_data=[
+            ConfigSubentryData(
+                data={CONF_CHAT_MODEL: "gpt-4.1-mini", CONF_ALLOWED_TOOLS: ["a", "b"]},
+                subentry_type=SUBENTRY_TYPE_CONVERSATION,
+                title="Two Tools",
+                unique_id=None,
+            )
+        ],
+    )
+    entry.add_to_hass(hass)
+
+    client = await hass_ws_client(hass)
+    await client.send_json_auto_id({"type": "smartchain/overview"})
+    msg = await client.receive_json()
+
+    agent = msg["result"]["entries"][0]["agents"][0]
+    assert agent["tool_count"] == 2
+
+
+async def test_agents_excludes_non_conversation_subentries(hass, hass_ws_client):
+    """An embeddings subentry on the same entry must not show up as an agent."""
+    await async_setup_component(hass, DOMAIN, {})
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_ENGINE: ID_OPENAI, CONF_API_KEY: "k"},
+        unique_id=UNIQUE_ID_OPENAI,
+        title=UNIQUE_ID_OPENAI,
+        subentries_data=[
+            ConfigSubentryData(
+                data={CONF_CHAT_MODEL: "gpt-4.1-mini"},
+                subentry_type=SUBENTRY_TYPE_CONVERSATION,
+                title="Home",
+                unique_id=None,
+            ),
+            ConfigSubentryData(
+                data={},
+                subentry_type=SUBENTRY_TYPE_EMBEDDINGS,
+                title="Embeddings",
+                unique_id=None,
+            ),
+        ],
+    )
+    entry.add_to_hass(hass)
+
+    client = await hass_ws_client(hass)
+    await client.send_json_auto_id({"type": "smartchain/overview"})
+    msg = await client.receive_json()
+
+    agents = msg["result"]["entries"][0]["agents"]
+    assert len(agents) == 1
+    assert agents[0]["title"] == "Home"
+
+
+async def test_model_falls_back_when_model_user_is_whitespace(hass, hass_ws_client):
+    """A whitespace-only override must not shadow the real model — a truthiness
+    check on the raw string would wrongly treat "   " as a set override."""
+    await async_setup_component(hass, DOMAIN, {})
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_ENGINE: ID_OPENAI, CONF_API_KEY: "k"},
+        unique_id=UNIQUE_ID_OPENAI,
+        title=UNIQUE_ID_OPENAI,
+        subentries_data=[
+            ConfigSubentryData(
+                data={CONF_CHAT_MODEL: "gpt-4.1-mini", CONF_CHAT_MODEL_USER: "   "},
+                subentry_type=SUBENTRY_TYPE_CONVERSATION,
+                title="Home",
+                unique_id=None,
+            )
+        ],
+    )
+    entry.add_to_hass(hass)
+
+    client = await hass_ws_client(hass)
+    await client.send_json_auto_id({"type": "smartchain/overview"})
+    msg = await client.receive_json()
+
+    agent = msg["result"]["entries"][0]["agents"][0]
+    assert agent["model"] == "gpt-4.1-mini"
