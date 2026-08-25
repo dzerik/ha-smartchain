@@ -14,6 +14,7 @@ from homeassistant.components import websocket_api
 from homeassistant.config_entries import ConfigEntry, ConfigSubentry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers import translation
 
 from .client_util import async_fetch_models, supports
 from .const import (
@@ -69,6 +70,31 @@ async def _models_for(
     return cache[key]
 
 
+async def async_field_labels(hass: HomeAssistant, category: str) -> dict[str, str]:
+    """Translated labels for the fields of one flow category.
+
+    The schema's field names are exactly the keys in the integration's
+    translation files, so no mapping table is needed — and none should be added,
+    because a mapping table is a second place for the field list to live.
+
+    Returns whatever it can. A field with no translation is simply absent, and
+    the panel falls back to the raw name: a field added without a translation
+    must still render.
+    """
+    resources = await translation.async_get_translations(
+        hass, hass.config.language, category, [DOMAIN]
+    )
+    labels: dict[str, str] = {}
+    for key, value in resources.items():
+        # Keys look like `component.smartchain.<category>.….data.<field>`.
+        marker = ".data."
+        index = key.rfind(marker)
+        if index == -1:
+            continue
+        labels.setdefault(key[index + len(marker) :], value)
+    return labels
+
+
 @websocket_api.require_admin
 @websocket_api.websocket_command(
     {
@@ -118,8 +144,24 @@ async def ws_agent_schema(
         {
             "schema": voluptuous_serialize.convert(schema, custom_serializer=cv.custom_serializer),
             "data": served,
+            "labels": await async_field_labels(hass, "config_subentries"),
         },
     )
+
+
+def _describe_invalid(err: vol.Invalid) -> str:
+    """A validation message that names the offending field.
+
+    Never `str(err)`: voluptuous embeds the value that failed, which would leak
+    a credential if one were ever validated. Only the field name and a short
+    reason travel.
+    """
+    fields = sorted(
+        {str(sub.path[0]) for sub in getattr(err, "errors", [err]) if getattr(sub, "path", None)}
+    )
+    if not fields:
+        return "invalid_data"
+    return f"invalid_data: {', '.join(fields)}"
 
 
 @websocket_api.require_admin
@@ -160,7 +202,7 @@ async def ws_agent_save(
     try:
         data = dict(schema(dict(msg["data"])))
     except vol.Invalid as err:
-        connection.send_error(msg["id"], "invalid_data", str(err))
+        connection.send_error(msg["id"], "invalid_data", _describe_invalid(err))
         return
 
     error = normalize_model_input(data)
