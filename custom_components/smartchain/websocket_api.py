@@ -6,6 +6,8 @@ config flow builds, so the field list has one definition rather than two.
 
 from __future__ import annotations
 
+import logging
+from pathlib import Path
 from typing import Any
 
 import voluptuous as vol
@@ -30,7 +32,10 @@ from .const import (
     SUBENTRY_TYPE_EMBEDDINGS,
     UNIQUE_ID,
 )
+from .tools.loader import LoaderError, load_tools_file
 from .tools.memory.registry import MemoryRegistry
+
+LOGGER = logging.getLogger(__name__)
 
 _MODEL_CACHE = "panel_model_cache"
 
@@ -48,6 +53,9 @@ def async_register(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_embeddings_save)
     websocket_api.async_register_command(hass, ws_embeddings_delete)
     websocket_api.async_register_command(hass, ws_overview)
+    websocket_api.async_register_command(hass, ws_tools_get)
+    websocket_api.async_register_command(hass, ws_tools_validate)
+    websocket_api.async_register_command(hass, ws_tools_reload)
 
 
 def _get_entry(hass: HomeAssistant, entry_id: str) -> ConfigEntry | None:
@@ -666,3 +674,124 @@ async def ws_embeddings_delete(
 
     hass.config_entries.async_remove_subentry(entry, subentry.subentry_id)
     connection.send_result(msg["id"], {"bound_stores": bound_stores})
+
+
+def _read_text_if_present(path: Path) -> str | None:
+    """The file's raw bytes as text, or None if it does not exist.
+
+    Blocking I/O only — no YAML parsing here. `load_tools_file` resolves
+    `!secret` references against `secrets.yaml`, so the parsed structure
+    holds real credentials. The raw text on disk holds only the reference
+    name (`!secret my_key`), which is what `smartchain/tools/get` may
+    safely return.
+    """
+    try:
+        return path.read_text()
+    except FileNotFoundError:
+        return None
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): "smartchain/tools/get"})
+@websocket_api.async_response
+async def ws_tools_get(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """The file as it sits on disk.
+
+    Never the parsed structure: `load_tools_file` resolves `!secret`, so the
+    parsed form holds real credentials, while the raw text holds only the
+    reference name.
+    """
+    from . import _tools_yaml_path
+
+    path = _tools_yaml_path(hass)
+    text = await hass.async_add_executor_job(_read_text_if_present, path)
+    connection.send_result(
+        msg["id"],
+        {"text": text or "", "path": str(path), "exists": text is not None},
+    )
+
+
+def _safe_loader_error(err: LoaderError) -> str:
+    """A validation failure summary that cannot carry a resolved secret.
+
+    `LoaderError`'s own message is built with `str()` of the underlying
+    voluptuous error or `HomeAssistantError` (see `load_tools_file`), and
+    that text is not safe to forward. Two of this schema's own validators
+    (`_validate_action`, `_validate_mcp_server` in tools/schema.py) build
+    their message with the *offending value itself* interpolated in, e.g.
+    ``unknown action type 'sk-...'`` — exactly what a `!secret` resolving
+    into a `type:` field would produce. Any validator, including ones added
+    later, could in principle do the same, so the message text is treated
+    as unsafe categorically rather than case by case.
+
+    voluptuous's `err.path`, in contrast, is a list of dict keys and list
+    indices describing *where* in the document validation failed —
+    structural navigation coordinates such as ``['tools', 0, 'action']`` —
+    never a value. That is safe to join and return.
+
+    When the underlying cause isn't a voluptuous error at all (a YAML parse
+    failure raises through `HomeAssistantError` instead, with no `.path`),
+    only the exception type name is reported: HA's YAML loader can also
+    embed file content in that message, so nothing more specific than the
+    type is claimed to be safe there.
+
+    The full original message is logged server-side by the caller, where
+    only an admin can read it.
+    """
+    cause = err.__cause__
+    kind = type(cause).__name__ if cause is not None else type(err).__name__
+    path = getattr(cause, "path", None)
+    if path:
+        return f"{kind} at {'.'.join(str(p) for p in path)}"
+    return kind
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): "smartchain/tools/validate"})
+@websocket_api.async_response
+async def ws_tools_validate(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Validate tools.yaml server-side without ever forwarding a resolved secret.
+
+    Runs `load_tools_file` — the only way to know whether the file is valid,
+    since that is what actually parses and schema-checks it — but reports
+    only pass/fail plus a safe location. See `_safe_loader_error` for why
+    the exception's own message never crosses the wire.
+    """
+    from . import _tools_yaml_path
+
+    path = _tools_yaml_path(hass)
+    try:
+        await hass.async_add_executor_job(load_tools_file, path, Path(hass.config.config_dir))
+    except LoaderError as err:
+        LOGGER.warning("tools.yaml validation failed: %s", err)  # detail stays server-side
+        connection.send_result(msg["id"], {"valid": False, "error": _safe_loader_error(err)})
+        return
+    connection.send_result(msg["id"], {"valid": True})
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): "smartchain/tools/reload"})
+@websocket_api.async_response
+async def ws_tools_reload(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Re-read tools.yaml into the live registry and report how many tools loaded."""
+    from . import _reload_registry
+
+    try:
+        count = await _reload_registry(hass)
+    except LoaderError as err:
+        LOGGER.warning("tools.yaml reload failed: %s", err)  # detail stays server-side
+        connection.send_error(msg["id"], "invalid_data", _safe_loader_error(err))
+        return
+    connection.send_result(msg["id"], {"tools": count})
