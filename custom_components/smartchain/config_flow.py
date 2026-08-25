@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Any
 
@@ -169,6 +170,11 @@ def normalize_model_input(user_input: dict[str, Any]) -> str | None:
     return None
 
 
+def agent_title(data: Mapping[str, Any]) -> str:
+    """Title for an agent subentry: the user's model name, else the picked one."""
+    return data.get(CONF_CHAT_MODEL_USER) or data.get(CONF_CHAT_MODEL) or "Agent"
+
+
 class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for SmartChain."""
 
@@ -328,7 +334,7 @@ class ConversationSubentryFlow(ConfigSubentryFlow):
         if error:
             return self.async_show_form(step_id="user", data_schema=schema, errors={"base": error})
 
-        title = user_input.get(CONF_CHAT_MODEL_USER) or user_input.get(CONF_CHAT_MODEL) or "Agent"
+        title = agent_title(user_input)
         return self.async_create_entry(title=title, data=user_input)
 
     def _validate_and_update(
@@ -346,7 +352,7 @@ class ConversationSubentryFlow(ConfigSubentryFlow):
                 step_id="reconfigure", data_schema=schema, errors={"base": error}
             )
 
-        title = user_input.get(CONF_CHAT_MODEL_USER) or user_input.get(CONF_CHAT_MODEL) or "Agent"
+        title = agent_title(user_input)
         return self.async_update_and_abort(
             entry,
             subentry,

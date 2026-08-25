@@ -11,7 +11,7 @@ from typing import Any
 import voluptuous as vol
 import voluptuous_serialize
 from homeassistant.components import websocket_api
-from homeassistant.config_entries import ConfigEntry
+from homeassistant.config_entries import ConfigEntry, ConfigSubentry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import config_validation as cv
 
@@ -35,6 +35,7 @@ _MODEL_CACHE = "panel_model_cache"
 def async_register(hass: HomeAssistant) -> None:
     """Register every panel command."""
     websocket_api.async_register_command(hass, ws_agent_schema)
+    websocket_api.async_register_command(hass, ws_agent_save)
     websocket_api.async_register_command(hass, ws_overview)
 
 
@@ -101,6 +102,68 @@ async def ws_agent_schema(
             "data": defaults,
         },
     )
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "smartchain/agent/save",
+        vol.Required("entry_id"): str,
+        vol.Optional("subentry_id"): str,
+        vol.Required("data"): dict,
+    }
+)
+@websocket_api.async_response
+async def ws_agent_save(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Create or update an agent, validating exactly as the config flow does."""
+    from .config_flow import agent_title, normalize_model_input, subentry_schema
+
+    entry = _get_entry(hass, msg["entry_id"])
+    if entry is None:
+        connection.send_error(msg["id"], "not_found", "Unknown config entry")
+        return
+
+    subentry_id = msg.get("subentry_id")
+    subentry = None
+    if subentry_id is not None:
+        subentry = entry.subentries.get(subentry_id)
+        if subentry is None:
+            connection.send_error(msg["id"], "not_found", "Unknown agent")
+            return
+
+    models = await _models_for(hass, entry, refresh=False)
+    defaults = dict(subentry.data) if subentry is not None else {}
+    schema = subentry_schema(hass, entry.unique_id, defaults, models=models)
+
+    try:
+        data = dict(schema(dict(msg["data"])))
+    except vol.Invalid as err:
+        connection.send_error(msg["id"], "invalid_data", str(err))
+        return
+
+    error = normalize_model_input(data)
+    if error:
+        connection.send_error(msg["id"], "invalid_data", error)
+        return
+
+    title = agent_title(data)
+    if subentry is None:
+        new = ConfigSubentry(
+            data=data,
+            subentry_type=SUBENTRY_TYPE_CONVERSATION,
+            title=title,
+            unique_id=None,
+        )
+        hass.config_entries.async_add_subentry(entry, new)
+        connection.send_result(msg["id"], {"subentry_id": new.subentry_id})
+        return
+
+    hass.config_entries.async_update_subentry(entry, subentry, data=data, title=title)
+    connection.send_result(msg["id"], {"subentry_id": subentry.subentry_id})
 
 
 @websocket_api.require_admin
