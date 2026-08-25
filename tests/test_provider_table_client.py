@@ -179,3 +179,35 @@ async def test_openai_with_a_configured_base_url_receives_it(hass):
     with patch("custom_components.smartchain.client_util.ChatOpenAI") as chat:
         await get_client(hass, ID_OPENAI, entry, {"model": "gpt-4.1-mini"})
     assert chat.call_args.kwargs["openai_api_base"] == "http://mirror/v1"
+
+
+async def test_gigachat_enables_attachment_upload_with_the_real_field_name(hass):
+    """The field is `auto_upload_attachments`.
+
+    langchain-gigachat's model config is `extra="ignore"`, so a misspelled
+    option is dropped without raising — which is how `auto_upload_images` sat
+    here unnoticed while every camera analysis came back "you didn't send a
+    picture". Pin the name against the installed library rather than a literal,
+    so a rename upstream fails here instead of in production.
+    """
+    from langchain_gigachat.chat_models.gigachat import GigaChat
+
+    from custom_components.smartchain.const import ID_GIGACHAT, UNIQUE_ID_GIGACHAT
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_ENGINE: ID_GIGACHAT, CONF_API_KEY: "creds"},
+        unique_id=UNIQUE_ID_GIGACHAT,
+    )
+    entry.add_to_hass(hass)
+
+    with patch("custom_components.smartchain.client_util.GigaChat") as giga:
+        await get_client(hass, ID_GIGACHAT, entry, {"model": "GigaChat-Max"})
+
+    passed = giga.call_args.kwargs
+    assert "auto_upload_attachments" in passed
+    assert passed["auto_upload_attachments"] is True
+    # The name must be one the installed library actually declares, or it is
+    # silently discarded exactly as the old one was.
+    assert "auto_upload_attachments" in GigaChat.model_fields
+    assert "auto_upload_images" not in passed

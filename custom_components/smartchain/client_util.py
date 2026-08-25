@@ -185,7 +185,13 @@ async def get_client(
         )
         common_args["verify_ssl_certs"] = verify_ssl
         common_args["profanity_check"] = profanity
-        common_args["auto_upload_images"] = True
+        # The field is `auto_upload_attachments`. It was `auto_upload_images`
+        # here, which langchain-gigachat has no such field for — and its model
+        # config is `extra="ignore"`, so the wrong name was dropped in silence
+        # rather than raising. Auto-upload therefore never turned on, the
+        # image_url block was never uploaded, and GigaChat answered every
+        # camera analysis with "you didn't send a picture".
+        common_args["auto_upload_attachments"] = True
         client = GigaChat(**common_args)
     elif engine == ID_YANDEX_GPT:
         if not common_args.get("model"):
