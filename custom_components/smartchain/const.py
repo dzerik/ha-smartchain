@@ -354,7 +354,7 @@ SUBENTRY_TYPE_EMBEDDINGS = "embeddings"
 
 # Static fallback embedding-model lists, used when a provider's API is
 # unreachable or has no list endpoint (YandexGPT).
-EMBEDDING_MODELS_GIGACHAT = ["", "Embeddings", "EmbeddingsGigaR"]
+EMBEDDING_MODELS_GIGACHAT = ["", "Embeddings", "EmbeddingsGigaR", "GigaEmbedding"]
 EMBEDDING_MODELS_YANDEX_GPT = ["", "text-search-doc", "text-search-query"]
 EMBEDDING_MODELS_OPENAI = ["", "text-embedding-3-small", "text-embedding-3-large"]
 EMBEDDING_MODELS_OLLAMA = ["", "nomic-embed-text", "mxbai-embed-large", "bge-m3"]

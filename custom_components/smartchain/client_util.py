@@ -249,7 +249,10 @@ def is_embedding_model(engine: str, name: str) -> bool:
             return bool(_OLLAMA_EMBEDDING_HINT.search(name))
         return False
     if engine == ID_GIGACHAT:
-        return name.startswith("Embeddings")
+        # Not a prefix test: GigaChat names its embedding models both
+        # `Embeddings…` and `GigaEmbedding…`, so anchoring at the start put
+        # GigaEmbedding in the chat list and hid it from the embeddings one.
+        return "embedding" in name.lower()
     if engine == ID_OLLAMA:
         return bool(_OLLAMA_EMBEDDING_HINT.search(name))
     if engine == ID_YANDEX_GPT:

@@ -119,3 +119,16 @@ async def test_empty_result_keeps_the_blank_custom_option(hass: HomeAssistant) -
             hass, ID_OPENAI, {"api_key": "k"}, purpose=CAPABILITY_EMBEDDINGS
         )
     assert models[0] == ""
+
+
+def test_gigachat_recognises_the_gigaembedding_family() -> None:
+    """GigaChat names embedding models two ways, and only one starts with
+    `Embeddings`. A prefix test hid GigaEmbedding from the embeddings list and
+    offered it as a chat model instead."""
+    for name in ("Embeddings", "EmbeddingsGigaR", "GigaEmbedding", "GigaEmbeddingPlus"):
+        assert is_embedding_model(ID_GIGACHAT, name) is True, name
+
+
+def test_gigachat_chat_models_are_not_mistaken_for_embeddings() -> None:
+    for name in ("GigaChat", "GigaChat-Pro", "GigaChat-Max", "GigaChat-2"):
+        assert is_embedding_model(ID_GIGACHAT, name) is False, name
