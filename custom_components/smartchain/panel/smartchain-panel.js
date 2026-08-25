@@ -1,5 +1,6 @@
 import { SC_STYLES } from "./styles.js";
 import "./components/camera-tab.js";
+import "./components/agent-form.js";
 
 class SmartChainPanel extends HTMLElement {
   constructor() {
@@ -25,15 +26,31 @@ class SmartChainPanel extends HTMLElement {
   _propagateHass() {
     const cam = this.querySelector("sc-camera-tab");
     if (cam) cam.hass = this._hass;
+    const form = this.querySelector("sc-agent-form");
+    if (form) form.hass = this._hass;
   }
 
   _initialize() {
+    // Task 1 scaffolding only: there is no overview command yet (Task 2), so
+    // the entry id can't be discovered from the panel itself. Read it from
+    // the URL hash as a temporary way to exercise <sc-agent-form> in a
+    // browser. Task 5 replaces this whole block with the real tab shell.
+    const entryId = new URLSearchParams(location.hash.slice(1)).get("entry");
     this.innerHTML = `
       <style>${SC_STYLES}</style>
+      ${entryId ? `<sc-agent-form></sc-agent-form>` : ""}
       <div class="sc-camera-container">
         <sc-camera-tab></sc-camera-tab>
       </div>
     `;
+    if (entryId) {
+      const form = this.querySelector("sc-agent-form");
+      form.entryId = entryId;
+    } else {
+      console.info(
+        "SmartChain: no entry id in URL hash — open /smartchain#entry=<entry_id> to preview the agent form."
+      );
+    }
     this._propagateHass();
   }
 }

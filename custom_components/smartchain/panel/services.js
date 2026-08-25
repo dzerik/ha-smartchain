@@ -74,3 +74,13 @@ export function showToast(message, type = "info", duration = 3500) {
     toast.addEventListener("animationend", () => toast.remove());
   }, duration);
 }
+
+/**
+ * Send a SmartChain websocket command and return its result.
+ *
+ * Throws with the backend's message, which is safe to display — the backend
+ * never puts a credential in one.
+ */
+export async function callWS(hass, type, payload = {}) {
+  return await hass.connection.sendMessagePromise({ type, ...payload });
+}

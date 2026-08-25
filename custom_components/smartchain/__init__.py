@@ -412,6 +412,10 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     except Exception as err:
         LOGGER.warning("Could not register SmartChain panel: %s", err)
 
+    from . import websocket_api as smartchain_websocket_api
+
+    smartchain_websocket_api.async_register(hass)
+
     hass.data[DOMAIN]["find_client"] = _find_client
 
     hass.services.async_register(

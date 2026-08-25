@@ -281,7 +281,7 @@ async def test_conversation_entity_subentry_options(hass: HomeAssistant, mock_ll
 
 
 def test_every_renderable_subentry_field_has_a_label() -> None:
-    """Every field `_subentry_schema` can render must be labelled in all three files.
+    """Every field `subentry_schema` can render must be labelled in all three files.
 
     Home Assistant falls back to showing the raw key when a translation is
     missing, silently — no error, no log line. Two fields shipped that way for
@@ -302,7 +302,7 @@ def test_every_renderable_subentry_field_has_a_label() -> None:
     schema_fn = next(
         node
         for node in ast.walk(tree)
-        if isinstance(node, ast.FunctionDef) and node.name == "_subentry_schema"
+        if isinstance(node, ast.FunctionDef) and node.name == "subentry_schema"
     )
 
     keys: set[str] = set()
