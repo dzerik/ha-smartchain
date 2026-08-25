@@ -1,4 +1,4 @@
-import { callWS } from "../services.js";
+import { callWS, showToast } from "../services.js";
 
 /**
  * <sc-agent-form> — renders the agent schema the backend serialises.
@@ -51,19 +51,50 @@ export class ScAgentForm extends HTMLElement {
   _render() {
     this.innerHTML = `
       <style>
-        .sc-form-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+        .sc-form-actions { display: flex; gap: 8px; justify-content: flex-end; align-items: center; margin-top: 16px; }
+        .sc-form-actions .sc-form-spacer { flex: 1; }
       </style>
       <ha-form></ha-form>
       <div class="sc-form-actions">
+        <mwc-button id="sc-form-refresh">Refresh models</mwc-button>
+        <span class="sc-form-spacer"></span>
+        <mwc-button id="sc-form-cancel">Cancel</mwc-button>
         <mwc-button id="sc-form-save">Save</mwc-button>
       </div>
     `;
     this.querySelector("ha-form").addEventListener("value-changed", (ev) => {
       this._data = ev.detail.value;
     });
-    this.querySelector("#sc-form-save").addEventListener("click", () => {
-      // Task 1 proves rendering only; Task 6 wires this to the save command.
-      console.info("SmartChain agent form value", this._data);
+
+    this.querySelector("#sc-form-save").addEventListener("click", async () => {
+      const payload = {
+        entry_id: this._entryId,
+        data: this._data,
+      };
+      if (this._subentryId) payload.subentry_id = this._subentryId;
+      try {
+        const result = await callWS(this._hass, "smartchain/agent/save", payload);
+        showToast("Agent saved", "success");
+        this.dispatchEvent(
+          new CustomEvent("sc-saved", {
+            detail: { subentryId: result.subentry_id },
+            bubbles: true,
+            composed: true,
+          })
+        );
+      } catch (err) {
+        // The backend never puts a credential in a message, so this is safe
+        // to show as-is.
+        showToast(err.message || "Could not save the agent", "error");
+      }
+    });
+
+    this.querySelector("#sc-form-cancel").addEventListener("click", () => {
+      this.dispatchEvent(new CustomEvent("sc-cancelled", { bubbles: true, composed: true }));
+    });
+
+    this.querySelector("#sc-form-refresh").addEventListener("click", () => {
+      this.load(true);
     });
   }
 

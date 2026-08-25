@@ -146,10 +146,45 @@ export const SC_STYLES = `
     border-bottom-color: var(--primary-color, #03a9f4);
   }
   .sc-tab-body {
-    max-width: 800px;
     margin: 0 auto;
     padding: 24px;
     font-family: var(--sc-font);
     color: var(--primary-text-color, #212121);
+  }
+  sc-camera-tab { display: block; max-width: 800px; margin: 0 auto; }
+  sc-agents-tab { display: block; max-width: 1100px; margin: 0 auto; }
+
+  /* ========== Agents Tab ========== */
+  .sc-entry { margin-bottom: 24px; }
+  .sc-entry-head {
+    display: flex; align-items: center; gap: 12px;
+    padding-bottom: 8px; border-bottom: 1px solid var(--divider-color, #e0e0e0);
+  }
+  .sc-entry-title { font-weight: 500; }
+  .sc-entry-engine { color: var(--secondary-text-color); font-size: 13px; }
+  .sc-entry-head .sc-add { margin-left: auto; }
+  .sc-agent-list { list-style: none; margin: 0; padding: 0; }
+  .sc-agent-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr auto auto;
+    gap: 12px; align-items: center;
+    padding: 10px 0; border-bottom: 1px solid var(--divider-color, #e0e0e0);
+  }
+  .sc-agent-model, .sc-agent-tools {
+    color: var(--secondary-text-color); font-size: 13px;
+  }
+  .sc-agent-actions { display: flex; gap: 8px; }
+  .sc-agent-actions button, .sc-add {
+    appearance: none; border: 1px solid var(--divider-color, #e0e0e0);
+    background: none; border-radius: 6px; padding: 4px 10px;
+    font-size: 13px; color: var(--primary-text-color); cursor: pointer;
+  }
+  .sc-agent-actions button:hover, .sc-add:hover {
+    border-color: var(--primary-color, #03a9f4);
+    color: var(--primary-color, #03a9f4);
+  }
+  .sc-empty { color: var(--secondary-text-color); font-size: 14px; }
+  @media (max-width: 600px) {
+    .sc-agent-row { grid-template-columns: 1fr; gap: 4px; }
   }
 `;
