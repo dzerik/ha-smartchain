@@ -676,19 +676,33 @@ async def ws_embeddings_delete(
     connection.send_result(msg["id"], {"bound_stores": bound_stores})
 
 
-def _read_text_if_present(path: Path) -> str | None:
-    """The file's raw bytes as text, or None if it does not exist.
+def _read_tools_file(path: Path) -> dict[str, Any]:
+    """Text and status of tools.yaml on disk, never raising into the executor job.
 
     Blocking I/O only — no YAML parsing here. `load_tools_file` resolves
     `!secret` references against `secrets.yaml`, so the parsed structure
     holds real credentials. The raw text on disk holds only the reference
     name (`!secret my_key`), which is what `smartchain/tools/get` may
     safely return.
+
+    `exists=False` means the normal first-run state — no file at all — and
+    is not an error. A file that *is* there but can't be read as text (wrong
+    permissions, a directory sitting at that path, non-UTF-8 bytes) reports
+    `exists=True` with a distinguishable `error`, rather than letting the
+    exception escape the executor job: uncaught, it would reach HA's generic
+    websocket exception handler and collapse to an opaque "Unknown error",
+    leaving the panel with no way to tell the user what's actually wrong.
     """
+    if not path.exists():
+        return {"text": "", "exists": False, "error": None}
     try:
-        return path.read_text()
-    except FileNotFoundError:
-        return None
+        return {"text": path.read_text(), "exists": True, "error": None}
+    except (OSError, UnicodeDecodeError) as err:
+        return {
+            "text": "",
+            "exists": True,
+            "error": f"{type(err).__name__}: {path.name} could not be read",
+        }
 
 
 @websocket_api.require_admin
@@ -708,46 +722,43 @@ async def ws_tools_get(
     from . import _tools_yaml_path
 
     path = _tools_yaml_path(hass)
-    text = await hass.async_add_executor_job(_read_text_if_present, path)
-    connection.send_result(
-        msg["id"],
-        {"text": text or "", "path": str(path), "exists": text is not None},
-    )
+    result = await hass.async_add_executor_job(_read_tools_file, path)
+    connection.send_result(msg["id"], {"path": str(path), **result})
 
 
 def _safe_loader_error(err: LoaderError) -> str:
     """A validation failure summary that cannot carry a resolved secret.
 
-    `LoaderError`'s own message is built with `str()` of the underlying
-    voluptuous error or `HomeAssistantError` (see `load_tools_file`), and
-    that text is not safe to forward. Two of this schema's own validators
-    (`_validate_action`, `_validate_mcp_server` in tools/schema.py) build
-    their message with the *offending value itself* interpolated in, e.g.
-    ``unknown action type 'sk-...'`` — exactly what a `!secret` resolving
-    into a `type:` field would produce. Any validator, including ones added
-    later, could in principle do the same, so the message text is treated
-    as unsafe categorically rather than case by case.
+    Only the exception type name crosses the wire. Nothing about the
+    underlying voluptuous error or `HomeAssistantError` — not its message,
+    not its `.path` — is safe to forward:
 
-    voluptuous's `err.path`, in contrast, is a list of dict keys and list
-    indices describing *where* in the document validation failed —
-    structural navigation coordinates such as ``['tools', 0, 'action']`` —
-    never a value. That is safe to join and return.
+    - `str(err)` / `.msg`: two of this schema's own validators
+      (`_validate_action`, `_validate_mcp_server` in tools/schema.py) build
+      their message with the offending value interpolated straight in, e.g.
+      ``unknown action type 'sk-...'`` — exactly what a `!secret` resolving
+      into a `type:` field produces.
+    - `err.path`: looked safe at first, since it is normally a list of dict
+      keys and list indices describing *where* validation failed —
+      structural coordinates, not a value. But `!secret` resolves on
+      mapping **keys** as well as values, and every schema here uses
+      voluptuous's default `extra=PREVENT_EXTRA`, so a `!secret` used as an
+      unexpected key raises "extra keys not allowed" with that resolved key
+      appended to `.path` itself — a document value smuggled through the
+      one place that looked structural. Reproduced end to end: a tools.yaml
+      with `!secret my_key` as an extra key inside a rejected block put the
+      resolved secret directly in `err.path`.
 
-    When the underlying cause isn't a voluptuous error at all (a YAML parse
-    failure raises through `HomeAssistantError` instead, with no `.path`),
-    only the exception type name is reported: HA's YAML loader can also
-    embed file content in that message, so nothing more specific than the
-    type is claimed to be safe there.
-
-    The full original message is logged server-side by the caller, where
-    only an admin can read it.
+    A safe subset of `.path` would need an allowlist of every literal key
+    each schema declares, but the discriminating validators above dispatch
+    to sub-schemas this module doesn't own and that aren't structured for
+    generic introspection — an allowlist built by hand would silently drift
+    out of sync as tools/schema.py changes. Rather than approximate that,
+    only the exception type is reported. The full original message is
+    logged server-side by the caller, where only an admin can read it.
     """
     cause = err.__cause__
-    kind = type(cause).__name__ if cause is not None else type(err).__name__
-    path = getattr(cause, "path", None)
-    if path:
-        return f"{kind} at {'.'.join(str(p) for p in path)}"
-    return kind
+    return type(cause).__name__ if cause is not None else type(err).__name__
 
 
 @websocket_api.require_admin

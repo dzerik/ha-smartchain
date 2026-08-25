@@ -107,8 +107,86 @@ async def test_validate_of_a_broken_file_leaks_no_resolved_secret(
     assert msg["success"], msg
     assert msg["result"]["valid"] is False
     assert SECRET_VALUE not in json.dumps(msg)
-    # A location is still reported — just not the value that failed there.
-    assert "action" in msg["result"]["error"]
+    # Only the exception type crosses the wire — see _safe_loader_error for
+    # why even the structural-looking err.path isn't safe to include.
+    assert msg["result"]["error"] == "MultipleInvalid"
+
+
+async def test_get_reports_a_non_utf8_file_as_a_distinguishable_error(
+    hass: HomeAssistant, hass_ws_client, tools_dir: Path
+):
+    """A file that exists but can't be decoded as text must not raise out of
+    the executor job — that would degrade to HA's generic "Unknown error"
+    and leave the panel unable to say what's wrong."""
+    (tools_dir / "tools.yaml").write_bytes(b"tools:\n  - name: \xff\xfe not valid utf-8 \x80\x81\n")
+    await async_setup_component(hass, DOMAIN, {})
+
+    client = await hass_ws_client(hass)
+    await client.send_json_auto_id({"type": "smartchain/tools/get"})
+    msg = await client.receive_json()
+
+    assert msg["success"], msg
+    assert msg["result"]["exists"] is True
+    assert msg["result"]["text"] == ""
+    assert "UnicodeDecodeError" in msg["result"]["error"]
+
+
+async def test_validate_leaks_no_secret_used_as_an_extra_mapping_key(
+    hass: HomeAssistant, hass_ws_client, tools_dir: Path
+):
+    """`!secret` resolves on mapping *keys*, not only values. Every block in
+    tools/schema.py uses voluptuous's default extra=PREVENT_EXTRA, so a
+    `!secret` used as an unexpected key raises "extra keys not allowed" with
+    the resolved key — not just a message fragment, an actual document value
+    — sitting in `err.path`. A path-joining `_safe_loader_error` would leak
+    it even though it never touches `str(err)`."""
+    (tools_dir.parent / "secrets.yaml").write_text(f"my_key: {SECRET_VALUE}\n")
+    (tools_dir / "tools.yaml").write_text(
+        "tools:\n"
+        "  - name: ping\n"
+        "    description: x\n"
+        "    parameters: { type: object, properties: {} }\n"
+        "    action:\n"
+        "      type: template\n"
+        "      value_template: pong\n"
+        "      !secret my_key: extra\n"
+    )
+    await async_setup_component(hass, DOMAIN, {})
+
+    client = await hass_ws_client(hass)
+    await client.send_json_auto_id({"type": "smartchain/tools/validate"})
+    msg = await client.receive_json()
+
+    assert msg["success"], msg
+    assert msg["result"]["valid"] is False
+    assert SECRET_VALUE not in json.dumps(msg)
+
+
+async def test_reload_leaks_no_secret_used_as_an_extra_mapping_key(
+    hass: HomeAssistant, hass_ws_client, tools_dir: Path
+):
+    """Same leak vector as above, reached through smartchain/tools/reload
+    instead of smartchain/tools/validate — both paths call
+    _safe_loader_error on the same LoaderError."""
+    (tools_dir.parent / "secrets.yaml").write_text(f"my_key: {SECRET_VALUE}\n")
+    (tools_dir / "tools.yaml").write_text(
+        "tools:\n"
+        "  - name: ping\n"
+        "    description: x\n"
+        "    parameters: { type: object, properties: {} }\n"
+        "    action:\n"
+        "      type: template\n"
+        "      value_template: pong\n"
+        "      !secret my_key: extra\n"
+    )
+    await async_setup_component(hass, DOMAIN, {})
+
+    client = await hass_ws_client(hass)
+    await client.send_json_auto_id({"type": "smartchain/tools/reload"})
+    msg = await client.receive_json()
+
+    assert not msg["success"]
+    assert SECRET_VALUE not in json.dumps(msg)
 
 
 async def test_validate_of_a_missing_file_reports_valid(
