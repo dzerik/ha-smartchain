@@ -1,5 +1,7 @@
 import { callWS, escapeHtml, showToast } from "../services.js";
-import "./agent-form.js";
+import "./config-form.js";
+
+const AGENT_COMMANDS = { schema: "smartchain/agent/schema", save: "smartchain/agent/save" };
 
 /**
  * <sc-agents-tab> — every agent on one screen, with create, edit,
@@ -9,7 +11,11 @@ import "./agent-form.js";
  * show every agent's provider, model and tool count at once, or copy a tuned
  * agent in one click. That overview is why this tab exists.
  *
- * Properties: .hass
+ * The overview itself is fetched once by the shell and handed down via
+ * `.entries` — this tab only asks for a fresh copy, by dispatching
+ * `sc-overview-refresh`, after something it did changes it.
+ *
+ * Properties: .hass, .entries
  */
 export class ScAgentsTab extends HTMLElement {
   constructor() {
@@ -21,9 +27,14 @@ export class ScAgentsTab extends HTMLElement {
   }
 
   set hass(val) {
-    const first = !this._hass;
     this._hass = val;
-    if (this._rendered && first) this.reload();
+    const form = this.querySelector("sc-config-form");
+    if (form) form.hass = val;
+  }
+
+  set entries(val) {
+    this._entries = val || [];
+    if (this._rendered) this._paint();
   }
 
   connectedCallback() {
@@ -31,18 +42,11 @@ export class ScAgentsTab extends HTMLElement {
       this._render();
       this._rendered = true;
     }
-    if (this._hass) this.reload();
+    this._paint();
   }
 
-  async reload() {
-    try {
-      const result = await callWS(this._hass, "smartchain/overview");
-      this._entries = result.entries || [];
-    } catch (err) {
-      showToast(err.message || "Could not load agents", "error");
-      this._entries = [];
-    }
-    this._paint();
+  _requestRefresh() {
+    this.dispatchEvent(new CustomEvent("sc-overview-refresh", { bubbles: true, composed: true }));
   }
 
   _render() {
@@ -53,14 +57,19 @@ export class ScAgentsTab extends HTMLElement {
     const root = this.querySelector(".sc-agents");
 
     if (this._editing) {
-      root.innerHTML = `<sc-agent-form></sc-agent-form>`;
-      const form = root.querySelector("sc-agent-form");
+      root.innerHTML = `<sc-config-form></sc-config-form>`;
+      const form = root.querySelector("sc-config-form");
       form.hass = this._hass;
-      form.entryId = this._editing.entryId;
+      form.commands = AGENT_COMMANDS;
+      // subentryId before entryId: config-form starts loading the moment
+      // hass/commands/entryId are all set, so an Edit form's subentryId
+      // must already be in place by then — otherwise it would load
+      // create-mode defaults and silently discard the existing agent.
       if (this._editing.subentryId) form.subentryId = this._editing.subentryId;
+      form.entryId = this._editing.entryId;
       form.addEventListener("sc-saved", () => {
         this._editing = null;
-        this.reload();
+        this._requestRefresh();
       });
       form.addEventListener("sc-cancelled", () => {
         this._editing = null;
@@ -144,7 +153,7 @@ export class ScAgentsTab extends HTMLElement {
     } catch (err) {
       showToast(err.message || "That did not work", "error");
     }
-    this.reload();
+    this._requestRefresh();
   }
 
   _findAgent(entryId, subentryId) {

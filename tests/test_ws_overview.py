@@ -3,7 +3,7 @@
 import json
 
 import pytest
-from homeassistant.config_entries import ConfigSubentryData
+from homeassistant.config_entries import ConfigSubentry, ConfigSubentryData
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -70,10 +70,29 @@ async def test_overview_lists_the_entry_and_its_agent(hass, hass_ws_client, entr
 
 
 async def test_overview_never_carries_a_credential(hass, hass_ws_client, entry):
-    """The whole response, serialised, must contain no secret from entry data."""
+    """The whole response, serialised, must contain no secret from entry data.
+
+    Extended (rather than duplicated) to add an embeddings binding alongside
+    the conversation agent the fixture already carries — the embeddings
+    field walks the same subentries as agents does, so it must be covered by
+    the same containment check rather than a second, near-identical test.
+    """
+    hass.config_entries.async_add_subentry(
+        entry,
+        ConfigSubentry(
+            data={CONF_CHAT_MODEL: "text-embedding-3-small"},
+            subentry_type=SUBENTRY_TYPE_EMBEDDINGS,
+            title="Embeddings",
+            unique_id=None,
+        ),
+    )
+
     client = await hass_ws_client(hass)
     await client.send_json_auto_id({"type": "smartchain/overview"})
     msg = await client.receive_json()
+
+    served = msg["result"]["entries"][0]
+    assert len(served["embeddings"]) == 1
 
     body = json.dumps(msg)
     assert SECRET not in body
@@ -247,6 +266,150 @@ async def test_model_reports_model_user_when_set(hass, hass_ws_client):
 
     agent = msg["result"]["entries"][0]["agents"][0]
     assert agent["model"] == "my-custom-model"
+
+
+async def test_embeddings_lists_only_embeddings_subentries(hass, hass_ws_client):
+    """The mirror of test_agents_excludes_non_conversation_subentries: a
+    conversation subentry on the same entry must not show up as a binding."""
+    await async_setup_component(hass, DOMAIN, {})
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_ENGINE: ID_OPENAI, CONF_API_KEY: "k"},
+        unique_id=UNIQUE_ID_OPENAI,
+        title=UNIQUE_ID_OPENAI,
+        subentries_data=[
+            ConfigSubentryData(
+                data={CONF_CHAT_MODEL: "gpt-4.1-mini"},
+                subentry_type=SUBENTRY_TYPE_CONVERSATION,
+                title="Home",
+                unique_id=None,
+            ),
+            ConfigSubentryData(
+                data={CONF_CHAT_MODEL: "text-embedding-3-small"},
+                subentry_type=SUBENTRY_TYPE_EMBEDDINGS,
+                title="Embeddings",
+                unique_id=None,
+            ),
+        ],
+    )
+    entry.add_to_hass(hass)
+
+    client = await hass_ws_client(hass)
+    await client.send_json_auto_id({"type": "smartchain/overview"})
+    msg = await client.receive_json()
+
+    served = msg["result"]["entries"][0]
+    assert len(served["agents"]) == 1
+    assert served["agents"][0]["title"] == "Home"
+    assert len(served["embeddings"]) == 1
+    assert served["embeddings"][0]["title"] == "Embeddings"
+
+
+async def test_embeddings_model_reports_model_user_when_set(hass, hass_ws_client):
+    """The same model_user-over-model rule agents use — untested for agents
+    until a reviewer caught it, so covered here from the start."""
+    await async_setup_component(hass, DOMAIN, {})
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_ENGINE: ID_OPENAI, CONF_API_KEY: "k"},
+        unique_id=UNIQUE_ID_OPENAI,
+        title=UNIQUE_ID_OPENAI,
+        subentries_data=[
+            ConfigSubentryData(
+                data={CONF_CHAT_MODEL: "", CONF_CHAT_MODEL_USER: "my-custom-embedding-model"},
+                subentry_type=SUBENTRY_TYPE_EMBEDDINGS,
+                title="Custom Embeddings",
+                unique_id=None,
+            )
+        ],
+    )
+    entry.add_to_hass(hass)
+
+    client = await hass_ws_client(hass)
+    await client.send_json_auto_id({"type": "smartchain/overview"})
+    msg = await client.receive_json()
+
+    binding = msg["result"]["entries"][0]["embeddings"][0]
+    assert binding["model"] == "my-custom-embedding-model"
+
+
+async def test_embeddings_reports_bound_stores(
+    hass, hass_ws_client, tmp_path_factory, mock_llm_client
+):
+    """bound_stores names a store configured against that title, and is []
+    when none is — the same data smartchain/embeddings/schema exposes,
+    surfaced here too so the list can show the risk before an edit."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    memory_yaml = """
+tools: []
+memory:
+  stores:
+    - name: conversations
+      description: "Dialogue history"
+      embeddings: "Bound Embeddings"
+      ingest_conversation: true
+"""
+    cdir = tmp_path_factory.mktemp("ha")
+    (cdir / "smartchain").mkdir()
+    (cdir / "smartchain" / "tools.yaml").write_text(memory_yaml)
+    hass.config.config_dir = str(cdir)
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_ENGINE: ID_OPENAI, CONF_API_KEY: "k"},
+        options={},
+        unique_id=UNIQUE_ID_OPENAI,
+        title=UNIQUE_ID_OPENAI,
+        subentries_data=[
+            ConfigSubentryData(
+                data={CONF_CHAT_MODEL: "text-embedding-3-small"},
+                subentry_type=SUBENTRY_TYPE_EMBEDDINGS,
+                title="Bound Embeddings",
+                unique_id=None,
+            ),
+            ConfigSubentryData(
+                data={},
+                subentry_type=SUBENTRY_TYPE_EMBEDDINGS,
+                title="Unbound Embeddings",
+                unique_id=None,
+            ),
+        ],
+    )
+    entry.add_to_hass(hass)
+
+    def _store_factory(hass, embeddings, backend):
+        st = MagicMock()
+        st.is_available = True
+        st.async_setup = AsyncMock()
+        st.close = AsyncMock()
+        return st
+
+    with (
+        patch(
+            "custom_components.smartchain.tools.memory.registry.MemoryStore",
+            side_effect=_store_factory,
+        ),
+        patch(
+            "custom_components.smartchain.tools.memory.registry.create_embeddings_from_subentry",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "custom_components.smartchain.get_client",
+            new_callable=AsyncMock,
+            return_value=mock_llm_client,
+        ),
+    ):
+        await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    client = await hass_ws_client(hass)
+    await client.send_json_auto_id({"type": "smartchain/overview"})
+    msg = await client.receive_json()
+
+    bindings = {b["title"]: b for b in msg["result"]["entries"][0]["embeddings"]}
+    assert bindings["Bound Embeddings"]["bound_stores"] == ["conversations"]
+    assert bindings["Unbound Embeddings"]["bound_stores"] == []
 
 
 async def test_model_falls_back_when_model_user_is_whitespace(hass, hass_ws_client):
