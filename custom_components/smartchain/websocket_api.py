@@ -423,7 +423,7 @@ async def ws_overview(
     connection: websocket_api.ActiveConnection,
     msg: dict[str, Any],
 ) -> None:
-    """List SmartChain entries and their conversation agents."""
+    """List SmartChain entries with their conversation agents and embeddings bindings."""
     entries = [_describe_entry(hass, entry) for entry in hass.config_entries.async_entries(DOMAIN)]
     connection.send_result(msg["id"], {"entries": entries})
 
@@ -436,6 +436,11 @@ def _describe_entry(hass: HomeAssistant, entry: ConfigEntry) -> dict[str, Any]:
     an API key on the wire.
     """
     engine = entry.data.get(CONF_ENGINE, ID_GIGACHAT)
+    # Tolerated missing: the panel can open before any memory store is
+    # configured, at which point hass.data[DOMAIN] may not carry "memory" yet
+    # (or, in principle, DOMAIN itself). An empty bound_stores list is the
+    # right answer then, not an error.
+    registry = hass.data.get(DOMAIN, {}).get("memory")
     return {
         "entry_id": entry.entry_id,
         "title": entry.title,
@@ -446,6 +451,11 @@ def _describe_entry(hass: HomeAssistant, entry: ConfigEntry) -> dict[str, Any]:
             _describe_agent(subentry)
             for subentry in entry.subentries.values()
             if subentry.subentry_type == SUBENTRY_TYPE_CONVERSATION
+        ],
+        "embeddings": [
+            _describe_binding(registry, subentry)
+            for subentry in entry.subentries.values()
+            if subentry.subentry_type == SUBENTRY_TYPE_EMBEDDINGS
         ],
     }
 
@@ -461,6 +471,23 @@ def _describe_agent(subentry: Any) -> dict[str, Any]:
         # None means "every tool"; the panel shows a dash rather than a count it
         # cannot know without building the registry.
         "tool_count": len(allowed) if allowed is not None else None,
+    }
+
+
+def _describe_binding(registry: Any, subentry: Any) -> dict[str, Any]:
+    """Public description of one embeddings binding.
+
+    `bound_stores` travels here so the list can show, at a glance, which
+    bindings a memory store depends on — the panel warns before a rename, and
+    warning is more useful when the user could already see the risk.
+    """
+    data = subentry.data
+    model = (data.get(CONF_CHAT_MODEL_USER) or "").strip() or data.get(CONF_CHAT_MODEL, "")
+    return {
+        "subentry_id": subentry.subentry_id,
+        "title": subentry.title,
+        "model": model,
+        "bound_stores": registry.stores_bound_to(subentry.title) if registry else [],
     }
 
 

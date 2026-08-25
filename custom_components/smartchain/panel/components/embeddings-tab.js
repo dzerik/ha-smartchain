@@ -17,12 +17,11 @@ const EMBEDDINGS_COMMANDS = {
  * now report both — this tab's job is to ask before writing, never to
  * explain after the fact why a store quietly stopped working.
  *
- * There is no SmartChain-specific "list embeddings bindings" command, so the
- * binding list per entry comes from Home Assistant's own generic
- * `config_entries/subentries/list`, filtered to the embeddings type.
- *
- * The entry list itself (with `supports_embeddings`) is fetched once by the
- * shell and handed down via `.entries`.
+ * The binding list (with model and bound_stores) comes straight from
+ * `smartchain/overview`'s `embeddings` field on each entry — the same single
+ * source of truth agents-tab reads its agent list from, fetched once by the
+ * shell and handed down via `.entries`. This tab asks for a fresh copy, by
+ * dispatching `sc-overview-refresh`, after something it did changes it.
  *
  * Properties: .hass, .entries
  */
@@ -32,22 +31,18 @@ export class ScEmbeddingsTab extends HTMLElement {
     this._hass = null;
     this._rendered = false;
     this._entries = [];
-    this._bindings = {}; // entry_id -> [{subentry_id, subentry_type, title, unique_id}]
-    this._editing = null; // {entryId, subentryId|null, originalTitle|null}
-    this._loadToken = 0;
+    this._editing = null; // {entryId, subentryId|null, originalTitle|null, originalBoundStores}
   }
 
   set hass(val) {
-    const first = !this._hass;
     this._hass = val;
     const form = this.querySelector("sc-config-form");
     if (form) form.hass = val;
-    if (this._rendered && first) this._loadBindings();
   }
 
   set entries(val) {
     this._entries = (val || []).filter((entry) => entry.supports_embeddings);
-    if (this._rendered && this._hass) this._loadBindings();
+    if (this._rendered) this._paint();
   }
 
   connectedCallback() {
@@ -55,32 +50,15 @@ export class ScEmbeddingsTab extends HTMLElement {
       this._render();
       this._rendered = true;
     }
-    if (this._hass) this._loadBindings();
+    this._paint();
+  }
+
+  _requestRefresh() {
+    this.dispatchEvent(new CustomEvent("sc-overview-refresh", { bubbles: true, composed: true }));
   }
 
   _render() {
     this.innerHTML = `<div class="sc-embeddings"></div>`;
-  }
-
-  async _loadBindings() {
-    if (!this._hass) return;
-    const token = ++this._loadToken;
-    const bindings = {};
-    try {
-      for (const entry of this._entries) {
-        const list = await callWS(this._hass, "config_entries/subentries/list", {
-          entry_id: entry.entry_id,
-        });
-        bindings[entry.entry_id] = (list || []).filter(
-          (subentry) => subentry.subentry_type === "embeddings"
-        );
-      }
-    } catch (err) {
-      showToast(err.message || "Could not load embeddings bindings", "error");
-    }
-    if (token !== this._loadToken) return; // superseded by a newer load
-    this._bindings = bindings;
-    this._paint();
   }
 
   _paint() {
@@ -95,11 +73,14 @@ export class ScEmbeddingsTab extends HTMLElement {
       form.entryId = this._editing.entryId;
       if (this._editing.subentryId) form.subentryId = this._editing.subentryId;
 
-      let boundStores = [];
+      // Seeded from the overview's own copy, then replaced with a fresh one
+      // the moment the form's schema load resolves — the overview snapshot
+      // could already be stale by the time this form opened.
+      let boundStores = this._editing.originalBoundStores || [];
       const originalTitle = this._editing.originalTitle;
 
-      // The schema load's response carries `bound_stores` — this tab is the
-      // one place that knows what that field means, not <sc-config-form>.
+      // <sc-config-form> knows nothing about `bound_stores` — this tab is
+      // the one place that interprets it.
       form.addEventListener("sc-loaded", (ev) => {
         boundStores = ev.detail.bound_stores || [];
       });
@@ -123,7 +104,7 @@ export class ScEmbeddingsTab extends HTMLElement {
 
       form.addEventListener("sc-saved", () => {
         this._editing = null;
-        this._loadBindings();
+        this._requestRefresh();
       });
       form.addEventListener("sc-cancelled", () => {
         this._editing = null;
@@ -143,7 +124,7 @@ export class ScEmbeddingsTab extends HTMLElement {
 
     root.innerHTML = this._entries
       .map((entry) => {
-        const bindings = this._bindings[entry.entry_id] || [];
+        const bindings = entry.embeddings || [];
         return `
         <section class="sc-entry" data-entry="${escapeHtml(entry.entry_id)}">
           <header class="sc-entry-head">
@@ -158,6 +139,7 @@ export class ScEmbeddingsTab extends HTMLElement {
                     (binding) => `
                 <li class="sc-embed-row">
                   <span class="sc-embed-name">${escapeHtml(binding.title)}</span>
+                  <span class="sc-embed-model">${escapeHtml(binding.model || "—")}</span>
                   <span class="sc-embed-actions">
                     <button data-act="edit" data-entry="${escapeHtml(entry.entry_id)}" data-sub="${escapeHtml(binding.subentry_id)}">Edit</button>
                     <button data-act="del" data-entry="${escapeHtml(entry.entry_id)}" data-sub="${escapeHtml(binding.subentry_id)}">Delete</button>
@@ -173,7 +155,12 @@ export class ScEmbeddingsTab extends HTMLElement {
 
     root.querySelectorAll(".sc-add").forEach((button) =>
       button.addEventListener("click", () => {
-        this._editing = { entryId: button.dataset.entry, subentryId: null, originalTitle: null };
+        this._editing = {
+          entryId: button.dataset.entry,
+          subentryId: null,
+          originalTitle: null,
+          originalBoundStores: [],
+        };
         this._paint();
       })
     );
@@ -184,29 +171,24 @@ export class ScEmbeddingsTab extends HTMLElement {
   }
 
   async _act({ act, entry: entryId, sub: subentryId }) {
+    const binding = this._findBinding(entryId, subentryId);
+
     if (act === "edit") {
-      const binding = this._findBinding(entryId, subentryId);
-      this._editing = { entryId, subentryId, originalTitle: binding ? binding.title : null };
+      this._editing = {
+        entryId,
+        subentryId,
+        originalTitle: binding ? binding.title : null,
+        originalBoundStores: binding ? binding.bound_stores || [] : [],
+      };
       this._paint();
       return;
     }
 
-    // act === "del" — name what a delete would unbind before asking, not after.
-    const binding = this._findBinding(entryId, subentryId);
+    // act === "del" — name what a delete would unbind before asking, not
+    // after. The overview already carries `bound_stores` per binding, so no
+    // extra round trip is needed just to show the warning.
     const label = binding ? binding.title : "this embeddings binding";
-
-    let boundStores = [];
-    try {
-      const schema = await callWS(this._hass, "smartchain/embeddings/schema", {
-        entry_id: entryId,
-        subentry_id: subentryId,
-      });
-      boundStores = schema.bound_stores || [];
-    } catch (err) {
-      // The warning could not be fetched — still let the user decide, just
-      // without the names. This does not block the delete itself.
-      showToast(err.message || "Could not check bound memory stores", "warning");
-    }
+    const boundStores = binding ? binding.bound_stores || [] : [];
     const warning = boundStores.length
       ? ` This will unbind the memory store(s) that resolve it by title: ${boundStores.join(", ")}.`
       : "";
@@ -221,11 +203,12 @@ export class ScEmbeddingsTab extends HTMLElement {
     } catch (err) {
       showToast(err.message || "That did not work", "error");
     }
-    this._loadBindings();
+    this._requestRefresh();
   }
 
   _findBinding(entryId, subentryId) {
-    return (this._bindings[entryId] || []).find((binding) => binding.subentry_id === subentryId);
+    const entry = this._entries.find((e) => e.entry_id === entryId);
+    return entry && (entry.embeddings || []).find((binding) => binding.subentry_id === subentryId);
   }
 }
 

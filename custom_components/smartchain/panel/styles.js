@@ -192,10 +192,11 @@ export const SC_STYLES = `
   .sc-embed-list { list-style: none; margin: 0; padding: 0; }
   .sc-embed-row {
     display: grid;
-    grid-template-columns: 1fr auto;
+    grid-template-columns: 1fr 1fr auto;
     gap: 12px; align-items: center;
     padding: 10px 0; border-bottom: 1px solid var(--divider-color, #e0e0e0);
   }
+  .sc-embed-model { color: var(--secondary-text-color); font-size: 13px; }
   .sc-embed-actions { display: flex; gap: 8px; }
   .sc-embed-actions button {
     appearance: none; border: 1px solid var(--divider-color, #e0e0e0);
