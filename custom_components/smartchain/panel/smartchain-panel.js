@@ -69,7 +69,9 @@ class SmartChainPanel extends HTMLElement {
     // through the same recomputation as a late-resolving admin user rather
     // than a second mechanism.
     this._refreshTabs();
-    this._propagateHass();
+    // Entries actually changed here — this is the one place besides mounting
+    // a tab where pushing them is warranted.
+    this._propagateEntries();
   }
 
   // `hass.user` can arrive after the first `hass` does, so a missing user
@@ -91,14 +93,27 @@ class SmartChainPanel extends HTMLElement {
     });
   }
 
+  // Home Assistant calls `set hass` on this element on *every* state change
+  // in the house — a burst of them when entities are added. `.hass` and
+  // `.entries` used to be pushed together here, which meant that burst
+  // repainted whichever tab was open on every single state change, and — far
+  // worse — rebuilt an open Create/Edit form (destroying whatever the user
+  // had typed) on every one too. `.hass` alone is cheap and each tab's own
+  // setter only forwards it, so it stays pushed on every update; `.entries`
+  // is split out into _propagateEntries and pushed only when it has a
+  // reason to (see call sites).
   _propagateHass() {
     // Only the visible tab is in the DOM, so this reaches whichever it is.
     for (const tab of TABS) {
       const el = this.querySelector(tab.tag);
-      if (el) {
-        el.hass = this._hass;
-        el.entries = this._overview.entries;
-      }
+      if (el) el.hass = this._hass;
+    }
+  }
+
+  _propagateEntries() {
+    for (const tab of TABS) {
+      const el = this.querySelector(tab.tag);
+      if (el) el.entries = this._overview.entries;
     }
   }
 
@@ -184,7 +199,10 @@ class SmartChainPanel extends HTMLElement {
     const tab = this._visibleTabs.find((t) => t.id === id);
     const body = this.querySelector(".sc-tab-body");
     body.innerHTML = tab ? `<${tab.tag}></${tab.tag}>` : "";
+    // A newly mounted tab has neither yet — this is the other legitimate
+    // reason (besides a genuine overview refetch) to push .entries.
     this._propagateHass();
+    this._propagateEntries();
   }
 }
 

@@ -34,8 +34,19 @@ export class ScSettingsTab extends HTMLElement {
   }
 
   set entries(val) {
+    // Home Assistant pushes `hass` on every state change; the shell must not
+    // turn that into a repaint. The overview array is a new object only when
+    // it has actually been refetched.
+    if (val === this._rawEntries) return;
+    this._rawEntries = val;
     this._entries = val || [];
-    if (this._rendered) this._paint();
+    if (!this._rendered) return;
+    // Never rebuild out from under the settings form the user might be
+    // filling in — it goes stale until the form closes (Save re-renders the
+    // form itself; there is no separate "editing" state to fall out of
+    // here, since the form is shown any time there is a resolved entry).
+    if (this.querySelector("sc-config-form")) return;
+    this._paint();
   }
 
   connectedCallback() {

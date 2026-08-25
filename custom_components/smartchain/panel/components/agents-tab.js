@@ -33,8 +33,22 @@ export class ScAgentsTab extends HTMLElement {
   }
 
   set entries(val) {
+    // Home Assistant pushes `hass` on every state change; the shell must not
+    // turn that into a repaint. The overview array is a new object only when
+    // it has actually been refetched.
+    if (val === this._rawEntries) return;
+    this._rawEntries = val;
     this._entries = val || [];
-    if (this._rendered) this._paint();
+    if (!this._rendered) return;
+    // Never rebuild out from under a form the user might be filling in.
+    // `_editing` (not DOM presence) is the right test: `sc-saved` clears it
+    // and repaints immediately itself, synchronously, before this setter's
+    // async trigger (the overview refetch it also requests) ever fires —
+    // checking DOM presence here instead would still see the old form
+    // mounted at that moment and wrongly skip the repaint that puts the
+    // list back.
+    if (this._editing) return;
+    this._paint();
   }
 
   connectedCallback() {
@@ -69,6 +83,10 @@ export class ScAgentsTab extends HTMLElement {
       form.entryId = this._editing.entryId;
       form.addEventListener("sc-saved", () => {
         this._editing = null;
+        // Close the form immediately with whatever entries we already have
+        // — do not wait on the round trip _requestRefresh() also kicks off
+        // for genuinely fresh data (which will repaint again once it lands).
+        this._paint();
         this._requestRefresh();
       });
       form.addEventListener("sc-cancelled", () => {
