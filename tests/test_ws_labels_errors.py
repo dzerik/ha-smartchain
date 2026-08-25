@@ -56,6 +56,56 @@ async def test_schema_serves_a_label_for_every_field(hass, hass_ws_client, entry
         assert labels[field["name"]], field["name"]
 
 
+async def test_schema_serves_a_description_for_every_field(hass, hass_ws_client, entry):
+    client = await hass_ws_client(hass)
+    await client.send_json_auto_id({"type": "smartchain/agent/schema", "entry_id": entry.entry_id})
+    msg = await client.receive_json()
+    assert msg["success"], msg
+
+    descriptions = msg["result"]["descriptions"]
+    for field in msg["result"]["schema"]:
+        assert field["name"] in descriptions, field["name"]
+        assert descriptions[field["name"]], field["name"]
+
+
+async def test_settings_schema_serves_a_description_for_every_field(hass, hass_ws_client, entry):
+    client = await hass_ws_client(hass)
+    await client.send_json_auto_id({"type": "smartchain/settings/get", "entry_id": entry.entry_id})
+    msg = await client.receive_json()
+    assert msg["success"], msg
+
+    descriptions = msg["result"]["descriptions"]
+    for field in msg["result"]["schema"]:
+        assert field["name"] in descriptions, field["name"]
+        assert descriptions[field["name"]], field["name"]
+
+
+async def test_an_untranslated_field_has_no_description_but_the_response_still_renders(
+    hass, hass_ws_client, entry
+):
+    """A field with no `data_description` must be absent from the map, not
+    fabricated — and the schema command must still succeed rather than break
+    on the gap, mirroring the fallback the panel applies to an empty string."""
+    from custom_components.smartchain.websocket_api import async_field_descriptions
+
+    prefix = "component.smartchain.config_subentries.conversation.step.user.data_description"
+    resources = {f"{prefix}.prompt": "What the model is told before every message."}
+    with patch(
+        "custom_components.smartchain.websocket_api.translation.async_get_translations",
+        return_value=resources,
+    ):
+        descriptions = await async_field_descriptions(hass, "config_subentries")
+
+    assert descriptions[CONF_PROMPT] == "What the model is told before every message."
+    assert CONF_MAX_TOKENS not in descriptions
+    assert CONF_CHAT_MODEL not in descriptions
+
+    client = await hass_ws_client(hass)
+    await client.send_json_auto_id({"type": "smartchain/agent/schema", "entry_id": entry.entry_id})
+    msg = await client.receive_json()
+    assert msg["success"], msg
+
+
 async def test_labels_are_translated_not_raw_names(hass, hass_ws_client, entry):
     """The whole point: 'model' must render as its English label, not as 'model'."""
     client = await hass_ws_client(hass)

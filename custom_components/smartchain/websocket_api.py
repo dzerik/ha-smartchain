@@ -85,6 +85,32 @@ async def _models_for(
     return cache[key]
 
 
+async def _async_field_texts(
+    hass: HomeAssistant, category: str, marker: str, *, subentry_type: str | None = None
+) -> dict[str, str]:
+    """Shared walk behind `async_field_labels` and `async_field_descriptions`.
+
+    Both are "translated text for the fields of one flow, not a whole
+    category" — one reading `.data.<field>` keys (labels), the other
+    `.data_description.<field>` keys (helper text). Only the marker differs,
+    so the scoping logic — the `subentry_type` prefix, the F1 story below —
+    lives once rather than twice.
+    """
+    resources = await translation.async_get_translations(
+        hass, hass.config.language, category, [DOMAIN]
+    )
+    prefix = f"component.{DOMAIN}.{category}.{subentry_type}." if subentry_type else None
+    texts: dict[str, str] = {}
+    for key, value in resources.items():
+        if prefix is not None and not key.startswith(prefix):
+            continue
+        index = key.rfind(marker)
+        if index == -1:
+            continue
+        texts.setdefault(key[index + len(marker) :], value)
+    return texts
+
+
 async def async_field_labels(
     hass: HomeAssistant, category: str, *, subentry_type: str | None = None
 ) -> dict[str, str]:
@@ -108,21 +134,28 @@ async def async_field_labels(
     the panel falls back to the raw name: a field added without a translation
     must still render.
     """
-    resources = await translation.async_get_translations(
-        hass, hass.config.language, category, [DOMAIN]
+    return await _async_field_texts(hass, category, ".data.", subentry_type=subentry_type)
+
+
+async def async_field_descriptions(
+    hass: HomeAssistant, category: str, *, subentry_type: str | None = None
+) -> dict[str, str]:
+    """Translated helper text for the fields of one flow, not a whole category.
+
+    The `data_description` counterpart to `async_field_labels` — same file,
+    same `subentry_type` scoping and the same reason it exists (F1): a
+    category-wide flatten would let the embeddings tab's `model` helper text
+    win, or lose, against the conversation tab's, depending on dict iteration
+    order. Reusing `_async_field_texts` rather than re-deriving that scoping
+    is the point, not just convenient — a second copy of the F1 fix is a
+    second place for it to silently stop applying.
+
+    Returns whatever it can. A field with no description is simply absent;
+    the panel falls back to an empty string so the form still renders.
+    """
+    return await _async_field_texts(
+        hass, category, ".data_description.", subentry_type=subentry_type
     )
-    prefix = f"component.{DOMAIN}.{category}.{subentry_type}." if subentry_type else None
-    labels: dict[str, str] = {}
-    for key, value in resources.items():
-        if prefix is not None and not key.startswith(prefix):
-            continue
-        # Keys look like `component.smartchain.<category>.….data.<field>`.
-        marker = ".data."
-        index = key.rfind(marker)
-        if index == -1:
-            continue
-        labels.setdefault(key[index + len(marker) :], value)
-    return labels
 
 
 @websocket_api.require_admin
@@ -175,6 +208,9 @@ async def ws_agent_schema(
             "schema": voluptuous_serialize.convert(schema, custom_serializer=cv.custom_serializer),
             "data": served,
             "labels": await async_field_labels(
+                hass, "config_subentries", subentry_type=SUBENTRY_TYPE_CONVERSATION
+            ),
+            "descriptions": await async_field_descriptions(
                 hass, "config_subentries", subentry_type=SUBENTRY_TYPE_CONVERSATION
             ),
         },
@@ -299,6 +335,7 @@ async def ws_settings_get(
             "schema": voluptuous_serialize.convert(schema, custom_serializer=cv.custom_serializer),
             "data": served,
             "labels": await async_field_labels(hass, "options"),
+            "descriptions": await async_field_descriptions(hass, "options"),
         },
     )
 
@@ -561,6 +598,9 @@ async def ws_embeddings_schema(
             "schema": voluptuous_serialize.convert(schema, custom_serializer=cv.custom_serializer),
             "data": served,
             "labels": await async_field_labels(
+                hass, "config_subentries", subentry_type=SUBENTRY_TYPE_EMBEDDINGS
+            ),
+            "descriptions": await async_field_descriptions(
                 hass, "config_subentries", subentry_type=SUBENTRY_TYPE_EMBEDDINGS
             ),
             # A memory store binds by title. Both fields let the panel warn

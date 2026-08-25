@@ -40,6 +40,7 @@ export class ScConfigForm extends HTMLElement {
     this._schema = null;
     this._data = {};
     this._labels = {};
+    this._descriptions = {};
     this._fieldErrors = null;
     this._showCancel = true;
     // Guards only the *automatic* load triggered by property arrival (see
@@ -117,6 +118,7 @@ export class ScConfigForm extends HTMLElement {
       this._schema = result.schema;
       this._data = result.data || {};
       this._labels = result.labels || {};
+      this._descriptions = result.descriptions || {};
       this._fieldErrors = null;
       this._apply();
       this.dispatchEvent(
@@ -239,6 +241,10 @@ export class ScConfigForm extends HTMLElement {
     // A field with no translation falls back to its raw name, so a field
     // added without one still renders.
     form.computeLabel = (field) => (this._labels && this._labels[field.name]) || field.name;
+    // A field with no description falls back to an empty string, not the raw
+    // name — unlike a missing label, missing helper text should just be
+    // absent rather than echo something meaningless under the field.
+    form.computeHelper = (field) => (this._descriptions && this._descriptions[field.name]) || "";
     form.computeError = (error) => error;
   }
 }

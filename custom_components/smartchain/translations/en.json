@@ -5,6 +5,9 @@
         "title": "SmartChain configuration - select engine",
         "data": {
           "engine": "LLM Engine"
+        },
+        "data_description": {
+          "engine": "The AI provider this SmartChain entry will use. Pick it once — each provider needs its own SmartChain entry, since credentials and available models differ between them."
         }
       },
       "gigachat": {
@@ -12,6 +15,10 @@
         "data": {
           "api_key": "Auth data",
           "skip_validation": "Skip validation"
+        },
+        "data_description": {
+          "api_key": "The Authorization key from your GigaChat project in the GigaChat console (a Base64 string, not your login and password). SmartChain uses it to request access tokens automatically.",
+          "skip_validation": "Skips the test connection to GigaChat when you save this step. Turn it on only if GigaChat is not reachable yet (e.g. the network or certificate isn't ready) — you'll find out about a wrong key only once you actually use the agent, not now."
         }
       },
       "yandexgpt": {
@@ -20,6 +27,11 @@
           "api_key": "API Key",
           "folder_id": "Folder ID",
           "skip_validation": "Skip validation"
+        },
+        "data_description": {
+          "api_key": "The API key created in Yandex Cloud for the service account that has access to YandexGPT. Used together with the Folder ID below to authenticate every request.",
+          "folder_id": "The ID of the Yandex Cloud folder that owns the API key above. Found on the folder's page in the Yandex Cloud console — with the wrong one, YandexGPT will reject every request.",
+          "skip_validation": "Skips the test connection to YandexGPT when you save this step. Turn it on only if the service is not reachable yet — a wrong key or folder ID will then only surface once you use the agent."
         }
       },
       "openai": {
@@ -28,6 +40,11 @@
           "api_key": "API Key",
           "base_url": "API base URL",
           "skip_validation": "Skip validation"
+        },
+        "data_description": {
+          "api_key": "Your OpenAI API key, created on the OpenAI platform. SmartChain sends it with every request to authenticate as you.",
+          "base_url": "The API endpoint SmartChain sends requests to. Leave the default unless you're routing through a proxy or a self-hosted OpenAI-compatible gateway.",
+          "skip_validation": "Skips the test connection to OpenAI when you save this step. Turn it on only if the endpoint is not reachable yet — a wrong key will then only surface once you use the agent."
         }
       },
       "ollama": {
@@ -35,6 +52,10 @@
         "data": {
           "base_url": "Base URL",
           "skip_validation": "Skip validation"
+        },
+        "data_description": {
+          "base_url": "The address of your Ollama server, including port (e.g. http://localhost:11434). SmartChain sends every request here, so it must be reachable from Home Assistant.",
+          "skip_validation": "Skips the test connection to Ollama when you save this step. Turn it on only if the server is not running yet or not reachable from Home Assistant at setup time."
         }
       },
       "deepseek": {
@@ -43,6 +64,11 @@
           "api_key": "API Key",
           "base_url": "API base URL",
           "skip_validation": "Skip validation"
+        },
+        "data_description": {
+          "api_key": "Your DeepSeek API key, created on the DeepSeek platform. SmartChain sends it with every request to authenticate as you.",
+          "base_url": "The API endpoint SmartChain sends requests to. Leave the default unless you're routing through a proxy or a self-hosted gateway.",
+          "skip_validation": "Skips the test connection to DeepSeek when you save this step. Turn it on only if the endpoint is not reachable yet — a wrong key will then only surface once you use the agent."
         }
       },
       "anthropic": {
@@ -50,6 +76,10 @@
         "data": {
           "api_key": "API Key",
           "skip_validation": "Skip validation"
+        },
+        "data_description": {
+          "api_key": "Your Anthropic API key, created in the Anthropic console. SmartChain sends it with every request to authenticate as you.",
+          "skip_validation": "Skips the test connection to Anthropic when you save this step. Turn it on only if the endpoint is not reachable yet — a wrong key will then only surface once you use the agent."
         }
       },
       "openrouter": {
@@ -58,6 +88,11 @@
           "api_key": "API Key",
           "base_url": "API base URL",
           "skip_validation": "Skip validation"
+        },
+        "data_description": {
+          "api_key": "Your OpenRouter API key, created on the OpenRouter dashboard. SmartChain sends it with every request to authenticate as you.",
+          "base_url": "The API endpoint SmartChain sends requests to. Leave the default unless you're routing through a proxy.",
+          "skip_validation": "Skips the test connection to OpenRouter when you save this step. Turn it on only if the endpoint is not reachable yet — a wrong key will then only surface once you use the agent."
         }
       },
       "groq": {
@@ -66,6 +101,11 @@
           "api_key": "API Key",
           "base_url": "API base URL",
           "skip_validation": "Skip validation"
+        },
+        "data_description": {
+          "api_key": "Your Groq API key, created on the Groq console. SmartChain sends it with every request to authenticate as you.",
+          "base_url": "The API endpoint SmartChain sends requests to. Leave the default unless you're routing through a proxy.",
+          "skip_validation": "Skips the test connection to Groq when you save this step. Turn it on only if the endpoint is not reachable yet — a wrong key will then only surface once you use the agent."
         }
       },
       "together": {
@@ -74,6 +114,11 @@
           "api_key": "API Key",
           "base_url": "API base URL",
           "skip_validation": "Skip validation"
+        },
+        "data_description": {
+          "api_key": "Your Together AI API key, created on the Together dashboard. SmartChain sends it with every request to authenticate as you.",
+          "base_url": "The API endpoint SmartChain sends requests to. Leave the default unless you're routing through a proxy.",
+          "skip_validation": "Skips the test connection to Together when you save this step. Turn it on only if the endpoint is not reachable yet — a wrong key will then only surface once you use the agent."
         }
       },
       "lmstudio": {
@@ -82,6 +127,11 @@
           "base_url": "Server URL",
           "api_key": "API Key (optional)",
           "skip_validation": "Skip validation"
+        },
+        "data_description": {
+          "base_url": "The address of your LM Studio local server, including port (e.g. http://localhost:1234/v1). SmartChain sends every request here, so it must be reachable from Home Assistant.",
+          "api_key": "Usually not needed for a local LM Studio server. Fill it in only if your server sits behind a proxy that requires one.",
+          "skip_validation": "Skips the test connection to LM Studio when you save this step. Turn it on only if the server is not running yet or not reachable from Home Assistant at setup time."
         }
       },
       "llamacpp": {
@@ -90,6 +140,11 @@
           "base_url": "Server URL",
           "api_key": "API Key (optional)",
           "skip_validation": "Skip validation"
+        },
+        "data_description": {
+          "base_url": "The address of your llama.cpp server, including port. SmartChain sends every request here, so it must be reachable from Home Assistant.",
+          "api_key": "Usually not needed for a local llama.cpp server. Fill it in only if your server sits behind a proxy that requires one.",
+          "skip_validation": "Skips the test connection to llama.cpp when you save this step. Turn it on only if the server is not running yet or not reachable from Home Assistant at setup time."
         }
       }
     },
@@ -126,6 +181,24 @@
           "dynamic_context_on_assist": "Also add matched entities when the Assist API is enabled",
           "allowed_tools": "Custom Tools (which YAML tools this agent may use)",
           "enable_multi_agent_tools": "Multi-Agent Tools (agent can ask sibling agents and request a second opinion)"
+        },
+        "data_description": {
+          "llm_hass_api": "Which Home Assistant Assist API(s) this agent can use to see and control your devices. Selecting one lets the agent call services like turning on lights; leaving it empty means the agent can only talk, not act.",
+          "prompt": "The system prompt sent to the model before every conversation — instructions on how the agent should behave, what tone to use, and what it knows about your home. Supports Jinja2 templates, so it can include live data such as the current time or entity states.",
+          "model": "The model to use, picked from the list SmartChain fetched from the provider. Leave the Custom Model Name field below empty to use this selection.",
+          "model_user": "Overrides the dropdown above with a model name typed by hand — for a model the provider offers but isn't in SmartChain's list, or a brand-new release it doesn't know about yet. Leave empty to use the dropdown selection instead.",
+          "temperature": "Controls how predictable the model's replies are. Lower values (near 0) give more focused, repeatable answers; higher values (near 1) give more varied, creative ones.",
+          "max_tokens": "The longest reply the model is allowed to generate, in tokens (roughly, word fragments). Leave empty to use the provider's own default; a low value can cut a reply off mid-sentence.",
+          "profanity": "GigaChat-specific. When on, GigaChat filters profanity from its own replies; when off, replies are returned unfiltered.",
+          "verify_ssl": "GigaChat-specific. When on, SmartChain verifies GigaChat's SSL certificate as usual. Turn it off only if you connect through a proxy with a self-signed certificate — doing so removes protection against a tampered connection.",
+          "process_builtin_sentences": "When on and no Assist API is selected above, Home Assistant's own built-in sentence matching gets first try at your message (e.g. simple commands like \"turn off the kitchen light\"), and only messages it can't handle reach the LLM. Off sends every message straight to the model.",
+          "chat_history": "When on, the agent remembers earlier messages in the same conversation, so follow-up questions work without repeating context. Off treats every message as a fresh conversation with no memory of what came before.",
+          "enable_history_tool": "Lets the agent look up how a device's state changed over the recent past (up to 24 hours) by calling a tool, instead of only seeing its current state. Useful for questions like \"was the door open earlier today\".",
+          "dynamic_entity_context": "Controls how the agent learns about your entities. On (default), it gets a compact map of the whole home plus a handful of entities relevant to the current message — smaller, cheaper prompts, at the cost of occasionally missing an obscure entity the map or the match didn't surface. Off sends the full entity list on every turn, like before — larger, slower and pricier, but the agent always sees everything.",
+          "dynamic_context_preset": "How much of the home the entity map and the per-message matches are allowed to cover, from minimal to paranoid — wider presets help the agent find more obscure entities but grow the prompt. Presence data (device trackers) is deliberately left out of every preset except maximal and paranoid, since it's the most sensitive data to hand to an outside model.",
+          "dynamic_context_on_assist": "Adds the entities matched to your message onto Assist requests as well, not just plain conversation. Off by default because this block does not respect Home Assistant's own \"expose to Assist\" setting — turning it on can let the agent name entities you specifically withheld from Assist.",
+          "allowed_tools": "Restricts which custom tools from tools.yaml this agent may call. Leave empty to allow every tool — an empty list here means \"all\", not \"none\".",
+          "enable_multi_agent_tools": "Lets this agent consult your other agents as sibling experts and ask one of them for a second opinion on its own answer. Only shown once you have two or more agents configured."
         }
       }
     }
@@ -157,6 +230,24 @@
             "dynamic_context_on_assist": "Also add matched entities when the Assist API is enabled",
             "allowed_tools": "Custom Tools (which YAML tools this agent may use)",
             "enable_multi_agent_tools": "Multi-Agent Tools (agent can ask sibling agents and request a second opinion)"
+          },
+          "data_description": {
+            "model": "The model to use, picked from the list SmartChain fetched from the provider. Leave the Custom Model Name field below empty to use this selection.",
+            "model_user": "Overrides the dropdown above with a model name typed by hand — for a model the provider offers but isn't in SmartChain's list, or a brand-new release it doesn't know about yet. Leave empty to use the dropdown selection instead.",
+            "llm_hass_api": "Which Home Assistant Assist API(s) this agent can use to see and control your devices. Selecting one lets the agent call services like turning on lights; leaving it empty means the agent can only talk, not act.",
+            "prompt": "The system prompt sent to the model before every conversation — instructions on how the agent should behave, what tone to use, and what it knows about your home. Supports Jinja2 templates, so it can include live data such as the current time or entity states.",
+            "temperature": "Controls how predictable the model's replies are. Lower values (near 0) give more focused, repeatable answers; higher values (near 1) give more varied, creative ones.",
+            "max_tokens": "The longest reply the model is allowed to generate, in tokens (roughly, word fragments). Leave empty to use the provider's own default; a low value can cut a reply off mid-sentence.",
+            "profanity": "GigaChat-specific. When on, GigaChat filters profanity from its own replies; when off, replies are returned unfiltered.",
+            "verify_ssl": "GigaChat-specific. When on, SmartChain verifies GigaChat's SSL certificate as usual. Turn it off only if you connect through a proxy with a self-signed certificate — doing so removes protection against a tampered connection.",
+            "process_builtin_sentences": "When on and no Assist API is selected above, Home Assistant's own built-in sentence matching gets first try at your message (e.g. simple commands like \"turn off the kitchen light\"), and only messages it can't handle reach the LLM. Off sends every message straight to the model.",
+            "chat_history": "When on, the agent remembers earlier messages in the same conversation, so follow-up questions work without repeating context. Off treats every message as a fresh conversation with no memory of what came before.",
+            "enable_history_tool": "Lets the agent look up how a device's state changed over the recent past (up to 24 hours) by calling a tool, instead of only seeing its current state. Useful for questions like \"was the door open earlier today\".",
+            "dynamic_entity_context": "Controls how the agent learns about your entities. On (default), it gets a compact map of the whole home plus a handful of entities relevant to the current message — smaller, cheaper prompts, at the cost of occasionally missing an obscure entity the map or the match didn't surface. Off sends the full entity list on every turn, like before — larger, slower and pricier, but the agent always sees everything.",
+            "dynamic_context_preset": "How much of the home the entity map and the per-message matches are allowed to cover, from minimal to paranoid — wider presets help the agent find more obscure entities but grow the prompt. Presence data (device trackers) is deliberately left out of every preset except maximal and paranoid, since it's the most sensitive data to hand to an outside model.",
+            "dynamic_context_on_assist": "Adds the entities matched to your message onto Assist requests as well, not just plain conversation. Off by default because this block does not respect Home Assistant's own \"expose to Assist\" setting — turning it on can let the agent name entities you specifically withheld from Assist.",
+            "allowed_tools": "Restricts which custom tools from tools.yaml this agent may call. Leave empty to allow every tool — an empty list here means \"all\", not \"none\".",
+            "enable_multi_agent_tools": "Lets this agent consult your other agents as sibling experts and ask one of them for a second opinion on its own answer. Only shown once you have two or more agents configured."
           }
         },
         "reconfigure": {
@@ -178,6 +269,24 @@
             "dynamic_context_on_assist": "Also add matched entities when the Assist API is enabled",
             "allowed_tools": "Custom Tools (which YAML tools this agent may use)",
             "enable_multi_agent_tools": "Multi-Agent Tools (agent can ask sibling agents and request a second opinion)"
+          },
+          "data_description": {
+            "model": "The model to use, picked from the list SmartChain fetched from the provider. Leave the Custom Model Name field below empty to use this selection.",
+            "model_user": "Overrides the dropdown above with a model name typed by hand — for a model the provider offers but isn't in SmartChain's list, or a brand-new release it doesn't know about yet. Leave empty to use the dropdown selection instead.",
+            "llm_hass_api": "Which Home Assistant Assist API(s) this agent can use to see and control your devices. Selecting one lets the agent call services like turning on lights; leaving it empty means the agent can only talk, not act.",
+            "prompt": "The system prompt sent to the model before every conversation — instructions on how the agent should behave, what tone to use, and what it knows about your home. Supports Jinja2 templates, so it can include live data such as the current time or entity states.",
+            "temperature": "Controls how predictable the model's replies are. Lower values (near 0) give more focused, repeatable answers; higher values (near 1) give more varied, creative ones.",
+            "max_tokens": "The longest reply the model is allowed to generate, in tokens (roughly, word fragments). Leave empty to use the provider's own default; a low value can cut a reply off mid-sentence.",
+            "profanity": "GigaChat-specific. When on, GigaChat filters profanity from its own replies; when off, replies are returned unfiltered.",
+            "verify_ssl": "GigaChat-specific. When on, SmartChain verifies GigaChat's SSL certificate as usual. Turn it off only if you connect through a proxy with a self-signed certificate — doing so removes protection against a tampered connection.",
+            "process_builtin_sentences": "When on and no Assist API is selected above, Home Assistant's own built-in sentence matching gets first try at your message (e.g. simple commands like \"turn off the kitchen light\"), and only messages it can't handle reach the LLM. Off sends every message straight to the model.",
+            "chat_history": "When on, the agent remembers earlier messages in the same conversation, so follow-up questions work without repeating context. Off treats every message as a fresh conversation with no memory of what came before.",
+            "enable_history_tool": "Lets the agent look up how a device's state changed over the recent past (up to 24 hours) by calling a tool, instead of only seeing its current state. Useful for questions like \"was the door open earlier today\".",
+            "dynamic_entity_context": "Controls how the agent learns about your entities. On (default), it gets a compact map of the whole home plus a handful of entities relevant to the current message — smaller, cheaper prompts, at the cost of occasionally missing an obscure entity the map or the match didn't surface. Off sends the full entity list on every turn, like before — larger, slower and pricier, but the agent always sees everything.",
+            "dynamic_context_preset": "How much of the home the entity map and the per-message matches are allowed to cover, from minimal to paranoid — wider presets help the agent find more obscure entities but grow the prompt. Presence data (device trackers) is deliberately left out of every preset except maximal and paranoid, since it's the most sensitive data to hand to an outside model.",
+            "dynamic_context_on_assist": "Adds the entities matched to your message onto Assist requests as well, not just plain conversation. Off by default because this block does not respect Home Assistant's own \"expose to Assist\" setting — turning it on can let the agent name entities you specifically withheld from Assist.",
+            "allowed_tools": "Restricts which custom tools from tools.yaml this agent may call. Leave empty to allow every tool — an empty list here means \"all\", not \"none\".",
+            "enable_multi_agent_tools": "Lets this agent consult your other agents as sibling experts and ask one of them for a second opinion on its own answer. Only shown once you have two or more agents configured."
           }
         }
       },
@@ -198,6 +307,11 @@
             "name": "Name",
             "model": "Embedding model",
             "model_user": "Custom model name (leave empty to use the list above)"
+          },
+          "data_description": {
+            "name": "A name for this embeddings binding, used to refer to it when connecting a memory store to it. Must be unique among your embeddings bindings.",
+            "model": "The embedding model to use, picked from the list SmartChain fetched from the provider. Leave Custom model name below empty to use this selection. If you change it later, every memory store and entity index bound to this binding needs to be re-indexed.",
+            "model_user": "Overrides the dropdown above with an embedding model name typed by hand — for a model the provider offers but isn't in SmartChain's list. Leave empty to use the dropdown selection instead."
           }
         },
         "reconfigure": {
@@ -206,6 +320,11 @@
             "name": "Name",
             "model": "Embedding model",
             "model_user": "Custom model name (leave empty to use the list above)"
+          },
+          "data_description": {
+            "name": "A name for this embeddings binding, used to refer to it when connecting a memory store to it. Must be unique among your embeddings bindings.",
+            "model": "The embedding model to use, picked from the list SmartChain fetched from the provider. Leave Custom model name below empty to use this selection. If you change it later, every memory store and entity index bound to this binding needs to be re-indexed.",
+            "model_user": "Overrides the dropdown above with an embedding model name typed by hand — for a model the provider offers but isn't in SmartChain's list. Leave empty to use the dropdown selection instead."
           }
         }
       },

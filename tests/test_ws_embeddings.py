@@ -181,6 +181,7 @@ async def test_schema_command_returns_renderable_fields(hass, hass_ws_client, en
     assert msg["success"], msg
     assert msg["result"]["schema"]
     assert msg["result"]["labels"]
+    assert msg["result"]["descriptions"]
     assert msg["result"]["bound_stores"] == []
     assert msg["result"]["title_taken_by"] is None
 
@@ -218,6 +219,41 @@ async def test_schema_serves_the_embeddings_label_not_the_conversation_one(
     assert labels["model_user"] == embeddings_data["model_user"]
     assert labels["model"] != conversation_data["model"]
     assert labels["model_user"] != conversation_data["model_user"]
+
+
+async def test_schema_serves_the_embeddings_description_not_the_conversation_one(
+    hass, hass_ws_client, entry
+):
+    """F1's description-map guise: `config_subentries` holds both conversation
+    and embeddings, which declare `model` and `model_user` with different
+    meanings. A category-wide flatten would let whichever type's
+    `data_description` the translation loader iterated first win for both
+    forms. Checked against the actual translations/en.json content, since two
+    descriptions can differ and both still be wrong.
+    """
+    client = await hass_ws_client(hass)
+    await client.send_json_auto_id(
+        {"type": "smartchain/embeddings/schema", "entry_id": entry.entry_id}
+    )
+    msg = await client.receive_json()
+    assert msg["success"], msg
+
+    descriptions = msg["result"]["descriptions"]
+    embeddings_data = _TRANSLATIONS_EN["config_subentries"]["embeddings"]["step"]["user"][
+        "data_description"
+    ]
+    conversation_data = _TRANSLATIONS_EN["config_subentries"]["conversation"]["step"]["user"][
+        "data_description"
+    ]
+    # The file itself must actually diverge, or this test would prove nothing.
+    assert embeddings_data["model"] != conversation_data["model"]
+    assert embeddings_data["model_user"] != conversation_data["model_user"]
+
+    assert descriptions["name"] == embeddings_data["name"]
+    assert descriptions["model"] == embeddings_data["model"]
+    assert descriptions["model_user"] == embeddings_data["model_user"]
+    assert descriptions["model"] != conversation_data["model"]
+    assert descriptions["model_user"] != conversation_data["model_user"]
 
 
 async def test_save_uses_the_embeddings_model_purpose(hass, hass_ws_client, entry, _models):
