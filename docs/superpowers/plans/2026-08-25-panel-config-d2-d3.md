@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Finish subsystem D — settings and embeddings tabs, a read-only `tools.yaml` view, translated field labels, and per-field validation errors.
+**Goal:** Finish subsystem D — settings and embeddings tabs, a read-only `tools.yaml` view, translated field labels, and validation messages that name the offending field.
 
 **Architecture:** Everything reuses D1's pipeline: the backend serialises the config flow's own `vol.Schema` and `<ha-form>` renders it. Settings point that pipeline at `entry.options` instead of a subentry; embeddings point it at a second, smaller schema. `tools.yaml` is served as raw text and validated with the loader the integration already uses. `agent-form.js` is generalised into one form component rather than copied per tab.
 
@@ -42,7 +42,7 @@
 | `custom_components/smartchain/websocket_api.py` | All new commands; labels and error helpers | 1–4 |
 | `custom_components/smartchain/config_flow.py` | One rename | 3 |
 | `custom_components/smartchain/tools/memory/registry.py` | One public method | 3 |
-| `tests/test_ws_labels_errors.py` | Labels and per-field errors (new) | 1 |
+| `tests/test_ws_labels_errors.py` | Labels and error messages (new) | 1 |
 | `tests/test_ws_settings.py` | Settings commands (new) | 2 |
 | `tests/test_ws_embeddings.py` | Embeddings commands and title hazards (new) | 3 |
 | `tests/test_ws_tools.py` | tools.yaml commands and secret containment (new) | 4 |
@@ -53,7 +53,7 @@
 
 ---
 
-### Task 1: Labels and per-field errors
+### Task 1: Labels and field-naming error messages
 
 These are D1's two deferred debts. Doing them first means every command added later inherits them rather than retrofitting three times.
 
@@ -62,7 +62,7 @@ These are D1's two deferred debts. Doing them first means every command added la
 - Test: `tests/test_ws_labels_errors.py` (create)
 
 **Interfaces:**
-- Produces: `async_field_labels(hass, category) -> dict[str, str]`; `_invalid_data_error(connection, msg_id, err)` sending both a flat message and a per-field `errors` map. `smartchain/agent/schema` gains a `labels` key; `smartchain/agent/save` gains `errors` in its error payload.
+- Produces: `async_field_labels(hass, category) -> dict[str, str]` and `_describe_invalid(err) -> str`. `smartchain/agent/schema` gains a `labels` key. `smartchain/agent/save` keeps D1's `send_error(..., "invalid_data", ...)` contract unchanged; only the message improves, to name the offending field.
 
 - [ ] **Step 1: Write the failing test**
 
