@@ -1,5 +1,5 @@
 /**
- * SmartChain Panel — Design tokens & shared styles for the camera tab.
+ * SmartChain Panel — Design tokens & shared styles for every tab.
  */
 export const SC_STYLES = `
   :host { display: block; }
@@ -152,7 +152,7 @@ export const SC_STYLES = `
     color: var(--primary-text-color, #212121);
   }
   sc-camera-tab { display: block; max-width: 800px; margin: 0 auto; }
-  sc-agents-tab { display: block; max-width: 1100px; margin: 0 auto; }
+  sc-agents-tab, sc-embeddings-tab, sc-settings-tab, sc-tools-tab { display: block; max-width: 1100px; margin: 0 auto; }
 
   /* ========== Agents Tab ========== */
   .sc-entry { margin-bottom: 24px; }
@@ -186,5 +186,73 @@ export const SC_STYLES = `
   .sc-empty { color: var(--secondary-text-color); font-size: 14px; }
   @media (max-width: 600px) {
     .sc-agent-row { grid-template-columns: 1fr; gap: 4px; }
+  }
+
+  /* ========== Embeddings Tab ========== */
+  .sc-embed-list { list-style: none; margin: 0; padding: 0; }
+  .sc-embed-row {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 12px; align-items: center;
+    padding: 10px 0; border-bottom: 1px solid var(--divider-color, #e0e0e0);
+  }
+  .sc-embed-actions { display: flex; gap: 8px; }
+  .sc-embed-actions button {
+    appearance: none; border: 1px solid var(--divider-color, #e0e0e0);
+    background: none; border-radius: 6px; padding: 4px 10px;
+    font-size: 13px; color: var(--primary-text-color); cursor: pointer;
+  }
+  .sc-embed-actions button:hover {
+    border-color: var(--primary-color, #03a9f4);
+    color: var(--primary-color, #03a9f4);
+  }
+  @media (max-width: 600px) {
+    .sc-embed-row { grid-template-columns: 1fr; gap: 4px; }
+  }
+
+  /* ========== Settings Tab ========== */
+  .sc-entry-picker { list-style: none; margin: 0; padding: 0; }
+  .sc-entry-picker li { margin-bottom: 8px; }
+  .sc-entry-pick {
+    display: flex; align-items: center; gap: 12px; width: 100%;
+    appearance: none; border: 1px solid var(--divider-color, #e0e0e0);
+    background: var(--card-background-color, #fff); border-radius: var(--sc-radius-sm);
+    padding: 12px 16px; font-size: 14px; color: var(--primary-text-color);
+    cursor: pointer; text-align: left;
+  }
+  .sc-entry-pick:hover { border-color: var(--primary-color, #03a9f4); }
+  .sc-entry-pick .sc-entry-engine { margin-left: auto; }
+
+  /* ========== Tools Tab ========== */
+  .sc-tools-head {
+    display: flex; align-items: center; gap: 12px;
+    padding-bottom: 12px; margin-bottom: 12px;
+    border-bottom: 1px solid var(--divider-color, #e0e0e0);
+  }
+  .sc-tools-path {
+    font-family: var(--code-font-family, monospace);
+    font-size: 13px; color: var(--secondary-text-color);
+    overflow-wrap: anywhere;
+  }
+  .sc-tools-spacer { flex: 1; }
+  .sc-tools-text {
+    margin: 0;
+    padding: 16px;
+    font-family: var(--code-font-family, monospace);
+    font-size: 13px;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    overflow-x: auto;
+    background: var(--code-editor-background-color, #1e1e1e);
+    color: #d4d4d4;
+    border-radius: var(--sc-radius-md);
+    /* Read-only display, not a form field: no border, no focus ring, no
+       cursor affordance that would invite editing. */
+    user-select: text;
+  }
+  .sc-tools-error {
+    display: flex; align-items: center; gap: 8px;
+    color: var(--error-color, #f44336);
+    font-size: 14px;
   }
 `;

@@ -1,9 +1,24 @@
+import { callWS, showToast } from "./services.js";
 import { SC_STYLES } from "./styles.js";
 import "./components/camera-tab.js";
 import "./components/agents-tab.js";
+import "./components/settings-tab.js";
+import "./components/embeddings-tab.js";
+import "./components/tools-tab.js";
 
 const TABS = [
   { id: "agents", label: "Agents", tag: "sc-agents-tab", adminOnly: true },
+  {
+    id: "embeddings",
+    label: "Embeddings",
+    tag: "sc-embeddings-tab",
+    adminOnly: true,
+    // Hidden entirely when no configured entry can embed — there would be
+    // nothing this tab could ever let a user do.
+    hiddenUnless: (overview) => overview.entries.some((entry) => entry.supports_embeddings),
+  },
+  { id: "settings", label: "Settings", tag: "sc-settings-tab", adminOnly: true },
+  { id: "tools", label: "Tools", tag: "sc-tools-tab", adminOnly: true },
   { id: "camera", label: "Camera", tag: "sc-camera-tab" },
 ];
 
@@ -17,6 +32,7 @@ class SmartChainPanel extends HTMLElement {
     this._initialized = false;
     this._active = null;
     this._visibleTabs = [];
+    this._overview = { entries: [] };
   }
 
   set panel(panel) {
@@ -24,6 +40,7 @@ class SmartChainPanel extends HTMLElement {
   }
 
   set hass(hass) {
+    const first = !this._hass;
     this._hass = hass;
     if (!this._initialized) {
       this._initialize();
@@ -32,26 +49,56 @@ class SmartChainPanel extends HTMLElement {
       this._refreshTabs();
     }
     this._propagateHass();
+    if (first) this._loadOverview();
+  }
+
+  // The overview (every SmartChain entry, its agents and its
+  // supports_embeddings flag) is fetched exactly once here, not by each tab
+  // that needs it — Agents, Embeddings and Settings all read it via
+  // `.entries`. A tab that mutates it (agent create/edit/duplicate/delete)
+  // asks for a fresh copy by dispatching `sc-overview-refresh` rather than
+  // fetching it again itself.
+  async _loadOverview() {
+    try {
+      this._overview = await callWS(this._hass, "smartchain/overview");
+    } catch (err) {
+      showToast(err.message || "Could not load the SmartChain overview", "error");
+      this._overview = { entries: [] };
+    }
+    // Embeddings' visibility depends on this data resolving, so it goes
+    // through the same recomputation as a late-resolving admin user rather
+    // than a second mechanism.
+    this._refreshTabs();
+    this._propagateHass();
   }
 
   // `hass.user` can arrive after the first `hass` does, so a missing user
   // reads as non-admin — the tab list is recomputed on every later `hass`
   // update via `_refreshTabs`, so an admin who resolves late still gets
-  // the Agents tab; a non-admin never sees it, even briefly.
+  // the Agents tab; a non-admin never sees it, even briefly. The overview
+  // fetch resolving late is the same shape of problem for Embeddings' extra
+  // visibility condition.
   _isAdmin() {
     return !!(this._hass && this._hass.user && this._hass.user.is_admin);
   }
 
   _visibleTabList() {
     const admin = this._isAdmin();
-    return TABS.filter((tab) => !tab.adminOnly || admin);
+    return TABS.filter((tab) => {
+      if (tab.adminOnly && !admin) return false;
+      if (tab.hiddenUnless && !tab.hiddenUnless(this._overview)) return false;
+      return true;
+    });
   }
 
   _propagateHass() {
     // Only the visible tab is in the DOM, so this reaches whichever it is.
     for (const tab of TABS) {
       const el = this.querySelector(tab.tag);
-      if (el) el.hass = this._hass;
+      if (el) {
+        el.hass = this._hass;
+        el.entries = this._overview.entries;
+      }
     }
   }
 
@@ -62,6 +109,10 @@ class SmartChainPanel extends HTMLElement {
       <div class="sc-tab-body" role="tabpanel" id="${TAB_PANEL_ID}"></div>
     `;
     this.querySelector(".sc-tabs").addEventListener("keydown", (ev) => this._onTabKeydown(ev));
+    // A tab that mutates the overview (agent create/edit/duplicate/delete)
+    // asks for a fresh copy this way — the shell stays the overview's one
+    // owner rather than each tab re-fetching it independently.
+    this.addEventListener("sc-overview-refresh", () => this._loadOverview());
     this._visibleTabs = this._visibleTabList();
     this._active = this._visibleTabs[0]?.id;
     this._buildBar();
