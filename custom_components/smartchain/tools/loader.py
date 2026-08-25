@@ -92,10 +92,14 @@ def load_tools_file(path: Path, config_dir: Path | None = None) -> LoaderResult:
         if name in seen:
             LOGGER.error("Duplicate tool name %s in tools.yaml; skipping later entry", name)
             continue
-        seen.add(name)
+        # Skip before claiming the name. A disabled tool does not exist for this
+        # run, so it must not reserve its name against an enabled one — otherwise
+        # switching a tool off and adding its replacement under the same name
+        # silently drops the replacement as a duplicate.
         if not entry.get("enabled", True):
             disabled_count += 1
             continue
+        seen.add(name)
         out.append(
             CustomTool(
                 name=name,

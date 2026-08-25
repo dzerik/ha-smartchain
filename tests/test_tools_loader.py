@@ -182,3 +182,30 @@ def test_missing_secret_raises_without_leaking_any_secret_value(tmp_path: Path) 
     message = str(exc.value)
     assert "pg_dsn" in message
     assert "SUPERSECRETVALUE" not in message
+
+
+def test_a_disabled_tool_does_not_reserve_its_name(tmp_path) -> None:
+    """Switching a tool off and adding its replacement under the same name must
+    keep the replacement.
+
+    The duplicate check used to claim the name before the `enabled` check ran,
+    so the disabled entry shadowed the live one and the replacement vanished
+    with only a "duplicate tool name" line in the log to explain it.
+    """
+    path = tmp_path / "tools.yaml"
+    path.write_text(
+        "tools:\n"
+        "  - name: weather\n"
+        "    enabled: false\n"
+        "    description: the old one, switched off\n"
+        "    parameters: { type: object, properties: {} }\n"
+        "    action: { type: template, value_template: old }\n"
+        "  - name: weather\n"
+        "    description: the replacement\n"
+        "    parameters: { type: object, properties: {} }\n"
+        "    action: { type: template, value_template: new }\n"
+    )
+    result = load_tools_file(path)
+    names = [t.name for t in result.yaml_tools]
+    assert names == ["weather"]
+    assert result.yaml_tools[0].description == "the replacement"

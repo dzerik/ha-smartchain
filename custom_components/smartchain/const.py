@@ -306,6 +306,12 @@ CONF_ALLOWED_TOOLS = "allowed_tools"
 SERVICE_RELOAD_TOOLS = "reload_tools"
 EVENT_TOOLS_RELOADED = f"{DOMAIN}_tools_reloaded"
 TOOL_NAME_PATTERN = r"^[a-z_][a-z0-9_]*$"
+
+# Label for the "all tools" option in the allowed_tools picker. It lives here
+# rather than in translations/*.json because `subentry_schema` is synchronous
+# and `async_get_translations` is not — and the label has to be baked into the
+# schema, which Home Assistant's own dialog renders verbatim.
+ALL_TOOLS_LABELS = {"en": "All tools", "ru": "Все инструменты"}
 # Sentinel meaning "every custom tool" in an `allowed_tools` selection. `*`
 # cannot collide with a real tool name (TOOL_NAME_PATTERN forbids it), unlike
 # `__all__`, which is a legal tool name and must never be used here.
