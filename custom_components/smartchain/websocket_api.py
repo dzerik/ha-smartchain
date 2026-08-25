@@ -38,6 +38,8 @@ def async_register(hass: HomeAssistant) -> None:
     """Register every panel command."""
     websocket_api.async_register_command(hass, ws_agent_schema)
     websocket_api.async_register_command(hass, ws_agent_save)
+    websocket_api.async_register_command(hass, ws_settings_get)
+    websocket_api.async_register_command(hass, ws_settings_save)
     websocket_api.async_register_command(hass, ws_agent_duplicate)
     websocket_api.async_register_command(hass, ws_agent_delete)
     websocket_api.async_register_command(hass, ws_overview)
@@ -226,6 +228,93 @@ async def ws_agent_save(
 
     hass.config_entries.async_update_subentry(entry, subentry, data=data, title=title)
     connection.send_result(msg["id"], {"subentry_id": subentry.subentry_id})
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "smartchain/settings/get",
+        vol.Required("entry_id"): str,
+        vol.Optional("refresh", default=False): bool,
+    }
+)
+@websocket_api.async_response
+async def ws_settings_get(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Serve the entry's options form — the same schema the agent form uses."""
+    from .config_flow import subentry_schema
+
+    entry = _get_entry(hass, msg["entry_id"])
+    if entry is None:
+        connection.send_error(msg["id"], "not_found", "Unknown config entry")
+        return
+
+    defaults = dict(entry.options)
+    models = await _models_for(hass, entry, refresh=msg["refresh"], purpose=CAPABILITY_CHAT)
+    schema = subentry_schema(hass, entry.unique_id, defaults, models=models)
+
+    # Same trap as ws_agent_schema (see F1): the schema is conditional, so a
+    # stale option key it no longer declares must not be served — <ha-form>
+    # would echo it back and PREVENT_EXTRA in ws_settings_save would reject it
+    # forever.
+    declared = {str(key.schema) for key in schema.schema}
+    served = {name: value for name, value in defaults.items() if name in declared}
+
+    connection.send_result(
+        msg["id"],
+        {
+            "schema": voluptuous_serialize.convert(schema, custom_serializer=cv.custom_serializer),
+            "data": served,
+            "labels": await async_field_labels(hass, "options"),
+        },
+    )
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "smartchain/settings/save",
+        vol.Required("entry_id"): str,
+        vol.Required("data"): dict,
+    }
+)
+@websocket_api.async_response
+async def ws_settings_save(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Save the entry's options, validating exactly as the agent form does.
+
+    Written with ``options=``, never ``data=`` — ``entry.data`` is where the
+    provider credential lives.
+    """
+    from .config_flow import normalize_model_input, subentry_schema
+
+    entry = _get_entry(hass, msg["entry_id"])
+    if entry is None:
+        connection.send_error(msg["id"], "not_found", "Unknown config entry")
+        return
+
+    models = await _models_for(hass, entry, refresh=False, purpose=CAPABILITY_CHAT)
+    schema = subentry_schema(hass, entry.unique_id, dict(entry.options), models=models)
+
+    try:
+        data = dict(schema(dict(msg["data"])))
+    except vol.Invalid as err:
+        connection.send_error(msg["id"], "invalid_data", _describe_invalid(err))
+        return
+
+    error = normalize_model_input(data)
+    if error:
+        connection.send_error(msg["id"], "invalid_data", error)
+        return
+
+    hass.config_entries.async_update_entry(entry, options=data)
+    connection.send_result(msg["id"], {"entry_id": entry.entry_id})
 
 
 def _resolve_agent(
