@@ -289,4 +289,62 @@ export const SC_STYLES = `
     color: var(--secondary-text-color);
     background: var(--primary-background-color, #fafafa);
   }
+  .sc-tools-editor::placeholder {
+    color: #6a6a6a;
+    opacity: 1;
+  }
+  .sc-tools-help {
+    margin-bottom: 12px;
+    border: 1px solid var(--divider-color, #e0e0e0);
+    border-radius: var(--sc-radius-sm);
+    background: var(--card-background-color, #fff);
+  }
+  .sc-tools-help summary {
+    padding: 10px 14px;
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--primary-text-color);
+    cursor: pointer;
+    user-select: none;
+  }
+  .sc-tools-help summary:hover { color: var(--primary-color, #03a9f4); }
+  .sc-tools-help-body {
+    padding: 4px 16px 16px;
+    border-top: 1px solid var(--divider-color, #e0e0e0);
+  }
+  .sc-tools-help-body section { margin-top: 16px; }
+  .sc-tools-help-body h4 {
+    margin: 0 0 6px 0;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--primary-text-color);
+  }
+  .sc-tools-help-body p {
+    margin: 0 0 8px 0;
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--secondary-text-color);
+  }
+  .sc-tools-help-body code {
+    font-family: var(--code-font-family, monospace);
+    font-size: 12px;
+    background: var(--primary-background-color, #fafafa);
+    padding: 1px 4px;
+    border-radius: 4px;
+  }
+  .sc-tools-help-body pre {
+    margin: 0;
+    padding: 12px 14px;
+    overflow-x: auto;
+    background: var(--code-editor-background-color, #1e1e1e);
+    border-radius: var(--sc-radius-sm);
+  }
+  .sc-tools-help-body pre code {
+    background: none;
+    padding: 0;
+    color: #d4d4d4;
+    font-size: 12px;
+    line-height: 1.6;
+    white-space: pre;
+  }
 `;
