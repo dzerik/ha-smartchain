@@ -25,6 +25,7 @@ from homeassistant.helpers import translation
 
 from .client_util import async_fetch_models, supports
 from .const import (
+    ALL_TOOLS_SENTINEL,
     CAPABILITY_CHAT,
     CAPABILITY_EMBEDDINGS,
     CONF_ALLOWED_TOOLS,
@@ -525,13 +526,15 @@ def _describe_agent(subentry: Any) -> dict[str, Any]:
     data = subentry.data
     model = (data.get(CONF_CHAT_MODEL_USER) or "").strip() or data.get(CONF_CHAT_MODEL, "")
     allowed = data.get(CONF_ALLOWED_TOOLS)
+    # None (never touched) and the sentinel (explicitly "all tools") both mean
+    # every tool; the panel shows "all tools" rather than a count it cannot
+    # know without building the registry.
+    all_tools = allowed is None or ALL_TOOLS_SENTINEL in allowed
     return {
         "subentry_id": subentry.subentry_id,
         "title": subentry.title,
         "model": model,
-        # None means "every tool"; the panel shows a dash rather than a count it
-        # cannot know without building the registry.
-        "tool_count": len(allowed) if allowed is not None else None,
+        "tool_count": None if all_tools else len(allowed),
     }
 
 

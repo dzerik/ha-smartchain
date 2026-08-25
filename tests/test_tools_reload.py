@@ -45,6 +45,37 @@ async def test_reload_loads_yaml_and_fires_event(hass: HomeAssistant, tools_dir:
     assert events[0].data["count"] == 1
 
 
+async def test_reload_count_excludes_disabled_tools(hass: HomeAssistant, tools_dir: Path) -> None:
+    """The reloaded event's `count` reflects only what actually loaded — a
+    disabled tool must not be counted, must not be dispatchable, and must not
+    appear in the registry's names()."""
+    (tools_dir / "tools.yaml").write_text(
+        "tools:\n"
+        "  - name: ping\n"
+        "    description: x\n"
+        "    parameters: { type: object, properties: {} }\n"
+        "    action: { type: template, value_template: pong }\n"
+        "  - name: off_tool\n"
+        "    description: turned off while debugging\n"
+        "    parameters: { type: object, properties: {} }\n"
+        "    action: { type: template, value_template: pong }\n"
+        "    enabled: false\n"
+    )
+    await async_setup(hass, {})
+
+    events = []
+    hass.bus.async_listen(EVENT_TOOLS_RELOADED, lambda e: events.append(e))
+
+    await hass.services.async_call(DOMAIN, SERVICE_RELOAD_TOOLS, {}, blocking=True)
+    await hass.async_block_till_done()
+
+    registry = hass.data[DOMAIN]["tools"]
+    assert events[0].data["count"] == 1
+    assert registry.get("ping") is not None
+    assert registry.get("off_tool") is None
+    assert "off_tool" not in registry.names()
+
+
 async def test_reload_invalid_yaml_raises_and_keeps_old(
     hass: HomeAssistant, tools_dir: Path
 ) -> None:

@@ -8,6 +8,7 @@ from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.smartchain.const import (
+    ALL_TOOLS_SENTINEL,
     CONF_ALLOWED_TOOLS,
     CONF_API_KEY,
     CONF_CHAT_MODEL,
@@ -201,6 +202,34 @@ async def test_tool_count_counts_a_restricted_list(hass, hass_ws_client):
 
     agent = msg["result"]["entries"][0]["agents"][0]
     assert agent["tool_count"] == 2
+
+
+async def test_tool_count_is_none_for_the_all_tools_sentinel(hass, hass_ws_client):
+    """`["*"]` means "all tools", so the panel must show it the same way it
+    shows `None` (never touched) — a count of 1 would be wrong and misleading."""
+    await async_setup_component(hass, DOMAIN, {})
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_ENGINE: ID_OPENAI, CONF_API_KEY: "k"},
+        unique_id=UNIQUE_ID_OPENAI,
+        title=UNIQUE_ID_OPENAI,
+        subentries_data=[
+            ConfigSubentryData(
+                data={CONF_CHAT_MODEL: "gpt-4.1-mini", CONF_ALLOWED_TOOLS: [ALL_TOOLS_SENTINEL]},
+                subentry_type=SUBENTRY_TYPE_CONVERSATION,
+                title="All Tools",
+                unique_id=None,
+            )
+        ],
+    )
+    entry.add_to_hass(hass)
+
+    client = await hass_ws_client(hass)
+    await client.send_json_auto_id({"type": "smartchain/overview"})
+    msg = await client.receive_json()
+
+    agent = msg["result"]["entries"][0]["agents"][0]
+    assert agent["tool_count"] is None
 
 
 async def test_agents_excludes_non_conversation_subentries(hass, hass_ws_client):

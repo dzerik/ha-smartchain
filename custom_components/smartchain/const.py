@@ -306,6 +306,10 @@ CONF_ALLOWED_TOOLS = "allowed_tools"
 SERVICE_RELOAD_TOOLS = "reload_tools"
 EVENT_TOOLS_RELOADED = f"{DOMAIN}_tools_reloaded"
 TOOL_NAME_PATTERN = r"^[a-z_][a-z0-9_]*$"
+# Sentinel meaning "every custom tool" in an `allowed_tools` selection. `*`
+# cannot collide with a real tool name (TOOL_NAME_PATTERN forbids it), unlike
+# `__all__`, which is a legal tool name and must never be used here.
+ALL_TOOLS_SENTINEL = "*"
 
 # MCP client (v4.2.0)
 MCP_RECONNECT_INITIAL_DELAY = 1.0  # seconds

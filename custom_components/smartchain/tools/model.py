@@ -68,6 +68,7 @@ class CustomTool:
     description: str
     parameters: dict[str, Any]
     action: ToolAction
+    enabled: bool = True
 
     def to_llm_schema(self) -> dict[str, Any]:
         """Render this tool in the schema shape accepted by LangChain bind_tools."""

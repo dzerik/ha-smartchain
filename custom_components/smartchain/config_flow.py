@@ -28,6 +28,7 @@ from httpx import ConnectError
 
 from .client_util import async_fetch_models, supports, validate_client
 from .const import (
+    ALL_TOOLS_SENTINEL,
     CAPABILITY_EMBEDDINGS,
     CONF_ALLOWED_TOOLS,
     CONF_API_KEY,
@@ -526,6 +527,10 @@ def subentry_schema(
         )
     registry = hass.data.get(DOMAIN, {}).get("tools")
     if registry is not None and len(registry) > 0:
+        tool_options: list[selector.SelectOptionDict] = [
+            selector.SelectOptionDict(value=ALL_TOOLS_SENTINEL, label="All tools"),
+            *(selector.SelectOptionDict(value=name, label=name) for name in registry.names()),
+        ]
         schema = schema.extend(
             {
                 vol.Optional(
@@ -533,7 +538,7 @@ def subentry_schema(
                     description={"suggested_value": options.get(CONF_ALLOWED_TOOLS)},
                 ): selector.SelectSelector(
                     selector.SelectSelectorConfig(
-                        options=registry.names(),
+                        options=tool_options,
                         multiple=True,
                         mode=SelectSelectorMode("list"),
                     ),

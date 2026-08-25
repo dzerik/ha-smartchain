@@ -73,6 +73,31 @@ def test_tool_schema_rejects_bad_name() -> None:
         TOOL_SCHEMA(raw)
 
 
+def test_tool_schema_enabled_defaults_true_when_omitted() -> None:
+    """`enabled` is optional; omitting it must not disable the tool."""
+    raw = {
+        "name": "ping",
+        "description": "say pong",
+        "parameters": {"type": "object", "properties": {}},
+        "action": {"type": "template", "value_template": "pong"},
+    }
+    validated = TOOL_SCHEMA(raw)
+    assert validated["enabled"] is True
+
+
+def test_tool_schema_accepts_explicit_enabled_false() -> None:
+    """`enabled: false` validates and is preserved."""
+    raw = {
+        "name": "ping",
+        "description": "say pong",
+        "parameters": {"type": "object", "properties": {}},
+        "action": {"type": "template", "value_template": "pong"},
+        "enabled": False,
+    }
+    validated = TOOL_SCHEMA(raw)
+    assert validated["enabled"] is False
+
+
 def test_tool_schema_rejects_unknown_action_type() -> None:
     """Unknown action types are rejected."""
     raw = {

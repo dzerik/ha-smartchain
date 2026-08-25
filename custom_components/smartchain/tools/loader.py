@@ -83,6 +83,7 @@ def load_tools_file(path: Path, config_dir: Path | None = None) -> LoaderResult:
 
     out: list[CustomTool] = []
     seen: set[str] = set()
+    disabled_count = 0
     for entry in validated["tools"]:
         name = entry["name"]
         if name in RESERVED_TOOL_NAMES:
@@ -92,14 +93,20 @@ def load_tools_file(path: Path, config_dir: Path | None = None) -> LoaderResult:
             LOGGER.error("Duplicate tool name %s in tools.yaml; skipping later entry", name)
             continue
         seen.add(name)
+        if not entry.get("enabled", True):
+            disabled_count += 1
+            continue
         out.append(
             CustomTool(
                 name=name,
                 description=entry["description"],
                 parameters=entry["parameters"],
                 action=_action_from_dict(entry["action"]),
+                enabled=True,
             )
         )
+    if disabled_count:
+        LOGGER.info("Skipped %d disabled tool(s) in tools.yaml", disabled_count)
     return LoaderResult(
         yaml_tools=out,
         mcp_servers=_servers_from_validated(validated),

@@ -299,3 +299,49 @@ async def test_models_are_cached_until_refresh_is_asked_for(hass, hass_ws_client
         )
         await client.receive_json()
         assert fetch.call_count == 2
+
+
+async def test_allowed_tools_picker_lists_the_sentinel_first(hass, hass_ws_client, entry):
+    """The `allowed_tools` picker must offer the "all tools" sentinel as its
+    first option, ahead of every real tool name, and the sentinel value must
+    be unreachable by a real tool (TOOL_NAME_PATTERN forbids `*`).
+
+    Goes through the same `smartchain/agent/schema` websocket command the
+    panel actually uses (mirroring `test_schema_command_returns_renderable_fields`),
+    rather than calling `subentry_schema` directly.
+    """
+    import re
+
+    from custom_components.smartchain.const import ALL_TOOLS_SENTINEL, DOMAIN, TOOL_NAME_PATTERN
+    from custom_components.smartchain.tools.model import CustomTool
+    from custom_components.smartchain.tools.model import TemplateAction as _Template
+
+    registry = hass.data[DOMAIN]["tools"]
+    registry.add(
+        CustomTool(
+            name="ping",
+            description="x",
+            parameters={"type": "object", "properties": {}},
+            action=_Template(value_template="pong"),
+        )
+    )
+
+    client = await hass_ws_client(hass)
+    with patch(
+        "custom_components.smartchain.websocket_api.async_fetch_models",
+        return_value=["", "gpt-4.1-mini"],
+    ):
+        await client.send_json_auto_id(
+            {"type": "smartchain/agent/schema", "entry_id": entry.entry_id}
+        )
+        msg = await client.receive_json()
+
+    assert msg["success"], msg
+    field = next(f for f in msg["result"]["schema"] if f["name"] == "allowed_tools")
+    options = field["selector"]["select"]["options"]
+
+    assert options[0]["value"] == ALL_TOOLS_SENTINEL
+    assert options[0]["label"]
+    assert [o["value"] for o in options[1:]] == ["ping"]
+    # The sentinel cannot collide with any real tool name.
+    assert not re.match(TOOL_NAME_PATTERN, ALL_TOOLS_SENTINEL)

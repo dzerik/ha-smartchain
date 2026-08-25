@@ -94,6 +94,37 @@ def test_load_reserved_name_drops_it(tmp_path: Path, caplog) -> None:
     assert "reserved" in caplog.text.lower()
 
 
+def test_load_skips_disabled_tools(tmp_path: Path, caplog) -> None:
+    """A tool with `enabled: false` is not converted or registered, and the
+    skip is logged at INFO."""
+    import logging
+
+    target = tmp_path / "tools.yaml"
+    target.write_text(
+        "tools:\n"
+        "  - name: ping\n"
+        "    description: on by default\n"
+        "    parameters: { type: object, properties: {} }\n"
+        "    action: { type: template, value_template: a }\n"
+        "    enabled: true\n"
+        "  - name: pong\n"
+        "    description: key omitted, defaults to enabled\n"
+        "    parameters: { type: object, properties: {} }\n"
+        "    action: { type: template, value_template: b }\n"
+        "  - name: silent\n"
+        "    description: turned off while debugging\n"
+        "    parameters: { type: object, properties: {} }\n"
+        "    action: { type: template, value_template: c }\n"
+        "    enabled: false\n"
+    )
+    with caplog.at_level(logging.INFO):
+        result = load_tools_file(target)
+
+    assert {t.name for t in result.yaml_tools} == {"ping", "pong"}
+    assert all(t.enabled for t in result.yaml_tools)
+    assert "1" in caplog.text and "disabled" in caplog.text.lower()
+
+
 def test_secret_resolves_when_the_config_dir_is_supplied(tmp_path: Path) -> None:
     """`!secret` works once the loader is given a config dir to root Secrets at.
 

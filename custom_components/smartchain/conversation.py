@@ -37,6 +37,7 @@ from langchain_core.messages import (
 )
 
 from .const import (
+    ALL_TOOLS_SENTINEL,
     CONF_ALLOWED_TOOLS,
     CONF_CHAT_HISTORY,
     CONF_DYNAMIC_CONTEXT_ON_ASSIST,
@@ -205,13 +206,16 @@ class SmartChainConversationEntity(ConversationEntity):
     def _collect_custom_tools(self, registry: ToolRegistry) -> list[CustomTool]:
         """Return registry tools allowed for this agent.
 
-        `allowed_tools` semantics: missing/None => all tools; [] => none.
+        `allowed_tools` semantics: missing/None => all tools;
+        [ALL_TOOLS_SENTINEL, ...] => all tools; [] => none.
         """
         allowed = self._agent_options.get(CONF_ALLOWED_TOOLS)
         all_tools = list(registry.all())
         if allowed is None:
             return all_tools
         allowed_set = set(allowed)
+        if ALL_TOOLS_SENTINEL in allowed_set:
+            return all_tools
         return [t for t in all_tools if t.name in allowed_set]
 
     def _render_prompt_cached(self, raw_prompt: str) -> str:

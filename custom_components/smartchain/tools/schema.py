@@ -94,6 +94,7 @@ TOOL_SCHEMA = vol.Schema(
         vol.Required("description"): _NON_EMPTY_STR,
         vol.Required("parameters"): _PARAMETERS,
         vol.Required("action"): _ACTION,
+        vol.Optional("enabled", default=True): bool,
     }
 )
 
