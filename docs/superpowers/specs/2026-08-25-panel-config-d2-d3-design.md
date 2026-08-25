@@ -107,12 +107,23 @@ D1's spec asked for Home Assistant's `{field_name: error_key}` error shape and
 the plan silently reduced it to a flat message. That was recorded as a ruling and
 deferred here.
 
-It is now built **in a way that does not depend on the browser check**: a
-validation failure returns both a flat `message` and an optional `errors` map.
-The panel passes `errors` to `<ha-form>`'s error property and shows `message` as
-a toast. If `<ha-form>` ignores the map, the toast still tells the user what
-happened. Nothing regresses if the map is unused, and nothing waits on a check
-that has not happened.
+**Planning changed this decision, and the reason is worth recording.** Home
+Assistant's `connection.send_error(msg_id, code, message, translation_key,
+translation_domain, translation_placeholders)` cannot carry an arbitrary
+per-field map. Delivering the `{field_name: error_key}` shape therefore means
+moving every save command off `send_error` and onto a `{"ok": false, …}` result —
+changing the error contract of five working, tested D1 commands, for a benefit
+that depends on `<ha-form>` consuming the map, which nobody has confirmed.
+
+That is a bad trade, so **the map is not built here.** What is built instead
+costs nothing and breaks nothing: the flat message **names the offending field**.
+Today a missing model reports `model_required` without saying which control to
+look at; after this it says which. That is most of the practical value of
+per-field errors, on the existing contract.
+
+The `{field_name: error_key}` shape stays deferred, now with a concrete
+precondition rather than a vague one: it is worth doing once the browser check
+confirms `<ha-form>` consumes an error map, and not before.
 
 ## 6. D3 tools.yaml, read-only — and the reason it is read-only
 
