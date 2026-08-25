@@ -15,6 +15,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
+import voluptuous as vol
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
 
@@ -76,6 +77,18 @@ async def _get_hash(client) -> str | None:
     msg = await client.receive_json()
     assert msg["success"], msg
     return msg["result"]["hash"]
+
+
+def _fail_with_a_schema_cause(*_args, **_kwargs) -> None:
+    """Raise a LoaderError chained (`raise ... from ...`) onto a real
+    `vol.Invalid`, the way `load_tools_file` actually raises one, with the
+    secret embedded in the *cause's* message rather than the LoaderError's
+    own — the shape `_safe_loader_error`'s schema-failure branch exists to
+    keep off the wire, per its docstring."""
+    try:
+        raise vol.Invalid(f"unknown action type '{SECRET_VALUE}'")
+    except vol.Invalid as cause:
+        raise LoaderError(f"tools.yaml validation error: {cause}") from cause
 
 
 async def test_secret_reference_survives_a_save_round_trip_byte_for_byte(
@@ -231,6 +244,70 @@ async def test_failing_reload_restores_the_previous_file(
     assert not (tools_dir / "tools.yaml.tmp").exists()
 
 
+async def test_a_non_loader_reload_failure_still_restores(
+    hass: HomeAssistant, hass_ws_client, tools_dir: Path
+):
+    """The live failure mode, not the rare one: `_reload_registry` runs
+    unguarded MCP `stop()`/`start()` and memory `shutdown()`/`build()`
+    calls, and the two failures the design names — an MCP server that won't
+    start, an embeddings binding that no longer resolves — surface as
+    plain exceptions, not `LoaderError`. A catch narrowed to `LoaderError`
+    would let this escape uncaught, skip the restore entirely, and leave
+    the un-adoptable file on disk."""
+    tools_path = tools_dir / "tools.yaml"
+    tools_path.write_text(VALID_TOOL)
+    await async_setup_component(hass, DOMAIN, {})
+
+    client = await hass_ws_client(hass)
+    base_hash = await _get_hash(client)
+
+    with patch(
+        "custom_components.smartchain._reload_registry",
+        new=AsyncMock(side_effect=RuntimeError("mcp server would not start")),
+    ):
+        await client.send_json_auto_id(
+            {"type": "smartchain/tools/save", "text": VALID_TOOL_V2, "base_hash": base_hash}
+        )
+        msg = await client.receive_json()
+
+    assert msg["success"], msg
+    assert msg["result"]["ok"] is False
+    assert msg["result"]["reason"] == "reload_failed"
+    assert tools_path.read_text() == VALID_TOOL
+    assert not (tools_dir / "tools.yaml.tmp").exists()
+
+
+async def test_a_non_loader_reload_failure_on_rollback_is_reported_cleanly(
+    hass: HomeAssistant, hass_ws_client, tools_dir: Path
+):
+    """Mirrors test_a_non_loader_reload_failure_still_restores for
+    rollback's own `except Exception` around `_reload_registry`."""
+    tools_path = tools_dir / "tools.yaml"
+    tools_path.write_text(VALID_TOOL)
+    await async_setup_component(hass, DOMAIN, {})
+
+    client = await hass_ws_client(hass)
+    base_hash = await _get_hash(client)
+
+    await client.send_json_auto_id(
+        {"type": "smartchain/tools/save", "text": VALID_TOOL_V2, "base_hash": base_hash}
+    )
+    msg = await client.receive_json()
+    assert msg["success"], msg
+    assert msg["result"]["ok"] is True
+
+    with patch(
+        "custom_components.smartchain._reload_registry",
+        new=AsyncMock(side_effect=RuntimeError("embeddings binding no longer resolves")),
+    ):
+        await client.send_json_auto_id({"type": "smartchain/tools/rollback"})
+        msg = await client.receive_json()
+
+    assert msg["success"], msg
+    assert msg["result"]["ok"] is False
+    assert msg["result"]["reason"] == "reload_failed"
+
+
 async def test_a_failed_first_save_leaves_no_file_behind(
     hass: HomeAssistant, hass_ws_client, tools_dir: Path
 ):
@@ -355,7 +432,14 @@ async def test_reload_failed_refusal_leaks_no_secret(
 ):
     """The reload_failed path forwards the loader error through the same
     `_safe_loader_error` scrubbing as validate/reload — never the raw
-    message, which for a schema failure can embed a resolved value."""
+    message, which for a schema failure can embed a resolved value.
+
+    Uses `_fail_with_a_schema_cause` rather than a bare `LoaderError(...)`:
+    a `LoaderError` with no `__cause__` only exercises
+    `_safe_loader_error`'s `cause is None` fallback, not the schema-failure
+    discrimination this test is actually named for — a secret sitting in
+    the LoaderError's own message, with no cause at all, was never at risk
+    either way, since that branch never looks at `str(err)`."""
     (tools_dir.parent / "secrets.yaml").write_text(f"my_key: {SECRET_VALUE}\n")
     tools_path = tools_dir / "tools.yaml"
     tools_path.write_text(VALID_TOOL)
@@ -366,7 +450,7 @@ async def test_reload_failed_refusal_leaks_no_secret(
 
     with patch(
         "custom_components.smartchain._reload_registry",
-        new=AsyncMock(side_effect=LoaderError(f"tools.yaml validation error: {SECRET_VALUE}")),
+        new=AsyncMock(side_effect=_fail_with_a_schema_cause),
     ):
         await client.send_json_auto_id(
             {"type": "smartchain/tools/save", "text": VALID_TOOL_V2, "base_hash": base_hash}
