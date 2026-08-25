@@ -99,7 +99,7 @@ async def test_the_options_round_trip_into_subentry_data(
 def test_the_new_options_have_labels_everywhere_they_can_render() -> None:
     """Pin translation-key parity for the fields this subsystem added.
 
-    ``_subentry_schema`` is shared by the conversation subentry form
+    ``subentry_schema`` is shared by the conversation subentry form
     (``config_subentries.conversation.step.{user,reconfigure}.data``) and the
     entry-level options form (``options.step.settings.data``). All three new
     dynamic-context keys must carry a label in all three translation files,

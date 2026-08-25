@@ -16,14 +16,6 @@ export const SC_STYLES = `
 
   .sc-hidden { display: none !important; }
 
-  .sc-camera-container {
-    max-width: 800px;
-    margin: 0 auto;
-    padding: 24px;
-    font-family: var(--sc-font);
-    color: var(--primary-text-color, #212121);
-  }
-
   .sc-card {
     background: var(--card-background-color, #fff);
     border-radius: var(--sc-radius-lg);
@@ -128,4 +120,71 @@ export const SC_STYLES = `
   .sc-toast-out { animation: sc-toast-out 0.25s ease-in forwards; }
   @keyframes sc-toast-in { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
   @keyframes sc-toast-out { from { opacity: 1; } to { transform: translateY(10px); opacity: 0; } }
+
+  /* ========== Tab Shell ========== */
+  .sc-tabs {
+    display: flex;
+    gap: 4px;
+    padding: 0 16px;
+    border-bottom: 1px solid var(--divider-color, #e0e0e0);
+    background: var(--primary-background-color, #fafafa);
+  }
+  .sc-tab {
+    appearance: none;
+    border: none;
+    background: none;
+    padding: 14px 16px;
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--secondary-text-color);
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+  }
+  .sc-tab:hover { color: var(--primary-text-color); }
+  .sc-tab-active {
+    color: var(--primary-color, #03a9f4);
+    border-bottom-color: var(--primary-color, #03a9f4);
+  }
+  .sc-tab-body {
+    margin: 0 auto;
+    padding: 24px;
+    font-family: var(--sc-font);
+    color: var(--primary-text-color, #212121);
+  }
+  sc-camera-tab { display: block; max-width: 800px; margin: 0 auto; }
+  sc-agents-tab { display: block; max-width: 1100px; margin: 0 auto; }
+
+  /* ========== Agents Tab ========== */
+  .sc-entry { margin-bottom: 24px; }
+  .sc-entry-head {
+    display: flex; align-items: center; gap: 12px;
+    padding-bottom: 8px; border-bottom: 1px solid var(--divider-color, #e0e0e0);
+  }
+  .sc-entry-title { font-weight: 500; }
+  .sc-entry-engine { color: var(--secondary-text-color); font-size: 13px; }
+  .sc-entry-head .sc-add { margin-left: auto; }
+  .sc-agent-list { list-style: none; margin: 0; padding: 0; }
+  .sc-agent-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr auto auto;
+    gap: 12px; align-items: center;
+    padding: 10px 0; border-bottom: 1px solid var(--divider-color, #e0e0e0);
+  }
+  .sc-agent-model, .sc-agent-tools {
+    color: var(--secondary-text-color); font-size: 13px;
+  }
+  .sc-agent-actions { display: flex; gap: 8px; }
+  .sc-agent-actions button, .sc-add {
+    appearance: none; border: 1px solid var(--divider-color, #e0e0e0);
+    background: none; border-radius: 6px; padding: 4px 10px;
+    font-size: 13px; color: var(--primary-text-color); cursor: pointer;
+  }
+  .sc-agent-actions button:hover, .sc-add:hover {
+    border-color: var(--primary-color, #03a9f4);
+    color: var(--primary-color, #03a9f4);
+  }
+  .sc-empty { color: var(--secondary-text-color); font-size: 14px; }
+  @media (max-width: 600px) {
+    .sc-agent-row { grid-template-columns: 1fr; gap: 4px; }
+  }
 `;

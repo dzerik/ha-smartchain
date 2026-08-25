@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Any
 
@@ -152,7 +153,7 @@ DEFAULT_OPTIONS = MappingProxyType(
 )
 
 
-def _normalize_model_input(user_input: dict[str, Any]) -> str | None:
+def normalize_model_input(user_input: dict[str, Any]) -> str | None:
     """Validate that a model is set and strip an empty LLM-API selection.
 
     Mutates ``user_input`` (drops empty CONF_LLM_HASS_API). Returns a translation
@@ -167,6 +168,11 @@ def _normalize_model_input(user_input: dict[str, Any]) -> str | None:
     if not user_input.get(CONF_LLM_HASS_API):
         user_input.pop(CONF_LLM_HASS_API, None)
     return None
+
+
+def agent_title(data: Mapping[str, Any]) -> str:
+    """Title for an agent subentry: the user's model name, else the picked one."""
+    return data.get(CONF_CHAT_MODEL_USER) or data.get(CONF_CHAT_MODEL) or "Agent"
 
 
 class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -297,7 +303,7 @@ class ConversationSubentryFlow(ConfigSubentryFlow):
         unique_id = entry.unique_id
         engine = entry.data.get(CONF_ENGINE, ID_GIGACHAT)
         models = await async_fetch_models(self.hass, engine, entry.data)
-        schema = _subentry_schema(self.hass, unique_id, {}, models=models)
+        schema = subentry_schema(self.hass, unique_id, {}, models=models)
 
         if user_input is not None:
             return self._validate_and_create(user_input, unique_id, schema)
@@ -313,7 +319,7 @@ class ConversationSubentryFlow(ConfigSubentryFlow):
         unique_id = entry.unique_id
         engine = entry.data.get(CONF_ENGINE, ID_GIGACHAT)
         models = await async_fetch_models(self.hass, engine, entry.data)
-        schema = _subentry_schema(self.hass, unique_id, subentry.data, models=models)
+        schema = subentry_schema(self.hass, unique_id, subentry.data, models=models)
 
         if user_input is not None:
             return self._validate_and_update(user_input, entry, subentry, unique_id, schema)
@@ -324,11 +330,11 @@ class ConversationSubentryFlow(ConfigSubentryFlow):
         self, user_input: dict[str, Any], unique_id: str, schema: vol.Schema
     ) -> SubentryFlowResult:
         """Validate user input and create subentry."""
-        error = _normalize_model_input(user_input)
+        error = normalize_model_input(user_input)
         if error:
             return self.async_show_form(step_id="user", data_schema=schema, errors={"base": error})
 
-        title = user_input.get(CONF_CHAT_MODEL_USER) or user_input.get(CONF_CHAT_MODEL) or "Agent"
+        title = agent_title(user_input)
         return self.async_create_entry(title=title, data=user_input)
 
     def _validate_and_update(
@@ -340,13 +346,13 @@ class ConversationSubentryFlow(ConfigSubentryFlow):
         schema: vol.Schema,
     ) -> SubentryFlowResult:
         """Validate user input and update subentry."""
-        error = _normalize_model_input(user_input)
+        error = normalize_model_input(user_input)
         if error:
             return self.async_show_form(
                 step_id="reconfigure", data_schema=schema, errors={"base": error}
             )
 
-        title = user_input.get(CONF_CHAT_MODEL_USER) or user_input.get(CONF_CHAT_MODEL) or "Agent"
+        title = agent_title(user_input)
         return self.async_update_and_abort(
             entry,
             subentry,
@@ -369,9 +375,9 @@ class OptionsFlow(config_entries.OptionsFlow):
         unique_id = self.config_entry.unique_id
         engine = self.config_entry.data.get(CONF_ENGINE, ID_GIGACHAT)
         models = await async_fetch_models(self.hass, engine, self.config_entry.data)
-        schema = _subentry_schema(self.hass, unique_id, self.config_entry.options, models=models)
+        schema = subentry_schema(self.hass, unique_id, self.config_entry.options, models=models)
         if user_input is not None:
-            error = _normalize_model_input(user_input)
+            error = normalize_model_input(user_input)
             if error:
                 return self.async_show_form(
                     step_id="settings", data_schema=schema, errors={"base": error}
@@ -384,7 +390,7 @@ class OptionsFlow(config_entries.OptionsFlow):
         )
 
 
-def _subentry_schema(
+def subentry_schema(
     hass,
     unique_id: str,
     options: MappingProxyType[str, Any] | dict[str, Any],

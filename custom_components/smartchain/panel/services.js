@@ -17,9 +17,18 @@ export function extractResponse(resp, serviceKey) {
 }
 
 export function escapeHtml(text) {
-  const div = document.createElement("div");
-  div.textContent = String(text);
-  return div.innerHTML;
+  // Escapes &, <, > and both quote characters. Every caller feeds the
+  // result into innerHTML, where HTML character references decode back to
+  // their literal characters regardless of whether they land in a text
+  // node or an attribute value — so escaping quotes here does not make
+  // `&quot;` show up literally in visible text, and it is safe to reuse
+  // this same function for attribute positions like data-entry="...".
+  return String(text)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 export function getAgents(hass) {
@@ -73,4 +82,14 @@ export function showToast(message, type = "info", duration = 3500) {
     toast.classList.add("sc-toast-out");
     toast.addEventListener("animationend", () => toast.remove());
   }, duration);
+}
+
+/**
+ * Send a SmartChain websocket command and return its result.
+ *
+ * Throws with the backend's message, which is safe to display — the backend
+ * never puts a credential in one.
+ */
+export async function callWS(hass, type, payload = {}) {
+  return await hass.connection.sendMessagePromise({ type, ...payload });
 }
