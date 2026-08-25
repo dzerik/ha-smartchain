@@ -158,6 +158,26 @@ def _find_client(hass: HomeAssistant, entity_id: str | None = None):
     return None
 
 
+def _panel_digest(panel_dir: Path) -> str:
+    """Short digest of every panel file, so a redeploy changes the module URL.
+
+    Blocking I/O, so it runs in an executor. Any failure degrades to a constant
+    rather than taking the panel registration down with it — a stale cache is a
+    far smaller problem than no panel at all.
+    """
+    import hashlib
+
+    digest = hashlib.sha256()
+    try:
+        for path in sorted(panel_dir.rglob("*")):
+            if path.is_file():
+                digest.update(path.name.encode())
+                digest.update(path.read_bytes())
+    except OSError:
+        return "0"
+    return digest.hexdigest()[:12]
+
+
 def _tools_yaml_path(hass: HomeAssistant) -> Path:
     """Resolve the absolute path to tools.yaml under the HA config directory."""
     return Path(hass.config.config_dir) / TOOLS_YAML_PATH
@@ -395,6 +415,13 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         manifest_path = Path(__file__).parent / "manifest.json"
         manifest = json.loads(manifest_path.read_text())
         panel_version = manifest.get("version", "0")
+        # The release version alone is not enough to bust a browser cache: the
+        # panel is edited and redeployed many times within one unreleased
+        # version, and a stale shell paired with fresh component modules fails
+        # in ways that look like data problems rather than caching. Fold a
+        # digest of the panel's own bytes into the query so any redeploy that
+        # changes a file changes the URL.
+        panel_build = await hass.async_add_executor_job(_panel_digest, panel_dir)
         async_register_built_in_panel(
             hass,
             component_name="custom",
@@ -404,7 +431,9 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
             config={
                 "_panel_custom": {
                     "name": "smartchain-panel",
-                    "module_url": f"/smartchain/smartchain-panel.js?v={panel_version}",
+                    "module_url": (
+                        f"/smartchain/smartchain-panel.js?v={panel_version}.{panel_build}"
+                    ),
                 },
                 "version": panel_version,
             },

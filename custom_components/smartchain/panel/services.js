@@ -33,9 +33,28 @@ export function escapeHtml(text) {
 
 export function getAgents(hass) {
   if (!hass) return [];
-  return Object.entries(hass.states)
-    .filter(([id]) => id.startsWith("conversation.") && id.includes("smartchain"))
-    .map(([id, state]) => ({ id, name: state.attributes.friendly_name || id }));
+  // Identify SmartChain agents by the integration that owns them, never by a
+  // substring of the entity id. An agent's entity id comes from its title,
+  // which is the model name — `conversation.gigachat_2_max` — so the old
+  // `id.includes("smartchain")` test missed every normally-named agent and
+  // matched only the ones whose title happened to fall back to a ULID.
+  const registry = hass.entities || {};
+  const byPlatform = Object.entries(hass.states)
+    .filter(([id]) => id.startsWith("conversation."))
+    .filter(([id]) => registry[id] && registry[id].platform === "smartchain");
+
+  // `hass.entities` is present in every supported frontend, but if it is ever
+  // missing the substring test is better than an empty list.
+  const chosen = byPlatform.length
+    ? byPlatform
+    : Object.entries(hass.states).filter(
+        ([id]) => id.startsWith("conversation.") && id.includes("smartchain")
+      );
+
+  return chosen.map(([id, state]) => ({
+    id,
+    name: state.attributes.friendly_name || id,
+  }));
 }
 
 export function populateSelect(selectEl, items, placeholder) {
