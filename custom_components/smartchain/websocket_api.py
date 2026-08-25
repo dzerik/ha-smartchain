@@ -152,9 +152,11 @@ async def ws_agent_schema(
 def _describe_invalid(err: vol.Invalid) -> str:
     """A validation message that names the offending field.
 
-    Never `str(err)`: voluptuous embeds the value that failed, which would leak
-    a credential if one were ever validated. Only the field name and a short
-    reason travel.
+    Built from `err.path`, not `str(err)` or `humanize_error`: those walk
+    voluptuous's own formatting, which is free to change and, for some
+    validators, includes the value that failed. Only the field name and a
+    short reason travel here, so the message stays safe regardless of how
+    voluptuous chooses to render itself.
     """
     fields = sorted(
         {str(sub.path[0]) for sub in getattr(err, "errors", [err]) if getattr(sub, "path", None)}

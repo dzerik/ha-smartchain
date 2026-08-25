@@ -67,53 +67,59 @@ async def test_labels_are_translated_not_raw_names(hass, hass_ws_client, entry):
     assert labels[CONF_CHAT_MODEL] != CONF_CHAT_MODEL
 
 
-async def test_an_untranslated_field_falls_back_to_its_name(hass, hass_ws_client, entry):
-    """A field added without a translation must still render, not vanish."""
+async def test_an_untranslated_field_is_absent_not_fabricated(hass, hass_ws_client, entry):
+    """A field with no translation must be missing from the map — the panel
+    falls back to the raw name; the backend must not paper over the gap."""
     from custom_components.smartchain.websocket_api import async_field_labels
 
+    prefix = "component.smartchain.config_subentries.conversation.step.user.data"
+    resources = {
+        f"{prefix}.prompt": "Prompt",
+        f"{prefix}.model": "Completion Model",
+    }
     with patch(
         "custom_components.smartchain.websocket_api.translation.async_get_translations",
-        return_value={},
+        return_value=resources,
     ):
         labels = await async_field_labels(hass, "config_subentries")
-    assert labels == {} or all(isinstance(v, str) for v in labels.values())
+
+    assert labels[CONF_PROMPT] == "Prompt"
+    assert labels[CONF_CHAT_MODEL] == "Completion Model"
+    assert CONF_MAX_TOKENS not in labels
 
 
-async def test_save_reports_the_offending_field(hass, hass_ws_client, entry):
+async def test_save_names_the_offending_field(hass, hass_ws_client, entry):
+    """A message that does not name the field leaves the user hunting for it."""
     client = await hass_ws_client(hass)
     await client.send_json_auto_id(
         {
             "type": "smartchain/agent/save",
             "entry_id": entry.entry_id,
-            "data": {CONF_CHAT_MODEL: "gpt-4.1-mini", "not_a_field": 1},
-        }
-    )
-    msg = await client.receive_json()
-    assert not msg["success"]
-    assert msg["error"]["code"] == "invalid_data"
-    # The flat message stays, so nothing regresses if ha-form ignores the map.
-    assert msg["error"]["message"]
-
-
-async def test_invalid_field_error_names_the_field_but_not_the_value(hass, hass_ws_client, entry):
-    """The message must say *which* field failed, never the value that failed it
-    — that value could be a credential."""
-    client = await hass_ws_client(hass)
-    await client.send_json_auto_id(
-        {
-            "type": "smartchain/agent/save",
-            "entry_id": entry.entry_id,
-            "data": {
-                CONF_CHAT_MODEL: "gpt-4.1-mini",
-                CONF_MAX_TOKENS: "sk-value-should-not-leak",
-            },
+            "data": {CONF_CHAT_MODEL: "gpt-4.1-mini", CONF_MAX_TOKENS: "not-a-number"},
         }
     )
     msg = await client.receive_json()
     assert not msg["success"]
     assert msg["error"]["code"] == "invalid_data"
     assert CONF_MAX_TOKENS in msg["error"]["message"]
-    assert "sk-value-should-not-leak" not in msg["error"]["message"]
+
+
+async def test_a_rejected_value_never_appears_in_the_message(hass, hass_ws_client, entry):
+    """The message reports which field failed, never what was in it."""
+    import json
+
+    marker = "sk-this-must-never-be-echoed"
+    client = await hass_ws_client(hass)
+    await client.send_json_auto_id(
+        {
+            "type": "smartchain/agent/save",
+            "entry_id": entry.entry_id,
+            "data": {CONF_CHAT_MODEL: "gpt-4.1-mini", CONF_MAX_TOKENS: marker},
+        }
+    )
+    msg = await client.receive_json()
+    assert not msg["success"]
+    assert marker not in json.dumps(msg)
 
 
 async def test_missing_model_is_reported_against_the_model_field(hass, hass_ws_client, entry):
