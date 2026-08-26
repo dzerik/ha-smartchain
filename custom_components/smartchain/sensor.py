@@ -7,6 +7,7 @@ from homeassistant.components.sensor import SensorEntity
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
@@ -25,6 +26,11 @@ _MAX_FULL_RESPONSE_LEN = 4096
 # for that entry_id. See `async_setup_entry` below for why it is an owner and
 # not a bare boolean.
 SENSOR_OWNER_KEY = "last_analysis_sensor_owner"
+
+# The singleton's unique id. A module constant rather than a literal on the
+# entity class alone, because `_sensor_is_live` has to find the entity by it —
+# the entity_id is the user's to rename, the unique id is not.
+SENSOR_UNIQUE_ID = f"{DOMAIN}_last_analysis"
 
 
 @callback
@@ -63,6 +69,20 @@ async def async_rehome_sensor(hass: HomeAssistant, leaving_entry_id: str) -> Non
     Called after `async_release_sensor_owner`, and does nothing unless that call
     actually freed the slot — a non-owner unloading must not move an entity
     that is perfectly alive where it is.
+
+    A move is judged by whether the entity is live afterwards, not by whether
+    the forward returned. Those are different questions, and only the second
+    one used to be asked: `entity_platform._async_setup_platform` catches
+    `Exception`, logs it and returns False, and `async_forward_entry_setups`
+    discards that answer, so a platform that failed to set up comes back here
+    as a clean return. `async_setup_entry` claims the slot *before* the entity
+    reaches the state machine, so the ordinary way for this to go wrong left
+    the claim standing for an entry with no entity — every other hub skipping
+    the registration, no `sensor.smartchain_last_analysis` for the rest of the
+    run, and not one word said about the singleton. The `except` branch below
+    is kept because it costs nothing and a future Home Assistant may well let
+    something through, but it is the check after it that covers what actually
+    happens today.
     """
     domain_data = hass.data.get(DOMAIN)
     if domain_data is None or domain_data.get(SENSOR_OWNER_KEY) is not None:
@@ -84,7 +104,34 @@ async def async_rehome_sensor(hass: HomeAssistant, leaving_entry_id: str) -> Non
                 "Could not move the SmartChain Last Analysis sensor to %s", entry.entry_id
             )
             async_release_sensor_owner(hass, entry.entry_id)
+            return
+        if not _sensor_is_live(hass):
+            LOGGER.error(
+                "The SmartChain Last Analysis sensor did not come back on %s after its "
+                "previous hub unloaded; releasing the claim so the next hub to load can "
+                "register it. Look above for the platform error that stopped it",
+                entry.entry_id,
+            )
+            async_release_sensor_owner(hass, entry.entry_id)
         return
+
+
+def _sensor_is_live(hass: HomeAssistant) -> bool:
+    """Whether the singleton is an entity in the state machine right now.
+
+    Found through the entity registry rather than by a hardcoded entity_id: the
+    entity_id is the user's to rename and the unique id is not, so a renamed
+    sensor must not read as a failed move.
+
+    A restored husk is not live. That is what the state looks like after the
+    owning platform went down and nothing brought the entity back, which is
+    precisely the case being tested for.
+    """
+    entity_id = er.async_get(hass).async_get_entity_id(Platform.SENSOR, DOMAIN, SENSOR_UNIQUE_ID)
+    if entity_id is None:
+        return False
+    state = hass.states.get(entity_id)
+    return state is not None and not state.attributes.get("restored")
 
 
 async def async_setup_entry(
@@ -119,7 +166,7 @@ class SmartChainLastAnalysisSensor(SensorEntity, RestoreEntity):
 
     _attr_name = "SmartChain Last Analysis"
     _attr_icon = "mdi:camera-iris"
-    _attr_unique_id = f"{DOMAIN}_last_analysis"
+    _attr_unique_id = SENSOR_UNIQUE_ID
     _attr_should_poll = False
 
     def __init__(self) -> None:

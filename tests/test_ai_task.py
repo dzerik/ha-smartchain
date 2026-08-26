@@ -28,11 +28,19 @@ def _make_chat_log(conversation_id="test-conv-id"):
     chat_log.unresponded_tool_results = False
 
     async def _mock_add_delta_stream(agent_id, stream):
+        # `native` is collected because HA's own `ChatLog` collects it, and it
+        # is the only mark a turn that produced no answer carries. A stand-in
+        # that dropped it reported every empty stream as a successful, empty
+        # answer — see tests/test_ai_task_empty_response.py, which asserts the
+        # same case against a real `ChatLog`.
         collected = ""
+        native = None
         async for delta in stream:
             if "content" in delta:
                 collected += delta["content"]
-        content = AssistantContent(agent_id=agent_id, content=collected)
+            if delta.get("native") is not None:
+                native = delta["native"]
+        content = AssistantContent(agent_id=agent_id, content=collected, native=native)
         chat_log.content.append(content)
         yield content
 
@@ -175,17 +183,7 @@ async def test_generate_data_with_tools(ai_task_entity) -> None:
     assert result.data == "Done, light is on"
 
 
-async def test_generate_data_empty_response(ai_task_entity) -> None:
-    """Test handling of empty LLM response."""
-
-    async def _empty_astream(messages):
-        yield AIMessageChunk(content="")
-
-    ai_task_entity.entry.runtime_data.astream = MagicMock(side_effect=_empty_astream)
-
-    chat_log = _make_chat_log()
-    task = _make_gen_data_task()
-
-    result = await ai_task_entity._async_generate_data(task, chat_log)
-
-    assert result.data == ""
+# A model that answers with nothing used to be asserted here as
+# `result.data == ""`. It is a failed task since v5.4.14, and the assertion
+# lives in tests/test_ai_task_empty_response.py, which runs a real `ChatLog`
+# instead of the stand-in above.

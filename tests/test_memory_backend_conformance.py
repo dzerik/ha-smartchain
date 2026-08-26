@@ -105,6 +105,23 @@ async def test_filter_is_applied_before_the_top_k_cut(backend) -> None:
     assert sorted(h.doc_id for h in hits) == ["conv0", "conv1", "conv2"]
 
 
+async def test_filter_reaches_past_any_fixed_over_fetch_window(backend) -> None:
+    """The size of a backend's over-fetch window must not decide what is found.
+
+    The previous case keeps the non-matching rows few enough that an index
+    which fetches a fixed page and filters afterwards still catches the match.
+    Here 250 `logbook` rows outrank the single `conversation` row — more than
+    any fixed window — so a backend that narrows after the cut returns `[]`
+    while its siblings return the record. Same call, same data, same answer is
+    the whole point of the Protocol.
+    """
+    noise = [_rec(f"log{i}", [1.0, float(i) / 100000, 0.0], kind="logbook") for i in range(250)]
+    await backend.upsert(noise + [_rec("conv0", [0.2, 1.0, 0.0], kind="conversation")])
+
+    hits = await backend.query([1.0, 0.0, 0.0], top_k=3, where={"kind": "conversation"})
+    assert [h.doc_id for h in hits] == ["conv0"]
+
+
 async def test_upsert_same_doc_id_replaces(backend) -> None:
     await backend.upsert([_rec("a", [1.0, 0.0, 0.0])])
     await backend.upsert([_rec("a", [0.0, 0.0, 1.0])])

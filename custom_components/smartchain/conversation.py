@@ -283,6 +283,12 @@ class SmartChainConversationEntity(ConversationEntity):
         something else — since it is handed straight to
         `async_provide_llm_data` as the fourth argument.
 
+        That argument is not a per-call value: HA stores whatever it resolves
+        to on the `ChatLog` and re-uses it on any later turn that supplies
+        none. So the block this returns is only half the story — the caller
+        puts the field back to the user's own text afterwards, and the reason
+        it has to is written out at that line.
+
         `build_retrieved_context` is documented to never raise — it returns
         "" on any internal failure — so this trusts that contract the same
         way `_build_system_prompt` trusts `build_entity_context`'s, rather
@@ -336,6 +342,9 @@ class SmartChainConversationEntity(ConversationEntity):
         user_prompt = options.get(CONF_PROMPT, DEFAULT_PROMPT)
 
         if llm_hass_api:
+            # What Home Assistant is holding from earlier turns of this
+            # session — after the restore below, only the user's own text.
+            sticky_extra_system_prompt = chat_log.extra_system_prompt
             extra_system_prompt = await self._build_extra_system_prompt(options, user_input)
             try:
                 await chat_log.async_provide_llm_data(
@@ -346,6 +355,25 @@ class SmartChainConversationEntity(ConversationEntity):
                 )
             except conversation.ConverseError as err:
                 return err.as_conversation_result()
+            # `async_provide_llm_data` keeps what it was handed
+            # (chat_log.py:761) and `async_get_chat_log` copies the field into
+            # every later turn of the conversation (chat_log.py:106). That is
+            # right for the caller's own instruction and wrong for our
+            # retrieved block, which names the entities *this* message is about
+            # and quotes states read a moment ago. Left in place it would be
+            # re-sent, frozen, on the next turn — and on every turn after it,
+            # because a turn that retrieves nothing passes `None` and HA reads
+            # `None` as "keep what you have" (chat_log.py:751-753), so the
+            # block can go in but never comes out.
+            #
+            # Restoring by HA's own rule — this turn's value if the caller gave
+            # one, otherwise the one already kept — leaves the stickiness a
+            # feature for their text and takes it away from ours. Clearing the
+            # field outright would evict the block by throwing the user's
+            # instruction out with it.
+            chat_log.extra_system_prompt = user_input.extra_system_prompt or (
+                sticky_extra_system_prompt
+            )
         else:
             prompt = await self._build_system_prompt(options, user_input)
             chat_log.content[0] = SystemContent(content=prompt)
@@ -571,7 +599,41 @@ class SmartChainConversationEntity(ConversationEntity):
             if not chat_log.unresponded_tool_results:
                 break
 
-        if memory_enabled:
+        last = chat_log.content[-1]
+        if isinstance(last, AssistantContent) and last.native == EMPTY_RESPONSE_NATIVE:
+            # The stream now closes every turn with an assistant message, so
+            # `async_get_result_from_chat_log` below succeeds where it used to
+            # raise — and hands the person an empty bubble with no error code
+            # and the log nothing at all. The marker is what "the model did not
+            # answer" looks like since v5.4.13; the emptiness of the text is
+            # not, because a model is allowed to answer with a blank string.
+            #
+            # What goes back is our own sentence: the model wrote none, and
+            # writing one for it would be putting words in its mouth. The
+            # traceback that used to escape here is not what returns — the
+            # operator gets this ERROR line, the person gets a sentence, and
+            # the two other error exits of this method say it the same way.
+            LOGGER.error(
+                "The model returned no usable response (no text, no tool call);"
+                " answering with an error instead of an empty message"
+            )
+            response = intent.IntentResponse(language=user_input.language)
+            response.async_set_error(
+                intent.IntentResponseErrorCode.UNKNOWN,
+                "Модель не прислала ответ. Попробуйте ещё раз.",
+            )
+            return ConversationResult(conversation_id=chat_log.conversation_id, response=response)
+
+        # Whether this turn is *written* to long-term memory is the store's
+        # decision (`ingest_conversation` in tools.yaml), not the agent's tool
+        # list. Until now this branch was gated on `memory_enabled`, i.e. on
+        # `search_memory` surviving `allowed_tools` — so denying an agent the
+        # right to *read* memory silently stopped it being *recorded*, while
+        # the store stayed configured to record it and docs/USAGE.md:770 still
+        # promised it would. Reading stays gated where it always was: the tool
+        # is bound above under `memory_enabled` and filters by `subentry_id`,
+        # and none of that is touched by writing a turn away here.
+        if memory_registry is not None:
             ingest_targets = memory_registry.stores_for_conversation_ingest()
             assistant_text = ""
             for content in reversed(chat_log.content):

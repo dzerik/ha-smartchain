@@ -342,8 +342,8 @@ async def async_flow_error_text(
     return texts.get(key) or fallback
 
 
-def _prefill(schema: vol.Schema, served: Mapping[str, Any]) -> dict[str, Any]:
-    """The values a Home Assistant dialog would render, for the keys we serve.
+def _prefill(schema: vol.Schema, served: dict[str, Any]) -> None:
+    """Rewrite `served` with the values a Home Assistant dialog would render.
 
     `description={"suggested_value": …}` is how a config-flow form tells the
     frontend what to put in a field, and it is not always the stored value:
@@ -354,23 +354,40 @@ def _prefill(schema: vol.Schema, served: Mapping[str, Any]) -> dict[str, Any]:
     then disagreed about the same agent. Reading the decision back out of the
     schema keeps it written once, in the flow, where the reasoning for it lives.
 
-    Only keys already in `served` are answered, so this cannot introduce a
-    field the caller pruned or invent a value for one storage never had, and a
-    suggestion of `None` — which `_live_llm_apis` returns to mean "no selection
-    to offer" — is left out rather than sent as a value.
+    Every field the schema declares a suggestion for is answered, not only the
+    ones storage already had a key for. That restriction looked conservative
+    and was the third instance of the very split this function exists to close:
+    the two suggestions that are *computed* rather than echoed —
+    `materialise_allowed_tools` and `DEFAULT_PROMPT` — are exactly the ones an
+    agent has no stored key for, so the dialog opened showing a legacy agent's
+    four built-in tools while the panel opened showing an empty tool picker for
+    the same agent. A user who then added one tool on the panel replaced all
+    four, from a screen that had told them there were none.
+
+    A suggestion of `None` is a decision too, and the opposite one: it is what
+    `_live_llm_apis` returns to mean "there is no selection to offer", which a
+    dialog renders as a blank field and no value. So the key is *removed*
+    rather than left holding whatever storage happened to have. Leaving it was
+    the last corner of the ghost-API bug: an `llm_hass_api` stored as `""` — the
+    shape Home Assistant's own conversation integrations wrote — reached the
+    panel as `""`, came back in the next save, and was refused by the
+    multi-select with `invalid_data: llm_hass_api`, on a field the panel had
+    rendered as empty. The dialog walks out of that state without noticing;
+    now so does the panel.
+
+    Mutates `served` because the two outcomes are "use this value" and "have no
+    value", and a returned dict can only express the first.
     """
-    prefill: dict[str, Any] = {}
     for key in schema.schema:
-        name = str(key.schema)
-        if name not in served:
-            continue
         description = getattr(key, "description", None)
-        if not isinstance(description, Mapping):
+        if not isinstance(description, Mapping) or "suggested_value" not in description:
             continue
-        suggested = description.get("suggested_value")
-        if suggested is not None:
-            prefill[name] = suggested
-    return prefill
+        name = str(key.schema)
+        suggested = description["suggested_value"]
+        if suggested is None:
+            served.pop(name, None)
+        else:
+            served[name] = suggested
 
 
 @websocket_api.require_admin
@@ -424,7 +441,7 @@ async def ws_agent_schema(
     # picker's options are filtered either way, so the panel rendered a value its
     # own select could not hold and the next save came back `invalid_data` on a
     # field the user had never touched.
-    served.update(_prefill(schema, served))
+    _prefill(schema, served)
 
     connection.send_result(
         msg["id"],

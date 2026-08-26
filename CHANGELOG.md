@@ -11,6 +11,40 @@ project follows [Semantic Versioning](https://semver.org/).
 > **Note:** the `5.4.0` section below is a roll-up: it covers `5.4.0` through
 > `5.4.7`, which were developed on one branch and are not separated here.
 
+## [5.4.15] - unreleased
+
+### Fixed
+- **A model that said nothing was reported as having answered.** Closing a
+  thinking-only stream with a native delta made `chat_log` always end in
+  `AssistantContent`, which is what both paths used to decide the model had
+  spoken. `5.4.14` fixed this for AI Task; the conversation path still handed
+  the person an empty reply with no error and left nothing in the log. It now
+  answers with an intent error and logs at ERROR — keyed off the marker our own
+  stream sets, never off empty text, because a model that answers with a space
+  has answered. A turn with no answer is also no longer written to long-term
+  memory, where it would have been stored against the *previous* reply.
+- **The retrieved entity block outlived the turn that retrieved it.** An empty
+  block returned `None`, and Home Assistant reads `None` as "keep what was
+  there", so turn two of a session was still being told the kitchen states that
+  turn one had asked about — until the session ended.
+- **Writing to memory was gated on permission to read it.** `ingest_conversation`
+  did nothing unless the agent also had `search_memory` in its `allowed_tools`,
+  which is not what the option says and not what `USAGE.md` documents. The two
+  are now independent: a turn is ingested when there is somewhere to put it.
+- **`sqlite_vec` lost filtered results.** The metadata filter ran *after* vec0
+  had already cut its k nearest, so a match ranked below the over-fetch window
+  simply vanished — and `subentry_id` is added to every conversational lookup,
+  so this was every lookup. Candidates are now narrowed before the KNN, which
+  vec0 pushes into its own scan; a full-scan fallback was tried first and
+  measured 8× slower (13.4 s vs 1.7 s over 50 000 × 1536), so it was dropped.
+  The cross-backend conformance suite now covers the case for every backend.
+- **Built-in tools trusted whatever the model sent.** `jsonschema` validation
+  only ever applied to YAML tools, so `top_k` was capped in the schema and
+  nowhere else: `top_k=5000` really did run. It is clamped in the executor now,
+  with a warning. `area` and `state` filters fold case like the lexical code
+  beside them, so `area='кухня'` finds «Кухня», and an all-caps short name is no
+  longer discarded as noise — «выключи ТВ» finds the television.
+
 ## [5.4.14] - unreleased
 
 ### Fixed

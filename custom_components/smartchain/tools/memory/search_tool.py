@@ -5,7 +5,14 @@ from typing import Any
 
 from homeassistant.core import HomeAssistant
 
-from ...const import DOMAIN, MEMORY_TOOL_NAME
+from ...const import (
+    BUILTIN_SEARCH_MIN_TOP_K,
+    DOMAIN,
+    MEMORY_SEARCH_DEFAULT_TOP_K,
+    MEMORY_SEARCH_MAX_TOP_K,
+    MEMORY_TOOL_NAME,
+)
+from .tool_args import clamp_top_k
 
 LOGGER = logging.getLogger(__name__)
 
@@ -30,7 +37,12 @@ def get_memory_tool_definition(registry: Any) -> dict[str, Any]:
 
     properties: dict[str, Any] = {
         "query": {"type": "string", "description": "Natural-language query."},
-        "top_k": {"type": "integer", "default": 5, "minimum": 1, "maximum": 20},
+        "top_k": {
+            "type": "integer",
+            "default": MEMORY_SEARCH_DEFAULT_TOP_K,
+            "minimum": BUILTIN_SEARCH_MIN_TOP_K,
+            "maximum": MEMORY_SEARCH_MAX_TOP_K,
+        },
         "kind": {
             "type": "string",
             "enum": ["conversation", "logbook", "any"],
@@ -63,11 +75,17 @@ def get_memory_tool_definition(registry: Any) -> dict[str, Any]:
 async def execute_memory_search(
     hass: HomeAssistant,
     query: str,
-    top_k: int = 5,
+    top_k: int = MEMORY_SEARCH_DEFAULT_TOP_K,
     kind: str = "any",
     subentry_id: str | None = None,
     store: str | None = None,
 ) -> str:
+    # Nothing has validated `top_k` before this line — see `tool_args`. The
+    # schema's maximum only becomes real here, and it has to, because the
+    # rendered result is parked in `chat_log` and re-sent to the provider on
+    # every later turn of the conversation.
+    top_k = clamp_top_k(top_k, MEMORY_SEARCH_MAX_TOP_K, MEMORY_TOOL_NAME)
+
     domain_data = hass.data.get(DOMAIN) or {}
     registry = domain_data.get("memory")
     if registry is None or not len(registry):
@@ -99,8 +117,13 @@ async def execute_memory_search(
     if not snippets:
         return "No memories matched the query."
 
-    lines = [f"Found {len(snippets)} memories:"]
-    for index, snip in enumerate(snippets, start=1):
+    # The clamp above bounds what we *ask* for; this bounds what we render.
+    # A backend is free to return more than `top_k` — sqlite_numpy reads every
+    # matching row before it ranks, and a future one may over-fetch too — and
+    # the size of this string is the thing that actually costs tokens.
+    shown = snippets[:top_k]
+    lines = [f"Found {len(shown)} memories:"]
+    for index, snip in enumerate(shown, start=1):
         ts = (snip.metadata or {}).get("timestamp", "?")
         kind_label = (snip.metadata or {}).get("kind", "?")
         first_line = snip.text.replace("\n", " ").strip()

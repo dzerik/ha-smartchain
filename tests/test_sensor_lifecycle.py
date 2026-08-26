@@ -7,6 +7,7 @@ to register it is exactly the implementation detail under change.
 """
 
 import ast
+import logging
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -295,6 +296,127 @@ async def test_a_failed_rehome_hands_the_slot_back_to_the_next_hub(
         await hass.async_block_till_done()
 
     _assert_sensor_alive(hass, "after a hub came back up following a failed move")
+    ent_reg = er.async_get(hass)
+    owned = [
+        ent
+        for ent in ent_reg.entities.values()
+        if ent.platform == DOMAIN and ent.domain == "sensor"
+    ]
+    assert len(owned) == 1
+    assert owned[0].config_entry_id == first.entry_id
+    assert "does not generate unique IDs" not in caplog.text
+
+
+async def test_a_move_that_worked_leaves_the_slot_with_the_new_owner(
+    hass: HomeAssistant, mock_llm_client, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The other side of judging a move by whether the entity is live.
+
+    A check that can free the slot after a *failed* move can free it after a
+    successful one too, and that failure is louder than the one it guards
+    against: the entity is alive on the new owner, the slot says nobody has it,
+    and the next hub to load adds a second one — which Home Assistant refuses
+    as a duplicate unique_id, leaving a hub that logs an error on every setup.
+    So the claim has to survive a move that worked, and the way to see that is
+    to bring a hub up afterwards.
+    """
+    first = await _setup_entry(hass, mock_llm_client, "GigaChat")
+    second = await _setup_entry(hass, mock_llm_client, "GigaChat-2")
+    _assert_sensor_alive(hass, "with two entries")
+
+    assert await hass.config_entries.async_unload(first.entry_id)
+    await hass.async_block_till_done()
+
+    _assert_sensor_alive(hass, "after the move")
+    assert hass.data[DOMAIN].get(sensor_platform.SENSOR_OWNER_KEY) == second.entry_id
+
+    caplog.clear()
+    with patch(
+        "custom_components.smartchain.get_client",
+        new_callable=AsyncMock,
+        return_value=mock_llm_client,
+    ):
+        await hass.config_entries.async_setup(first.entry_id)
+        await hass.async_block_till_done()
+
+    _assert_sensor_alive(hass, "after the other hub came back")
+    assert "does not generate unique IDs" not in caplog.text
+    ent_reg = er.async_get(hass)
+    owned = [
+        ent
+        for ent in ent_reg.entities.values()
+        if ent.platform == DOMAIN and ent.domain == "sensor"
+    ]
+    assert len(owned) == 1
+    assert owned[0].config_entry_id == second.entry_id
+
+
+async def test_a_rehome_that_quietly_fails_still_frees_the_slot(
+    hass: HomeAssistant, mock_llm_client, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The reachable half of the same failure, which had no test and no code.
+
+    The test above forces an exception out of `async_forward_entry_setups`, and
+    that is not how a forwarded platform fails in Home Assistant:
+    `entity_platform._async_setup_platform` catches `Exception`, logs it and
+    returns False, and `async_forward_entry_setups` discards that answer and
+    returns None. So the `except` branch in `async_rehome_sensor` covers a case
+    real Home Assistant does not produce, while the case it *does* produce —
+    the forward comes back clean and the platform never set up — went
+    unnoticed: `async_setup_entry` had already claimed the slot for the
+    receiving hub, and the claim stood for an entry with no entity. Every other
+    hub then skipped the registration, so `sensor.smartchain_last_analysis` was
+    gone for the rest of the run however many times anything reloaded, with
+    nothing said about the singleton at all.
+
+    Nothing here fakes the failure at the seam: the entity itself is made
+    unbuildable and the real forward runs, exactly as it would if
+    `async_added_to_hass` threw or the unique id were refused.
+    """
+    first = await _setup_entry(hass, mock_llm_client, "GigaChat")
+    await _setup_entry(hass, mock_llm_client, "GigaChat-2")
+    _assert_sensor_alive(hass, "with two entries")
+
+    caplog.clear()
+    with patch.object(
+        sensor_platform,
+        "SmartChainLastAnalysisSensor",
+        side_effect=RuntimeError("the entity could not be built"),
+    ):
+        assert await hass.config_entries.async_unload(first.entry_id)
+        await hass.async_block_till_done()
+
+    stranded = hass.states.get(SENSOR_ENTITY_ID)
+    assert stranded is None or stranded.attributes.get("restored"), (
+        "the move did not actually fail — there is still a live entity"
+    )
+    # The slot is the whole point: held here, no hub can ever register the
+    # sensor again without a Home Assistant restart.
+    assert sensor_platform.SENSOR_OWNER_KEY not in hass.data[DOMAIN], (
+        f"the slot is still held by {hass.data[DOMAIN].get(sensor_platform.SENSOR_OWNER_KEY)}"
+    )
+    # And it is not allowed to be silent. Home Assistant logs its own platform
+    # error, which says nothing about a singleton having lost its home.
+    ours = [
+        record
+        for record in caplog.records
+        if record.name.startswith("custom_components")
+        and "Last Analysis sensor" in record.getMessage()
+    ]
+    assert ours, "nothing announced that the sensor lost its home"
+    assert max(record.levelno for record in ours) >= logging.WARNING
+
+    # The next hub to come up must be able to register it again.
+    caplog.clear()
+    with patch(
+        "custom_components.smartchain.get_client",
+        new_callable=AsyncMock,
+        return_value=mock_llm_client,
+    ):
+        await hass.config_entries.async_setup(first.entry_id)
+        await hass.async_block_till_done()
+
+    _assert_sensor_alive(hass, "after a hub came back up following a quiet failed move")
     ent_reg = er.async_get(hass)
     owned = [
         ent

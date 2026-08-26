@@ -13,6 +13,7 @@ from typing import Any
 from homeassistant.core import HomeAssistant
 
 from ...const import (
+    BUILTIN_SEARCH_MIN_TOP_K,
     DOMAIN,
     ENTITY_LEXICAL_CANDIDATES,
     ENTITY_SEARCH_DEFAULT_TOP_K,
@@ -20,6 +21,7 @@ from ...const import (
     ENTITY_TOOL_NAME,
 )
 from .entity_filter import EntityCandidate, resolve_candidates
+from .tool_args import clamp_top_k
 
 LOGGER = logging.getLogger(__name__)
 
@@ -44,8 +46,14 @@ _TOKEN_RE = re.compile(r"[^\W_]+", re.UNICODE)
 
 # Tokens shorter than this are dropped before matching. Short function words
 # ("на", "то", "in", "on") carry no selective power, and dropping them before
-# the set intersection keeps the token arm cheap.
+# the set intersection keeps the token arm cheap. One exemption, in
+# `_query_tokens`: an abbreviation the user capitalised.
 _TOKEN_MIN_LEN = 3
+
+# Floor for the abbreviation exemption to `_TOKEN_MIN_LEN` — see
+# `_query_tokens`. Two, not one: a lone capital letter is a pronoun or the
+# start of a sentence far more often than it is a device's name.
+_ABBREV_MIN_LEN = 2
 
 # Ceiling for a token hit, reached only when every token of the query matched.
 # A hit scores `_TOKEN_SCORE_MAX * matched / len(tokens)`, so an entity that
@@ -61,6 +69,57 @@ def _fold(text: str) -> str:
     return "".join(ch for ch in decomposed if not unicodedata.combining(ch))
 
 
+def _query_tokens(query: str) -> set[str]:
+    """The folded words of `query` worth matching on.
+
+    Splitting the **raw** query rather than the folded one, because the case
+    the user typed is the signal the exemption below reads; folding first
+    destroys it. `_fold` is applied per token afterwards, so the tokens
+    themselves are identical either way.
+
+    The length floor exists to keep function words out ("на", "то", "in",
+    "on"). It also threw away real device names: "выключи ТВ" matched nothing
+    at all, because the only word naming a device is two characters long. The
+    same goes for AC, ПК, ТВ.
+
+    So a short token is kept when the user wrote it in capitals **while
+    writing something else in lower case**. That is how abbreviations are
+    spelled and not how function words are. The second half of the condition
+    matters: in an all-caps utterance every word is capitalised, the signal is
+    gone, and reading it would admit "НА" — a real word of Russian entity
+    names — as a token. There the floor simply applies as before, and the
+    long words of the query still find the entity.
+
+    A lone capital is exempt from the exemption: "Я", "I", "A" open sentences
+    far more often than they name devices.
+    """
+    tokens: set[str] = set()
+    signal_is_readable = not query.isupper()
+    for token in _TOKEN_RE.findall(query):
+        long_enough = len(token) >= _TOKEN_MIN_LEN
+        abbreviation = signal_is_readable and len(token) >= _ABBREV_MIN_LEN and token.isupper()
+        if long_enough or abbreviation:
+            tokens.add(_fold(token))
+    return tokens
+
+
+def _canonical(candidates: dict[str, EntityCandidate], attr: str, folded: str) -> str:
+    """The spelling the registry uses for a value the model wrote in its own case.
+
+    The store-side `where` is matched against indexed metadata byte for byte
+    by every backend, and that metadata holds the registry's spelling. Folding
+    the filter for the local comparison while sending the model's casing to
+    the store would fix half the bug and leave the vector arm returning
+    nothing. Falls back to the folded value when no candidate carries it —
+    then no entity has it either, and an empty result is the right answer.
+    """
+    for cand in candidates.values():
+        value = getattr(cand, attr, "")
+        if value and _fold(value) == folded:
+            return value
+    return folded
+
+
 def get_entity_tool_definition(registry: Any) -> dict[str, Any]:
     names = registry.entity_store_names()
     properties: dict[str, Any] = {
@@ -68,7 +127,7 @@ def get_entity_tool_definition(registry: Any) -> dict[str, Any]:
         "top_k": {
             "type": "integer",
             "default": ENTITY_SEARCH_DEFAULT_TOP_K,
-            "minimum": 1,
+            "minimum": BUILTIN_SEARCH_MIN_TOP_K,
             "maximum": ENTITY_SEARCH_MAX_TOP_K,
         },
         "domain": {"type": "string", "description": "Restrict to one domain, e.g. light."},
@@ -104,12 +163,12 @@ def _lexical(
     `tokenize` decides what "the query" means. Off — the default, and what
     `search_entities` uses — the whole query is one needle, which is right
     when a model supplies a short descriptive phrase. On, the needle is
-    additionally split into words and a candidate is admitted when any word
-    of three characters or more appears **as a whole word** in one of its
-    haystacks. That is what the prompt context needs, because it passes the
-    raw user utterance: "включи свет на кухне" is nobody's entity name, and
-    without the token pass it matches nothing at all on an install with no
-    vector index.
+    additionally split into words (see `_query_tokens` for which of them
+    survive) and a candidate is admitted when any surviving word appears **as
+    a whole word** in one of its haystacks. That is what the prompt context
+    needs, because it passes the raw user utterance: "включи свет на кухне" is
+    nobody's entity name, and without the token pass it matches nothing at all
+    on an install with no vector index.
 
     The token arm compares **words to words**, never substrings. A token is
     kept only when it equals a whole word of a haystack, so "turn off the
@@ -140,9 +199,7 @@ def _lexical(
     needle = _fold(query)
     if not needle:
         return []
-    tokens: set[str] = set()
-    if tokenize:
-        tokens = {t for t in _TOKEN_RE.findall(needle) if len(t) >= _TOKEN_MIN_LEN}
+    tokens = _query_tokens(query) if tokenize else set()
     ranked: list[tuple[int, float, EntityCandidate]] = []
     # Counted separately so the cap behaves as it always has on the
     # `tokenize=False` path (`search_entities`), where `token_hits` stays 0
@@ -258,6 +315,13 @@ async def execute_entity_search(
     state: str | None = None,
     store: str | None = None,
 ) -> str:
+    # Symmetric with `execute_memory_search`: the schema's bounds are advice
+    # to the model, and this is the only place they become real. Here a
+    # negative value is not merely large — it is fed to `rank_entities` as
+    # `fetch_k = top_k * 4`, and `_MAX_STORE_FETCH_K` is an upper bound only,
+    # so `min(-4, 200)` passes the negative straight to the backend.
+    top_k = clamp_top_k(top_k, ENTITY_SEARCH_MAX_TOP_K, ENTITY_TOOL_NAME)
+
     registry = (hass.data.get(DOMAIN) or {}).get("memory")
     names = registry.entity_store_names() if registry is not None else []
     if not names:
@@ -278,11 +342,20 @@ async def execute_entity_search(
         return "Entity lookup failed; see logs."
     candidates = resolve_candidates(hass, indexer.config)
 
+    # The filters are compared case- and accent-insensitively, through the
+    # same `_fold` the lexical matching above uses. A model writes an area the
+    # way the user said it ("кухня"), not the way the area registry spells it
+    # ("Кухня"), and a byte comparison threw away every match — silently, as
+    # "no entities matched".
+    folded_domain = _fold(domain) if domain else ""
+    folded_area = _fold(area) if area else ""
+    folded_state = _fold(state) if state else ""
+
     where_extra: dict[str, Any] = {}
     if domain:
-        where_extra["domain"] = domain
+        where_extra["domain"] = _canonical(candidates, "domain", folded_domain)
     if area:
-        where_extra["area"] = area
+        where_extra["area"] = _canonical(candidates, "area", folded_area)
     # `state` is deliberately NOT a store-side filter, even when the store
     # has index_states: true. Stored state is up to a flush interval old —
     # and arbitrarily old for an entity that has not changed since its last
@@ -324,13 +397,13 @@ async def execute_entity_search(
 
     lines: list[str] = []
     for cand in ranked:
-        if domain and cand.domain != domain:
+        if folded_domain and _fold(cand.domain) != folded_domain:
             continue
-        if area and cand.area != area:
+        if folded_area and _fold(cand.area) != folded_area:
             continue
         live = hass.states.get(cand.entity_id)
         current = live.state if live else "unavailable"
-        if state and current != state:
+        if folded_state and _fold(current) != folded_state:
             continue
         lines.append(
             f"{len(lines) + 1}. {cand.entity_id} — {cand.name} "

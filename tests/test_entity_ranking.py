@@ -10,6 +10,7 @@ from custom_components.smartchain.tools.memory.entity_filter import EntityCandid
 from custom_components.smartchain.tools.memory.entity_index import EntityIndexer
 from custom_components.smartchain.tools.memory.entity_tool import (
     _MAX_STORE_FETCH_K,
+    _query_tokens,
     execute_entity_search,
     rank_entities,
 )
@@ -204,6 +205,72 @@ async def test_tokens_under_three_characters_are_dropped(hass: HomeAssistant) ->
     # The whole needle is not a substring of anything here, so the first two
     # arms cannot fire and the token arm is the only one under test.
     assert await rank_entities(hass, reg, cands, "ты на", top_k=5, tokenize=True) == []
+
+
+def test_query_tokens_keeps_abbreviations_and_drops_short_words() -> None:
+    """The shape of the exemption, stated once.
+
+    A token below the length floor is kept only when the user wrote it in
+    capitals while writing something else in lower case. That is how people
+    spell abbreviations — "ТВ", "AC", "ПК" — and it is not how they spell
+    function words. Length alone cannot separate the two, and a stopword list
+    would need one per language.
+    """
+    assert _query_tokens("выключи ТВ") == {"выключи", "тв"}
+    # Two letters is the floor for the exemption: a lone capital is a pronoun
+    # ("Я", "I") or a sentence's first letter far more often than a device.
+    assert _query_tokens("Я включу ТВ и AC") == {"включу", "тв", "ac"}
+    # Nothing in lower case: no case signal to read, so no exemption.
+    assert _query_tokens("ВЫКЛЮЧИ СВЕТ НА КУХНЕ") == {"выключи", "свет", "кухне"}
+    # A digit run is not an abbreviation.
+    assert _query_tokens("включи свет 12") == {"включи", "свет"}
+
+
+async def test_an_uppercase_abbreviation_is_not_dropped_as_too_short(
+    hass: HomeAssistant,
+) -> None:
+    """ "выключи ТВ" found nothing at all: the only word that names a device
+    is two characters long, so the length floor threw the whole query away."""
+    reg, _ = _registry([])
+    cands = {
+        "media_player.tv": _cand("media_player.tv", "ТВ", area="Гостиная"),
+        "sensor.b": _cand("sensor.b", "Влажность", area="Гостиная"),
+    }
+
+    ranked = await rank_entities(hass, reg, cands, "выключи ТВ", top_k=5, tokenize=True)
+
+    assert [c.entity_id for c in ranked] == ["media_player.tv"]
+
+
+async def test_a_short_function_word_is_still_dropped_beside_an_abbreviation(
+    hass: HomeAssistant,
+) -> None:
+    """The other half. Admitting every short token — the obvious fix — would
+    make "на" a token and drag in every entity whose name contains it."""
+    reg, _ = _registry([])
+    cands = {
+        "light.bath": _cand("light.bath", "Ванна на балконе", area="Балкон"),
+        "media_player.tv": _cand("media_player.tv", "ТВ", area="Гостиная"),
+    }
+
+    ranked = await rank_entities(hass, reg, cands, "включи ТВ на кухне", top_k=5, tokenize=True)
+
+    assert [c.entity_id for c in ranked] == ["media_player.tv"]
+
+
+async def test_an_all_caps_query_carries_no_case_signal(hass: HomeAssistant) -> None:
+    """Shouting is not an abbreviation. With every word capitalised there is
+    nothing to tell "ТВ" from "НА", so the floor applies as it always did —
+    and the entity the query really names is still found by its long words."""
+    reg, _ = _registry([])
+    cands = {
+        "light.bath": _cand("light.bath", "Ванна на балконе", area="Балкон"),
+        "light.ceiling": _cand("light.ceiling", "Потолочный свет", area="Кухня"),
+    }
+
+    ranked = await rank_entities(hass, reg, cands, "ВЫКЛЮЧИ СВЕТ НА КУХНЕ", top_k=5, tokenize=True)
+
+    assert [c.entity_id for c in ranked] == ["light.ceiling"]
 
 
 async def test_off_does_not_match_inside_office(hass: HomeAssistant) -> None:

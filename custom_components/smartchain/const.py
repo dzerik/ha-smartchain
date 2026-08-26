@@ -409,6 +409,11 @@ MEMORY_MAX_TEXT_LEN = 4096
 MEMORY_CHUNK_SIZE = 1024
 MEMORY_CHUNK_OVERLAP = 100
 MEMORY_TOOL_NAME = "search_memory"
+# `top_k` bounds for `search_memory`. They live in the tool's JSON schema, but
+# nothing validates a built-in tool's arguments — `dispatcher.dispatch` runs
+# jsonschema over YAML tools only — so the executor clamps to these itself.
+MEMORY_SEARCH_DEFAULT_TOP_K = 5
+MEMORY_SEARCH_MAX_TOP_K = 20
 SERVICE_CLEAR_MEMORY = "clear_memory"
 EVENT_MEMORY_CLEARED = f"{DOMAIN}_memory_cleared"
 # Relative to hass.config.config_dir/.storage
@@ -521,6 +526,15 @@ ENTITY_STATE_FLUSH_SECONDS = 30
 ENTITY_SEARCH_DEFAULT_TOP_K = 10
 ENTITY_SEARCH_MAX_TOP_K = 50
 ENTITY_LEXICAL_CANDIDATES = 200
+
+# Floor for any built-in search tool's `top_k`. Zero or a negative value is not
+# a smaller search: it goes straight to the vector backend, where each one
+# reads it differently — numpy slices `[:-4]`, `LIMIT -4` is an error to
+# Postgres, `"limit": -4` is one to Qdrant — and `MemoryStore.search` swallows
+# whatever that raises into an empty result. A silent nothing, in other words,
+# where a search was asked for. One hit is the smallest search that is still
+# a search.
+BUILTIN_SEARCH_MIN_TOP_K = 1
 
 # Only what a person controls.
 ENTITY_MINIMAL_DOMAINS = [

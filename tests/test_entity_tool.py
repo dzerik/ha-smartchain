@@ -204,6 +204,104 @@ async def test_domain_and_area_filter_the_result(hass: HomeAssistant) -> None:
     patcher.stop()
 
 
+async def test_area_filter_is_case_insensitive(hass: HomeAssistant) -> None:
+    """A model writes the area as the user said it, not as the registry spells it.
+
+    Every other comparison in this module goes through `_fold`; the filters
+    were the exception and compared bytes, so `area="кухня"` against an area
+    named "Кухня" threw away every match.
+    """
+    hass.states.async_set("light.ceiling", "on", {})
+    _, _, patcher = _registry(hass, [_cand("light.ceiling", "Свет", area="Кухня")])
+
+    result = await execute_entity_search(hass, query="свет", area="кухня")
+
+    patcher.stop()
+    assert "light.ceiling" in result
+
+
+async def test_area_filter_still_excludes_a_different_area(hass: HomeAssistant) -> None:
+    """Folding must not turn the filter into a no-op."""
+    hass.states.async_set("light.ceiling", "on", {})
+    hass.states.async_set("switch.socket", "on", {})
+    _, _, patcher = _registry(
+        hass,
+        [
+            _cand("light.ceiling", "Свет", area="Кухня"),
+            _cand("switch.socket", "Свет", area="Спальня"),
+        ],
+    )
+
+    result = await execute_entity_search(hass, query="свет", area="кухня")
+
+    patcher.stop()
+    assert "light.ceiling" in result
+    assert "switch.socket" not in result
+
+
+async def test_area_reaches_the_store_as_the_registry_spells_it(hass: HomeAssistant) -> None:
+    """The store-side filter is the other half of the same bug.
+
+    `area` goes into the vector query's `where`, and the indexed metadata
+    carries the registry's spelling. Passing the model's casing there drops
+    every vector hit before the folded post-filter ever sees it, so the
+    semantic arm goes silently dead for exactly the queries this tool exists
+    to answer.
+    """
+    hass.states.async_set("light.ceiling", "on", {})
+    hass.states.async_set("switch.socket", "off", {})
+    hit = MemorySnippet(
+        text="…",
+        score=0.9,
+        metadata={"kind": "entity", "entity_id": "switch.socket", "area": "Кухня"},
+    )
+    _, store, patcher = _registry(
+        hass,
+        [_cand("light.ceiling", "Потолок", area="Кухня"), _cand("switch.socket", "Розетка")],
+    )
+
+    async def _search(_query, *, top_k, where):
+        """A backend that really applies the metadata filter it is handed."""
+        return [hit] if all(hit.metadata.get(k) == v for k, v in where.items()) else []
+
+    store.search = AsyncMock(side_effect=_search)
+
+    result = await execute_entity_search(hass, query="кофеварка", area="кухня")
+
+    patcher.stop()
+    assert store.search.await_args.kwargs["where"]["area"] == "Кухня"
+    assert "switch.socket" in result
+
+
+async def test_state_filter_is_case_insensitive(hass: HomeAssistant) -> None:
+    hass.states.async_set("cover.a", "open", {})
+    hass.states.async_set("cover.b", "closed", {})
+    _, _, patcher = _registry(hass, [_cand("cover.a", "Штора A"), _cand("cover.b", "Штора B")])
+
+    result = await execute_entity_search(hass, query="штора", state="OPEN")
+
+    patcher.stop()
+    assert "cover.a" in result
+    assert "cover.b" not in result
+
+
+async def test_domain_filter_is_case_insensitive(hass: HomeAssistant) -> None:
+    hass.states.async_set("light.ceiling", "on", {})
+    hass.states.async_set("switch.socket", "on", {})
+    _, store, patcher = _registry(
+        hass,
+        [_cand("light.ceiling", "Свет"), _cand("switch.socket", "Свет", area="Спальня")],
+    )
+
+    result = await execute_entity_search(hass, query="свет", domain="Light")
+
+    patcher.stop()
+    assert "light.ceiling" in result
+    assert "switch.socket" not in result
+    # …and the store-side filter gets the canonical spelling, not "Light".
+    assert store.search.await_args.kwargs["where"]["domain"] == "light"
+
+
 async def test_state_filter_works_without_index_states(hass: HomeAssistant) -> None:
     """Applied after enrichment rather than as a metadata filter — not an error."""
     hass.states.async_set("cover.a", "open", {})
