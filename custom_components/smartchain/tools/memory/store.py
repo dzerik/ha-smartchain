@@ -94,6 +94,21 @@ class MemoryStore:
             return
 
         dim = len(probe)
+        if dim <= 0:
+            # An empty vector is a provider that failed politely, not a
+            # zero-dimension store. Accepting it built a store that reported
+            # itself healthy and could never match anything.
+            LOGGER.error(
+                "SmartChain memory: the embeddings provider answered the dimension "
+                "probe with an empty vector; this store is disabled"
+            )
+            self.unavailable_reason = (
+                "the embeddings provider answered the dimension probe with an "
+                "empty vector; check the configured embeddings model"
+            )
+            self.is_available = False
+            return
+
         try:
             await self.backend.initialize(dim)
         except BackendInitError as err:
@@ -122,7 +137,12 @@ class MemoryStore:
         metadata: dict[str, Any],
         doc_id: str | None = None,
     ) -> list[str]:
-        """Embed and store a text. Returns the list of doc_ids written."""
+        """Embed and store a text. Returns the list of doc_ids written.
+
+        Raises when the write fails, so a caller can tell "nothing to write"
+        from "the write did not happen". `[]` means only the first: an empty
+        text, or a store switched off.
+        """
         if not self.is_available:
             return []
         chunks = chunk_text(text)
@@ -149,9 +169,23 @@ class MemoryStore:
         try:
             async with asyncio.timeout(MEMORY_BACKEND_TIMEOUT_SECONDS):
                 await self.backend.upsert(records)
-        except Exception:  # noqa: BLE001 — runtime, store stays up
-            LOGGER.exception("memory upsert failed on backend %s", self.backend.name)
-            return []
+        except Exception as err:
+            # Raised, not swallowed. Returning `[]` here read as "wrote
+            # nothing" to a caller that checked, and as nothing at all to the
+            # three callers that do not: conversation ingest, whose per-store
+            # `except` exists so one dead store does not silence the others;
+            # the logbook poller, which counts a row `written` when `add`
+            # returns; and the entity indexer, whose sweep must abort before
+            # deleting orphans if a write failed. All three were written
+            # against a store that raises — and tested against mocks that do.
+            #
+            # The store itself stays available: this is a runtime failure, not
+            # a broken configuration. `type(err).__name__` and never
+            # `str(err)`, which for a provider error can carry an API key.
+            LOGGER.warning(
+                "memory upsert failed on backend %s: %s", self.backend.name, type(err).__name__
+            )
+            raise
         return [r.doc_id for r in records]
 
     async def search(
@@ -160,15 +194,30 @@ class MemoryStore:
         top_k: int = 5,
         where: dict[str, Any] | None = None,
     ) -> list[MemorySnippet]:
+        """Nearest snippets to `query`.
+
+        Raises when the lookup fails. An empty list is an answer about the
+        stored memories — never about the store's health — because both
+        callers turn the two cases into different words for the user.
+        """
         if not self.is_available:
             return []
         try:
             vector = await self.embeddings.embed_query(query)
             async with asyncio.timeout(MEMORY_BACKEND_TIMEOUT_SECONDS):
                 hits = await self.backend.query(vector, top_k, where)
-        except Exception:  # noqa: BLE001 — runtime, store stays up
-            LOGGER.exception("memory search failed on backend %s", self.backend.name)
-            return []
+        except Exception as err:
+            # Raised, not swallowed. `[]` from here is indistinguishable from
+            # an empty store, and that is exactly what the callers must be
+            # able to tell apart: `execute_memory_search` renders "Memory
+            # lookup failed; see logs." rather than letting the model report
+            # "No memories matched the query.", and `rank_entities` chooses
+            # between degrading to lexical hits and failing its own caller.
+            # Both handlers were unreachable while this returned `[]`.
+            LOGGER.warning(
+                "memory search failed on backend %s: %s", self.backend.name, type(err).__name__
+            )
+            raise
 
         return [
             MemorySnippet(

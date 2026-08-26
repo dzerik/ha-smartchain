@@ -27,3 +27,6 @@ docs/superpowers/
 /.serena/
 .pytest_cache/
 /secrets/
+
+# Panel test harness (npm) — the panel itself ships no JS dependency
+node_modules/

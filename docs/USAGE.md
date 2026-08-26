@@ -546,9 +546,9 @@ Each MCP server's tools are registered as `<prefix>__<sanitised_name>` to avoid 
 ### 8.3. Reliability
 
 - One slow or failed server doesn't affect the others.
-- Auto-reconnect with exponential backoff (1 s → 30 s).
-- Per-call timeout (default 30 s).
-- `verify_ssl: false` is honoured for SSE/HTTP transports via a custom httpx client factory.
+- Auto-reconnect with exponential backoff: the wait after a failed connect starts at 1 s and doubles — 1, 2, 4, 8, 16 — then stays at 30 s for as long as the server is down. A server that reconnects and later drops again starts the ramp over from 1 s.
+- Every tool call is bounded at 30 s; past that the LLM gets `"Error: MCP call timed out"` and the connection is left alone. **This bound is fixed, not configurable** — the `timeout:` key in §8.1 is the *transport* timeout handed to the SSE / HTTP client, which is a different thing.
+- `verify_ssl: false` is honoured for SSE/HTTP transports via a custom httpx client factory; it disables certificate verification for that server's connection only.
 
 ### 8.4. Per-agent visibility
 
@@ -1193,6 +1193,36 @@ When you delegate to a sibling through `ask_agent` / `ask_agents` / `critique_re
 
 When the `ai_task` integration is present in HA, SmartChain registers an AI Task entity per sub-entry. This is the recommended way to produce **structured data** from LLM responses in automations.
 
+### `structure` is a mapping of fields, not a JSON Schema
+
+The `ai_task.generate_data` service takes a mapping of *field name → selector*, the same shape a script's `fields:` block uses. A JSON Schema written in its place (`type: object`, `properties: …`) is rejected by the service before SmartChain ever sees it.
+
+| key | meaning |
+| --- | --- |
+| `description` | prose shown to the model, saying what the field means |
+| `required` | `true` when the answer must contain the field (default `false`) |
+| `selector` | any [HA selector](https://www.home-assistant.io/docs/blueprint/selectors/) — it decides the field's type |
+
+### How the schema reaches the model, and what happens to the answer
+
+SmartChain converts that mapping into JSON Schema and gets it in front of the model:
+
+* **Ollama** is given it as the request's `format` parameter, so the server constrains decoding directly.
+* **Every other provider** is given it as a `--- RESPONSE FORMAT (DO NOT CHANGE) ---` block appended to the system prompt. Native structured output on GigaChat and Anthropic is a forced tool call, which collides with the tools an AI Task may already carry, and OpenAI's `response_format: json_schema` is model-dependent — a wrong pairing is a hard request error where the prompt simply works. If an Ollama client is too old for a schema in `format`, it falls back to the same prompt block.
+
+The reply is then parsed leniently — a markdown fence around the JSON, or a sentence of preamble in front of it, is stripped — and **validated against `structure`**. Validation is not cosmetic: it coerces the selectors' types (a `boolean` field arriving as `"true"` comes back as `true`, a `number` field comes back as a float) and it fails the task on a missing, invented or wrongly typed field. The caller is an automation with nobody to re-ask, so a wrongly shaped answer has to arrive as an error rather than as data.
+
+### Attachments
+
+The entity declares `SUPPORT_ATTACHMENTS`, so `ai_task.generate_data` accepts them. Two things to know:
+
+* Each attachment needs **both** `media_content_id` and `media_content_type`. The service's media selector rejects an item without the second one, which is easy to miss because the resolver itself never reads it for a camera source.
+* Only **images** are sent — they are base64-encoded into the request. An attachment of any other type fails the task with its MIME type in the message, rather than being dropped and answered without. Whether the model can actually read the image is still a question of the provider and the model you picked.
+
+### Reading the result
+
+`response_variable` receives the whole service response, which is `{"conversation_id": …, "data": …}`. The generated value lives in **`result.data`**; `result.items` is not it, and on a mapping `items` is a Jinja method rather than your field.
+
 ```yaml
 automation:
   - alias: "Daily fridge inventory"
@@ -1203,28 +1233,32 @@ automation:
       - service: ai_task.generate_data
         data:
           entity_id: ai_task.smartchain_main
-          task_name: "fridge_inventory"
-          instructions: "List items in the fridge based on the latest camera image."
+          task_name: fridge_inventory
+          instructions: >-
+            Look at the fridge photo and list everything you can see.
           attachments:
-            media_content_id: media-source://camera/camera.fridge
+            - media_content_id: media-source://camera/camera.fridge
+              media_content_type: image/jpeg
           structure:
-            type: object
-            properties:
-              items:
-                type: array
-                items: { type: string }
-              expiring_soon:
-                type: array
-                items: { type: string }
+            items:
+              description: Everything visible in the fridge
+              required: true
+              selector:
+                text:
+                  multiple: true
+            expiring_soon:
+              description: Items that look close to their use-by date
+              required: false
+              selector:
+                text:
+                  multiple: true
         response_variable: result
       - service: persistent_notification.create
         data:
-          message: "Items: {{ result.items | join(', ') }}"
+          message: "Items: {{ result.data['items'] | join(', ') }}"
 ```
 
-The response is validated against `structure` and returned as a dict.
-
-For downstream integrations, `smartchain.async_generate_structured()` is re-exported from `custom_components.smartchain` as a public helper.
+For downstream integrations, `smartchain.async_generate_structured()` is re-exported from `custom_components.smartchain` as a public helper. It is a different path with a different contract: it takes a **pydantic** model, not a `vol.Schema`, and it does use `with_structured_output` because it is not feeding a Home Assistant chat log.
 
 ---
 

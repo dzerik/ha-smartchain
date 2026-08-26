@@ -168,6 +168,11 @@ class MCPManager:
                     action=MCPAction(
                         server=cfg.name,
                         tool_name=t["name"],
+                        # A mirror of the bound `call_tool` enforces, not a
+                        # per-tool knob: nothing reads this field back, and no
+                        # YAML key sets it. It exists so the tool inventory and
+                        # the websocket API can show the budget in force, so it
+                        # must never carry a number `call_tool` would not honour.
                         timeout=self._call_timeout,
                     ),
                 )

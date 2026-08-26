@@ -34,8 +34,11 @@ jobs:
       - name: Build HACS zip
         run: |
           cd custom_components/smartchain
+          # `panel/__tests__` is the jsdom harness — it is never imported by
+          # the panel's module graph, so it is inert in a Home Assistant
+          # install, but there is no reason to ship it to one.
           zip -r "${GITHUB_WORKSPACE}/smartchain.zip" . \
-            -x "*__pycache__*" "*.pyc" "*.pyo"
+            -x "*__pycache__*" "*.pyc" "*.pyo" "*__tests__*"
 
       # Keyless signing via Sigstore (OIDC, no secrets).
       # Produces smartchain.zip.sigstore alongside the zip, which any

@@ -131,6 +131,90 @@ async def test_store_metadata_helpers_swallow_backend_failures(store, caplog) ->
     assert store.is_available is True
 
 
+async def test_search_does_not_report_a_broken_store_as_no_memories(store) -> None:
+    """A failed lookup and an empty store must not give the same answer.
+
+    Every caller of `MemoryStore.search` is written around this: the
+    `search_memory` tool wraps the call in `try/except` to render "Memory
+    lookup failed; see logs." instead of "No memories matched the query.",
+    and `rank_entities` wraps it to decide between degrading to lexical and
+    propagating. Both handlers were unreachable while the store swallowed
+    the failure and returned `[]` — the model was told, confidently, that
+    nothing had been remembered.
+    """
+    store.backend.query = AsyncMock(side_effect=RuntimeError("boom"))
+
+    with pytest.raises(RuntimeError):
+        await store.search("hello", top_k=3)
+
+    assert store.is_available is True
+
+
+async def test_search_reports_a_failed_embedding_too(store) -> None:
+    """The query has to be embedded before the backend is ever asked.
+
+    A provider that refuses is just as much a failed lookup as an
+    unreachable database, and must not read as "nothing matched" either.
+    """
+    store.embeddings.embed_query = AsyncMock(side_effect=RuntimeError("provider down"))
+
+    with pytest.raises(RuntimeError):
+        await store.search("hello", top_k=3)
+
+
+async def test_add_reports_a_failed_write_to_its_caller(store) -> None:
+    """Nothing was written, and the caller has to be able to find that out.
+
+    Three callers already assume it: conversation ingest catches per store
+    so one bad store does not stop the others, the logbook poller counts a
+    row as `written` only if `add` returned without raising, and the entity
+    indexer relies on a failed write aborting the sweep *before* it deletes
+    orphans. All three were tested against mocks that raise while the real
+    store returned `[]` and let every one of those paths run on.
+    """
+    store.backend.upsert = AsyncMock(side_effect=RuntimeError("disk full"))
+
+    with pytest.raises(RuntimeError):
+        await store.add("hello", {"kind": "conversation", "timestamp": "t"})
+
+    assert store.is_available is True
+
+
+async def test_add_still_answers_quietly_when_the_store_is_switched_off(store) -> None:
+    """The unavailable path is not a failure and must stay a silent no-op.
+
+    Otherwise every conversation turn on an installation with a disabled
+    store would raise on ingest.
+    """
+    store.is_available = False
+
+    assert await store.add("hello", {"kind": "conversation"}) == []
+
+
+async def test_an_embedder_that_answers_with_nothing_does_not_make_a_working_store(
+    store, hass
+) -> None:
+    """A zero-length probe is a broken provider, not a zero-dimension store.
+
+    `dim = len(probe)` accepted `[]` and set the store `is_available`, so a
+    provider answering with an empty vector produced a store that looked
+    healthy and could never match anything.
+    """
+    from custom_components.smartchain.tools.memory.store import MemoryStore
+
+    embeddings = AsyncMock()
+    embeddings.embed_query = AsyncMock(return_value=[])
+    backend = AsyncMock()
+    backend.name = "fake"
+
+    empty = MemoryStore(hass, embeddings, backend)
+    await empty.async_setup()
+
+    assert empty.is_available is False
+    assert empty.unavailable_reason is not None
+    backend.initialize.assert_not_awaited()
+
+
 async def test_a_failed_read_is_not_reported_as_an_empty_store(store) -> None:
     """`None` and `{}` must never collapse into one another.
 

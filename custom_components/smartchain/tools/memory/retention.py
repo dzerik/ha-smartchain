@@ -45,6 +45,10 @@ class RetentionTask:
     def start(self) -> None:
         if self._task is not None or not self.is_enabled:
             return
+        # stop() latches the event, so a restarted task would fall straight
+        # out of `_loop`'s while and never sweep again — alive-looking and
+        # silently doing nothing. Clear the latch before spawning.
+        self._stop.clear()
         self._task = self.hass.async_create_background_task(
             self._loop(), name="smartchain_memory_retention"
         )

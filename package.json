@@ -1,0 +1,14 @@
+{
+  "name": "smartchain-panel-tests",
+  "private": true,
+  "type": "module",
+  "description": "Test harness for the SmartChain panel's ES modules. The panel itself has no build step and no npm dependency — it is loaded straight from custom_components/smartchain/panel/ by the browser. This package exists only so those modules can be exercised under jsdom.",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "jsdom": "^28.0.0",
+    "vitest": "^4.0.0"
+  }
+}

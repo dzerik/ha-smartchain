@@ -49,15 +49,38 @@
           "api_key": "API Key",
           "skip_validation": "Skip validation"
         }
+      },
+      "reauth_confirm": {
+        "title": "SmartChain - re-enter credentials",
+        "description": "The provider rejected the stored credentials for {name}. Enter them again; your agents, tools and memory stores are kept.",
+        "data": {
+          "api_key": "API Key",
+          "folder_id": "Folder ID",
+          "base_url": "Base URL",
+          "skip_validation": "Skip validation"
+        }
+      },
+      "reconfigure": {
+        "title": "SmartChain - connection details",
+        "description": "Change how SmartChain reaches {name}. Leave the API key blank to keep the stored one.",
+        "data": {
+          "api_key": "API Key",
+          "folder_id": "Folder ID",
+          "base_url": "Base URL",
+          "skip_validation": "Skip validation"
+        }
       }
     },
     "abort": {
-      "already_configured": "Already configured"
+      "already_configured": "Already configured",
+      "reauth_successful": "Credentials updated",
+      "reconfigure_successful": "Connection updated"
     },
     "error": {
       "cannot_connect": "Can not connect",
       "invalid_response": "Invalid response",
-      "unknown": "Unknown error"
+      "unknown": "Unknown error",
+      "invalid_auth": "Invalid credentials"
     }
   },
   "options": {

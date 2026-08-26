@@ -11,6 +11,51 @@ project follows [Semantic Versioning](https://semver.org/).
 > **Note:** the `5.4.0` section below is a roll-up: it covers `5.4.0` through
 > `5.4.7`, which were developed on one branch and are not separated here.
 
+## [5.5.0] - unreleased
+
+### Added
+- **The panel has tests.** 3 323 lines of JavaScript had never been executed by
+  anything — no `package.json`, no runner, no `*.test.js`, and CI ran only ruff
+  and pytest. There is now a vitest + jsdom runner, a `panel` job in CI, and a
+  first suite covering `escapeHtml`, `_parseError`, `_merged`, the setter
+  ordering in `_loadIfReady`, and the `tools-tab` state machine — the last of
+  which is an unticked checkbox in the project's own plan.
+- **`ConfigFlow` can be repaired.** `async_step_reauth` and
+  `async_step_reconfigure` over the existing `ENGINE_SCHEMA` and
+  `validate_client`, so rotating a key or moving Ollama to another host no
+  longer means deleting the entry together with every subentry under it —
+  agents, tools, and memory stores holding a `dsn` or an `api_key` that is
+  stored nowhere else. `ConfigEntryAuthFailed` on 401/403 makes Home Assistant
+  raise the reauth notification itself, and the classifier keys off the status
+  code rather than the exception type, because GigaChat's `AuthenticationError`
+  is a subclass of `ResponseError` and was being reported as a bad response.
+
+### Fixed
+- **AI Task never showed the model the structure it was asked for.**
+  `task.structure` was a boolean flag meaning "try `json_loads`": the schema
+  reached neither the model nor the answer, though both guides promise it is
+  validated against. It is converted with `voluptuous_openapi` and the
+  `selector_serializer` — without which conversion does not degrade, it raises —
+  given to Ollama natively and to everyone else as a response-format block, and
+  the answer is put through `task.structure()` before it is returned. A reply
+  that does not fit is an error naming the field, because the caller is an
+  automation and cannot ask again. `with_structured_output` was tried and
+  rejected: it returns a parsing pipeline whose `astream` yields parsed objects
+  rather than chunks, which would have cost AI Task its tools and the
+  "the model said nothing" guarantee from 5.4.14.
+- **Failures around long-term memory reported success.** A rejected upsert came
+  back as `[]` and counted as written; a lookup that failed came back as `[]`
+  and was rendered to the model as "no memories matched", which is a confident
+  false statement about the person's home rather than an error; and an
+  embeddings provider answering with an empty vector produced a store with
+  `dim=0` that was marked available and could never match anything.
+- **Guarantees nothing was watching now have tests that fail without them:**
+  the retention cutoff (a mutation deleting everything older than one day used
+  to pass the whole suite — this is the only code that destroys user data),
+  the MCP reconnect backoff, `verify_ssl: false` on the SSE and streamable-HTTP
+  transports and on qdrant, and the timeouts around the store and the
+  embeddings, none of whose constants were mentioned anywhere in `tests/`.
+
 ## [5.4.17] - unreleased
 
 ### Changed

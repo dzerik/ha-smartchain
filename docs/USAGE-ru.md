@@ -1161,6 +1161,36 @@ Mentioned in this request:
 
 Когда в HA установлена интеграция `ai_task`, SmartChain регистрирует AI Task entity на каждый sub-entry. Это рекомендуемый способ получать **структурированные данные** из LLM в автоматизациях.
 
+### `structure` — это мэппинг полей, а не JSON Schema
+
+Сервис `ai_task.generate_data` принимает мэппинг *имя поля → селектор*, той же формы, что блок `fields:` у скрипта. JSON Schema, написанная на его месте (`type: object`, `properties: …`), отбраковывается сервисом ещё до того, как SmartChain её увидит.
+
+| ключ | смысл |
+| --- | --- |
+| `description` | текст, который видит модель: что означает поле |
+| `required` | `true`, если поле обязано быть в ответе (по умолчанию `false`) |
+| `selector` | любой [селектор HA](https://www.home-assistant.io/docs/blueprint/selectors/) — он и задаёт тип поля |
+
+### Как схема доходит до модели и что происходит с ответом
+
+SmartChain превращает этот мэппинг в JSON Schema и кладёт её перед моделью:
+
+* **Ollama** получает её как параметр запроса `format` — сервер сам ограничивает декодирование.
+* **Все остальные провайдеры** получают её блоком `--- RESPONSE FORMAT (DO NOT CHANGE) ---`, дописанным к системному промпту. Нативный structured output у GigaChat и Anthropic — это принудительный tool call, который конфликтует с инструментами, уже выданными задаче, а у OpenAI `response_format: json_schema` зависит от модели: неудачная пара — жёсткая ошибка запроса там, где промпт просто работает. Если клиент Ollama слишком стар для схемы в `format`, он уходит на тот же промпт.
+
+Дальше ответ разбирается терпимо — markdown-забор вокруг JSON или фраза-преамбула перед ним снимаются — и **валидируется по `structure`**. Валидация здесь не косметика: она приводит типы селекторов (поле `boolean`, пришедшее строкой `"true"`, возвращается как `true`, поле `number` — как float) и роняет задачу на пропущенном, выдуманном или неверно типизированном поле. Заказчик ответа — автоматизация, переспросить некому, поэтому ответ не той формы обязан приходить ошибкой, а не данными.
+
+### Вложения
+
+Сущность объявляет `SUPPORT_ATTACHMENTS`, так что `ai_task.generate_data` их принимает. Две детали:
+
+* У каждого вложения нужны **оба** ключа: `media_content_id` и `media_content_type`. Медиа-селектор сервиса отбраковывает элемент без второго — это легко упустить, потому что сам резолвер для камеры его никогда не читает.
+* Отправляются только **изображения**: они кодируются в base64 внутрь запроса. Вложение любого другого типа роняет задачу с MIME-типом в сообщении, а не тихо выпадает, оставляя ответ, полученный без файла. Сумеет ли модель прочитать картинку — по-прежнему вопрос провайдера и выбранной модели.
+
+### Как читать результат
+
+В `response_variable` попадает весь ответ сервиса: `{"conversation_id": …, "data": …}`. Сгенерированное значение лежит в **`result.data`**; `result.items` — это не оно, а у мэппинга `items` вообще метод Jinja, а не ваше поле.
+
 ```yaml
 automation:
   - alias: "Ежедневная инвентаризация холодильника"
@@ -1171,28 +1201,32 @@ automation:
       - service: ai_task.generate_data
         data:
           entity_id: ai_task.smartchain_main
-          task_name: "fridge_inventory"
-          instructions: "Перечисли продукты в холодильнике на основе снимка камеры."
+          task_name: fridge_inventory
+          instructions: >-
+            Посмотри на снимок холодильника и перечисли всё, что видишь.
           attachments:
-            media_content_id: media-source://camera/camera.fridge
+            - media_content_id: media-source://camera/camera.fridge
+              media_content_type: image/jpeg
           structure:
-            type: object
-            properties:
-              items:
-                type: array
-                items: { type: string }
-              expiring_soon:
-                type: array
-                items: { type: string }
+            items:
+              description: Всё, что видно в холодильнике
+              required: true
+              selector:
+                text:
+                  multiple: true
+            expiring_soon:
+              description: Продукты, у которых скоро истекает срок
+              required: false
+              selector:
+                text:
+                  multiple: true
         response_variable: result
       - service: persistent_notification.create
         data:
-          message: "Продукты: {{ result.items | join(', ') }}"
+          message: "Продукты: {{ result.data['items'] | join(', ') }}"
 ```
 
-Ответ валидируется по `structure` и возвращается как dict.
-
-Для downstream-интеграций `smartchain.async_generate_structured()` экспортирован из `custom_components.smartchain` как публичный helper.
+Для downstream-интеграций `smartchain.async_generate_structured()` экспортирован из `custom_components.smartchain` как публичный helper. Это другой путь с другим контрактом: он принимает **pydantic**-модель, а не `vol.Schema`, и он действительно использует `with_structured_output`, потому что не кормит собой chat log Home Assistant.
 
 ---
 

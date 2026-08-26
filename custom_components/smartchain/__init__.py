@@ -20,7 +20,7 @@ from homeassistant.core import (
     SupportsResponse,
     callback,
 )
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.exceptions import ConfigEntryAuthFailed, HomeAssistantError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_send
@@ -1236,7 +1236,9 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Initialize SmartChain."""
     # Deferred for the same reason as in `update_listener`: `websocket_api`
-    # imports from this module.
+    # imports from this module. `config_flow` is deferred on the same grounds
+    # as every other reference to it in this file.
+    from .config_flow import is_auth_error
     from .websocket_api import async_invalidate_stale_model_cache
 
     engine = entry.data.get(CONF_ENGINE) or ID_GIGACHAT
@@ -1292,7 +1294,23 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         if subentry.subentry_type != SUBENTRY_TYPE_CONVERSATION:
             continue
         common_args = _resolve_client_args(dict(subentry.data))
-        clients[sub_id] = await get_client(hass, engine, entry, common_args)
+        try:
+            clients[sub_id] = await get_client(hass, engine, entry, common_args)
+        except Exception as err:
+            # A rejected credential is not a broken integration, it is a
+            # question for the user — but only Home Assistant can ask it, and
+            # only if something raises `ConfigEntryAuthFailed`. Nothing did
+            # until v5.4.18, so a rotated key produced an entry stuck in
+            # `SETUP_ERROR` with no reauth notification and no way to enter a
+            # new key short of deleting the hub and its subentries.
+            #
+            # Narrow on purpose: `is_auth_error` answers only for 401 and 403.
+            # Anything else — a timeout, a 500, a bad model name — re-raises
+            # unchanged, because sending a user to retype a working key is the
+            # louder-failure-turned-quieter shape this must not become.
+            if is_auth_error(err):
+                raise ConfigEntryAuthFailed(f"{engine} rejected the stored credentials") from err
+            raise
 
     if not clients and entry.minor_version < 2:
         # Only reachable when `_migrate_legacy_agent` refused (it is the sole

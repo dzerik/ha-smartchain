@@ -248,6 +248,99 @@ def connection_schema(engine: str, options: Mapping[str, Any] | None = None) -> 
     )
 
 
+# The keys on a config entry that must never travel back to a browser, by the
+# same argument that made a memory store's `dsn` one (`STORE_SECRET_FIELDS`).
+# `folder_id` is deliberately not here: it is an account identifier, it is
+# shown in Yandex's own console, and blanking it would force the user to
+# retype it every time they rotate a key.
+ENTRY_SECRET_FIELDS = (CONF_API_KEY,)
+
+# The HTTP statuses that mean "this credential is wrong", as opposed to "this
+# provider is unwell". Only these two may send a user to a reauth form; a 429
+# or a 500 must not, because retyping a working key fixes neither.
+_AUTH_STATUSES = frozenset({401, 403})
+
+
+def _error_status(err: BaseException) -> int | None:
+    """The HTTP status behind a provider exception, if it carries one.
+
+    Every SDK this integration talks to spells it differently and none of them
+    share a base class: gigachat's `ResponseError` and openai's
+    `APIStatusError` expose `status_code`, aiohttp's `ClientResponseError`
+    exposes `status`, and httpx's `HTTPStatusError` hides it on `.response`.
+    """
+    for candidate in (
+        getattr(err, "status_code", None),
+        getattr(err, "status", None),
+        getattr(getattr(err, "response", None), "status_code", None),
+        getattr(getattr(err, "response", None), "status", None),
+    ):
+        if isinstance(candidate, bool) or not isinstance(candidate, int):
+            continue
+        return candidate
+    return None
+
+
+def is_auth_error(err: BaseException) -> bool:
+    """True when ``err`` says the credential was rejected.
+
+    Used in two places that must agree: the config flow, which turns it into
+    an `invalid_auth` form error rather than the catch-all `unknown`, and
+    `async_setup_entry`, which turns it into `ConfigEntryAuthFailed` so Home
+    Assistant raises the reauth notification itself.
+    """
+    return _error_status(err) in _AUTH_STATUSES
+
+
+def credentials_schema(engine: str, current: Mapping[str, Any] | None = None) -> vol.Schema:
+    """`ENGINE_SCHEMA[engine]`, rebuilt for repairing an existing connection.
+
+    Deliberately derived from the creation schema rather than written out a
+    second time: a provider that gains a field gains it on every form at once,
+    which is the failure mode `_compatible_schema` already exists to avoid.
+
+    Two changes, both about not destroying what is already stored:
+
+    * a secret is downgraded to `vol.Optional` and gets no suggested value, so
+      the stored key never reaches the browser and an untouched field can be
+      submitted blank. `merge_entry_secrets` reads blank as "keep";
+    * every other field is pre-filled from what is stored, keeping its original
+      marker class, so a required endpoint stays required and a user opening
+      the form to change a key does not have to retype it from memory.
+    """
+    data = current or {}
+    fields: dict[Any, Any] = {}
+    for marker, validator in ENGINE_SCHEMA[engine].schema.items():
+        name = str(marker.schema)
+        if name in ENTRY_SECRET_FIELDS:
+            fields[vol.Optional(name)] = validator
+        elif name in data:
+            fields[type(marker)(name, description={"suggested_value": data[name]})] = validator
+        else:
+            fields[marker] = validator
+    return vol.Schema(fields)
+
+
+def merge_entry_secrets(
+    submitted: Mapping[str, Any], stored: Mapping[str, Any] | None
+) -> dict[str, Any]:
+    """Carry a stored credential forward when the form submitted an empty one.
+
+    The same rule, and the same reason, as `merge_store_secrets`: the form
+    never receives the key back, so an untouched edit submits it empty, and
+    reading that as "clear it" would turn a `base_url` change into a dead hub.
+    Clearing a credential is done by removing the entry.
+    """
+    out = dict(submitted)
+    for key in ENTRY_SECRET_FIELDS:
+        if not str(out.get(key) or "").strip():
+            out.pop(key, None)
+            kept = (stored or {}).get(key)
+            if kept:
+                out[key] = kept
+    return out
+
+
 class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for SmartChain."""
 
@@ -331,19 +424,10 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if user_input is None:
             return self.async_show_form(step_id=engine, data_schema=ENGINE_SCHEMA[engine])
 
-        errors: dict[str, str] = {}
         user_input[CONF_ENGINE] = engine
         unique_id = UNIQUE_ID[engine]
-        try:
-            await validate_client(self.hass, user_input)
-        except ConnectError:
-            errors["base"] = "cannot_connect"
-        except ResponseError:
-            errors["base"] = "invalid_response"
-        except Exception as inst:
-            LOGGER.exception("Unexpected exception %s", type(inst))
-            errors["base"] = "unknown"
-        else:
+        errors = await self._probe_connection(user_input)
+        if not errors:
             await self.async_set_unique_id(unique_id)
             self._abort_if_unique_id_configured()
             return self.async_create_entry(title=unique_id, data=user_input)
@@ -351,6 +435,89 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         return self.async_show_form(
             step_id=engine, data_schema=ENGINE_SCHEMA[engine], errors=errors
         )
+
+    async def _probe_connection(self, candidate: dict[str, Any]) -> dict[str, str]:
+        """Run `validate_client` and translate what comes back into form errors.
+
+        One implementation for creating a connection and for repairing one, so
+        a provider whose failure mode is classified here is classified the same
+        on every form. `is_auth_error` is asked before `ResponseError` because
+        gigachat's authentication failures *are* `ResponseError`s — checking
+        the type first would file a rejected credential under "invalid
+        response" and never offer the reauth wording.
+        """
+        try:
+            await validate_client(self.hass, candidate)
+        except ConnectError:
+            return {"base": "cannot_connect"}
+        except Exception as inst:
+            if is_auth_error(inst):
+                return {"base": "invalid_auth"}
+            if isinstance(inst, ResponseError):
+                return {"base": "invalid_response"}
+            LOGGER.exception("Unexpected exception %s", type(inst))
+            return {"base": "unknown"}
+        return {}
+
+    # -- repairing a connection that already exists -------------------------
+    #
+    # Until v5.4.18 there was no such path at all: nothing in the integration
+    # wrote `entry.data` after creation, so a rotated key or a moved host meant
+    # deleting the hub — and deleting a hub deletes its subentries, which is
+    # where every agent, every custom tool and every memory store's `dsn` live.
+
+    async def async_step_reauth(self, entry_data: Mapping[str, Any]) -> ConfigFlowResult:
+        """Home Assistant asks for the credential again; show the form."""
+        return await self.async_step_reauth_confirm()
+
+    async def async_step_reauth_confirm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Re-enter the credential for an existing hub."""
+        return await self._async_step_repair(self._get_reauth_entry(), "reauth_confirm", user_input)
+
+    async def async_step_reconfigure(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Edit the connection details of an existing hub."""
+        return await self._async_step_repair(
+            self._get_reconfigure_entry(), "reconfigure", user_input
+        )
+
+    async def _async_step_repair(
+        self,
+        entry: ConfigEntry,
+        step_id: str,
+        user_input: dict[str, Any] | None,
+    ) -> ConfigFlowResult:
+        """Validate an edit to an existing entry's connection and store it.
+
+        The engine is not editable and is not asked for: `UNIQUE_ID[engine]` is
+        the entry's unique id, so letting it change here would mean either
+        colliding with another provider's entry or silently rewriting this
+        one's identity. That also means the unique id cannot move, which is why
+        no `_abort_if_unique_id_configured` runs on this path — it would abort
+        on the very entry being edited.
+
+        `data_updates` rather than `data`: the merge is what keeps a key the
+        current schema does not declare (a legacy field, a `folder_id` on a
+        form that did not ask for one) from being deleted by an unrelated edit.
+        """
+        engine = entry.data.get(CONF_ENGINE, ID_GIGACHAT)
+        schema = credentials_schema(engine, entry.data)
+        if user_input is None:
+            return self.async_show_form(step_id=step_id, data_schema=schema)
+
+        updates = merge_entry_secrets(user_input, entry.data)
+        updates[CONF_ENGINE] = engine
+        # Probe the whole connection, not the fields this form happened to
+        # submit: a key checked against a default endpoint proves nothing about
+        # the mirror this hub actually talks to.
+        errors = await self._probe_connection({**dict(entry.data), **updates})
+        if errors:
+            return self.async_show_form(step_id=step_id, data_schema=schema, errors=errors)
+
+        return self.async_update_reload_and_abort(entry, data_updates=updates)
 
     @staticmethod
     @callback

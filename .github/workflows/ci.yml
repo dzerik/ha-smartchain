@@ -28,3 +28,18 @@ jobs:
       - uses: astral-sh/setup-uv@v7
       - run: uv sync --prerelease=allow
       - run: uv run --prerelease=allow pytest tests/ -v
+
+  panel:
+    name: Run panel tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      # `npm ci` and not `npm install`: the lockfile is the whole point of
+      # pinning a test runner for a project that ships no JavaScript
+      # dependencies of its own.
+      - run: npm ci
+      - run: npm test

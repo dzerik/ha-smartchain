@@ -160,7 +160,35 @@ async def test_gigachat_connect_error(hass: HomeAssistant) -> None:
 
 
 async def test_gigachat_invalid_response(hass: HomeAssistant) -> None:
-    """Test GigaChat config flow handles invalid response."""
+    """A `ResponseError` that is not about credentials.
+
+    The status used to be 401, which made this test assert that a rejected key
+    is reported as "invalid response" — true of the exception type, useless to
+    the user, and the reason nothing ever offered to re-enter the key. The
+    status is now a server fault, which is what the wording actually describes;
+    `test_gigachat_rejected_credentials` covers the other half.
+    """
+    with patch(
+        "custom_components.smartchain.config_flow.validate_client",
+        side_effect=ResponseError("https://example.com", 500, b"Server error", None),
+    ):
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": config_entries.SOURCE_USER}
+        )
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {CONF_ENGINE: ID_GIGACHAT}
+        )
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {CONF_API_KEY: "bad-credentials", CONF_SKIP_VALIDATION: False},
+        )
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {"base": "invalid_response"}
+
+
+async def test_gigachat_rejected_credentials(hass: HomeAssistant) -> None:
+    """GigaChat's authentication failures are `ResponseError`s too, so the
+    classifier must read the status rather than the type."""
     with patch(
         "custom_components.smartchain.config_flow.validate_client",
         side_effect=ResponseError("https://example.com", 401, b"Unauthorized", None),
@@ -176,7 +204,7 @@ async def test_gigachat_invalid_response(hass: HomeAssistant) -> None:
             {CONF_API_KEY: "bad-credentials", CONF_SKIP_VALIDATION: False},
         )
     assert result["type"] is FlowResultType.FORM
-    assert result["errors"] == {"base": "invalid_response"}
+    assert result["errors"] == {"base": "invalid_auth"}
 
 
 async def test_gigachat_unknown_error(hass: HomeAssistant) -> None:

@@ -586,10 +586,19 @@ async def test_list_metadata_is_a_no_op_when_backend_is_unavailable(
     assert await be.list_metadata() == {}
 
 
-async def test_store_search_degrades_to_empty_when_the_backend_raises(
+async def test_store_search_surfaces_a_raising_backend_instead_of_an_empty_list(
     hass: HomeAssistant, caplog
 ) -> None:
-    """The raise from `query` must stay inside MemoryStore, not reach the user."""
+    """A QdrantError from `query` must reach the store's caller.
+
+    This test used to assert the opposite — that `MemoryStore.search`
+    absorbed the error and returned `[]` "so it does not reach the user".
+    It never did reach the user either way: `execute_memory_search` wraps the
+    call and renders a fixed failure string. What `[]` reached the user as
+    was "No memories matched the query." — a broken qdrant reported to the
+    model as a confident, wrong answer about what the home remembers. The
+    store still stays available, which is the part that was worth keeping.
+    """
     from custom_components.smartchain.tools.memory.store import MemoryStore
 
     embeddings = MagicMock()
@@ -601,6 +610,64 @@ async def test_store_search_degrades_to_empty_when_the_backend_raises(
     store = MemoryStore(hass, embeddings, backend)
     store.is_available = True
 
-    with caplog.at_level(logging.ERROR):
-        assert await store.search("anything") == []
+    with caplog.at_level(logging.WARNING), pytest.raises(QdrantError):
+        await store.search("anything")
     assert "memory search failed" in caplog.text
+    assert store.is_available is True
+
+
+# --- verify_ssl -------------------------------------------------------------
+#
+# The constructor takes `verify_ssl` and `_request` forwards it to
+# `async_get_clientsession`, but no test read it: hard-coding either literal
+# there left the whole suite green. `verify_ssl=True` would break every
+# self-signed Qdrant deployment the option exists for, and `verify_ssl=False`
+# would silently strip certificate checking from the connection that carries
+# the `api-key` header and every remembered conversation turn.
+
+
+@pytest.mark.parametrize("verify_ssl", [True, False])
+async def test_verify_ssl_reaches_the_aiohttp_session(
+    hass: HomeAssistant, session_and_calls, verify_ssl: bool
+) -> None:
+    session, _calls, responses = session_and_calls
+    responses["GET /collections/mem"] = _response(404, {})
+    responses["PUT /collections/mem"] = _response(200, {"result": {}})
+
+    with patch(
+        "custom_components.smartchain.tools.memory.backends.qdrant.async_get_clientsession",
+        return_value=session,
+    ) as get_session:
+        be = QdrantBackend(hass, "https://q:6333", "mem", "secret-key", verify_ssl)
+        await be.initialize(3)
+
+    assert be.verify_ssl is verify_ssl
+    assert get_session.call_args.args[0] is hass
+    assert get_session.call_args.kwargs["verify_ssl"] is verify_ssl
+
+
+@pytest.mark.parametrize("verify_ssl", [True, False])
+async def test_every_request_uses_the_configured_verify_ssl(
+    hass: HomeAssistant, session_and_calls, verify_ssl: bool
+) -> None:
+    """Not only the handshake at initialize(): each later request too.
+
+    `_request` fetches the session per call, so a setting honoured once but not
+    afterwards would still ship credentials over an unchecked connection.
+    """
+    session, _calls, responses = session_and_calls
+    responses["GET /collections/mem"] = _response(404, {})
+    responses["PUT /collections/mem"] = _response(200, {"result": {}})
+    responses["POST /collections/mem/points/search"] = _response(200, {"result": []})
+
+    with patch(
+        "custom_components.smartchain.tools.memory.backends.qdrant.async_get_clientsession",
+        return_value=session,
+    ) as get_session:
+        be = QdrantBackend(hass, "https://q:6333", "mem", "secret-key", verify_ssl)
+        await be.initialize(3)
+        await be.upsert([VectorRecord("d", [1.0, 0.0, 0.0], "t", {"kind": "x"})])
+        await be.query([1.0, 0.0, 0.0], 3, None)
+
+    assert get_session.call_count >= 4
+    assert all(c.kwargs["verify_ssl"] is verify_ssl for c in get_session.call_args_list)
