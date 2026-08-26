@@ -430,6 +430,29 @@ async def test_a_rehome_that_quietly_fails_still_frees_the_slot(
     assert "does not generate unique IDs" not in caplog.text
 
 
+class _SensorThatRegistersThenDies(sensor_platform.SmartChainLastAnalysisSensor):
+    """A singleton that reaches the entity registry and then fails to come up.
+
+    Every other failure test here breaks the *constructor*, which never gets as
+    far as `entity_registry.async_get_or_create`: the registration stays with
+    the hub that left, so both halves of `_sensor_moved_to` — what the registry
+    says and what the state machine says — agree the move failed, and neither
+    half is tested on its own.
+
+    Breaking `async_added_to_hass` is what pulls them apart.
+    `EntityPlatform._async_add_entity` writes the registry entry first and calls
+    `add_to_platform_finish` after, so the registry already says the entity
+    belongs to the receiving hub while the state machine never gets an entity at
+    all. Home Assistant swallows the error — `_async_add_entities` logs it and
+    carries on — so the forward comes back clean and `_sensor_moved_to` is the
+    only thing left that can notice.
+    """
+
+    async def async_added_to_hass(self) -> None:
+        """Fail the way a platform really fails: after the registry, before the state."""
+        raise RuntimeError("the entity never finished starting")
+
+
 def _sensor_registry_entry(hass: HomeAssistant) -> er.RegistryEntry:
     """The singleton's registry entry, found by unique id like the code does."""
     ent_reg = er.async_get(hass)
@@ -460,6 +483,71 @@ async def _disable_the_sensor(
     await hass.async_block_till_done()
     assert hass.states.get(entry.entity_id) is None, "a disabled entity must have no state"
     return entry
+
+
+async def test_an_entity_that_only_reached_the_registry_has_not_moved(
+    hass: HomeAssistant, mock_llm_client, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Registered on the new hub and never alive is still a failed move.
+
+    `_sensor_moved_to` asks the registry only for entities that have no state to
+    ask about — the disabled ones. For everything else the state machine is the
+    authority, and this is the case that says why. The entity registry entry is
+    written before the entity is started, so a platform that dies in
+    `async_added_to_hass` leaves the registration pointing at the hub that
+    received it while `sensor.smartchain_last_analysis` does not exist. The
+    registry says "moved", the state machine says "no", and the right answer is
+    "no": the claim is standing for a hub with no entity, which is precisely the
+    condition that makes every other hub skip the registration for the rest of
+    the run.
+
+    This is what stops the registry test from being widened into the check for
+    *all* entities. Widen it and this scenario reports a clean move, the slot
+    stays claimed, and nothing is said.
+    """
+    first = await _setup_entry(hass, mock_llm_client, "GigaChat")
+    second = await _setup_entry(hass, mock_llm_client, "GigaChat-2")
+    _assert_sensor_alive(hass, "with two entries")
+
+    caplog.clear()
+    with patch.object(
+        sensor_platform, "SmartChainLastAnalysisSensor", _SensorThatRegistersThenDies
+    ):
+        assert await hass.config_entries.async_unload(first.entry_id)
+        await hass.async_block_till_done()
+
+    # What makes this different from the other failed-move tests: the registry
+    # really did follow the move, so the registry alone would call it a success.
+    moved_registration = _sensor_registry_entry(hass)
+    assert moved_registration.config_entry_id == second.entry_id
+    assert not moved_registration.disabled, "this entity is enabled — the state is the authority"
+    # And there is no entity behind that registration — only the husk
+    # `Entity.async_remove` leaves for a registered entity when its platform goes
+    # down: `unavailable` with `restored: True`. So "is there a state?" answers
+    # yes here, and the `restored` half of the check is the only thing between
+    # that husk and a move reported as successful.
+    husk = hass.states.get(SENSOR_ENTITY_ID)
+    assert husk is not None and husk.attributes.get("restored"), (
+        "the move did not actually fail — there is still a live entity"
+    )
+
+    assert _sensor_complaints(caplog), "a hub with no entity kept the slot in silence"
+    assert sensor_platform.SENSOR_OWNER_KEY not in hass.data[DOMAIN], (
+        f"the slot is still held by {hass.data[DOMAIN].get(sensor_platform.SENSOR_OWNER_KEY)}"
+    )
+
+    # And the freed slot is worth something: the next hub up registers it again.
+    caplog.clear()
+    with patch(
+        "custom_components.smartchain.get_client",
+        new_callable=AsyncMock,
+        return_value=mock_llm_client,
+    ):
+        await hass.config_entries.async_setup(first.entry_id)
+        await hass.async_block_till_done()
+
+    _assert_sensor_alive(hass, "after a hub came back up following a registry-only move")
+    assert "does not generate unique IDs" not in caplog.text
 
 
 async def test_a_user_disabled_sensor_is_not_a_failed_move(
@@ -592,8 +680,15 @@ async def test_a_hidden_sensor_moves_like_any_other(
 ) -> None:
     """Hidden is not disabled — the entity is live, only kept out of the UI.
 
-    Pinned separately so the fix for disabled entities is never widened into
-    "anything the registry marks up counts as moved".
+    A hidden entity is added to the state machine like any other, so the move is
+    judged the ordinary way and has to come out clean: no complaint, the
+    registration on the surviving hub, the user's `hidden_by` untouched.
+
+    This is the happy path only. It cannot tell the registry test from the state
+    test — a live hidden entity satisfies both — so widening the registry test to
+    cover hidden entities leaves it green. The test that catches that widening is
+    `test_a_hidden_sensor_that_never_started_is_still_a_failed_move` below, where
+    the two answers disagree.
     """
     first = await _setup_entry(hass, mock_llm_client, "GigaChat")
     second = await _setup_entry(hass, mock_llm_client, "GigaChat-2")
@@ -610,6 +705,56 @@ async def test_a_hidden_sensor_moves_like_any_other(
     assert not _sensor_complaints(caplog)
     assert _sensor_registry_entry(hass).hidden_by is er.RegistryEntryHider.USER
     assert hass.data[DOMAIN].get(sensor_platform.SENSOR_OWNER_KEY) == second.entry_id
+
+
+async def test_a_hidden_sensor_that_never_started_is_still_a_failed_move(
+    hass: HomeAssistant, mock_llm_client, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Where hidden and disabled have to part company, and the only place they do.
+
+    The concession made for disabled entities — judge the move by who the
+    registry says owns the entity, because there will never be a state — reads
+    like something that could reasonably be extended to any registry marking.
+    It cannot be extended to `hidden`. A hidden entity is a running entity; the
+    hiding is a UI preference and nothing else. Extend the concession to it and
+    a hidden singleton that failed to start on the receiving hub is waved
+    through: the registration moved, so the check says the move worked, the
+    claim stays with a hub that has no entity, and no other hub ever registers
+    the sensor again.
+
+    While the hidden entity is alive both tests agree, which is why the happy
+    path above cannot see the difference. Here they disagree, and the state
+    machine has to win.
+    """
+    first = await _setup_entry(hass, mock_llm_client, "GigaChat")
+    second = await _setup_entry(hass, mock_llm_client, "GigaChat-2")
+    hidden = _sensor_registry_entry(hass)
+    er.async_get(hass).async_update_entity(hidden.entity_id, hidden_by=er.RegistryEntryHider.USER)
+    await hass.async_block_till_done()
+    _assert_sensor_alive(hass, "while hidden")
+
+    caplog.clear()
+    with patch.object(
+        sensor_platform, "SmartChainLastAnalysisSensor", _SensorThatRegistersThenDies
+    ):
+        assert await hass.config_entries.async_unload(first.entry_id)
+        await hass.async_block_till_done()
+
+    after = _sensor_registry_entry(hass)
+    assert after.hidden_by is er.RegistryEntryHider.USER, "the scenario lost its hidden entity"
+    assert not after.disabled, "hidden must not be confused with disabled"
+    # The registry followed the move, so a registry-only verdict says "moved".
+    assert after.config_entry_id == second.entry_id
+    # The state machine says otherwise, and it is right.
+    stranded = hass.states.get(SENSOR_ENTITY_ID)
+    assert stranded is None or stranded.attributes.get("restored"), (
+        "the move did not actually fail — there is still a live entity"
+    )
+
+    assert _sensor_complaints(caplog), "a hidden sensor that never started went unannounced"
+    assert sensor_platform.SENSOR_OWNER_KEY not in hass.data[DOMAIN], (
+        f"the slot is still held by {hass.data[DOMAIN].get(sensor_platform.SENSOR_OWNER_KEY)}"
+    )
 
 
 async def test_a_disabled_sensor_that_really_did_not_move_is_still_reported(

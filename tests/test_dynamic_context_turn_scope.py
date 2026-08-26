@@ -287,10 +287,23 @@ async def test_two_retrieving_turns_with_no_instruction_at_all(hass: HomeAssista
     )
 
 
-async def test_a_new_extra_prompt_on_turn_two_replaces_the_old_one(
+async def test_a_new_extra_prompt_on_a_non_retrieving_turn_two_replaces_the_old_one(
     hass: HomeAssistant,
 ) -> None:
-    """Still HA's rule: a caller that supplies one this turn overrides the kept one."""
+    """Still HA's rule, and this pins the line that puts the field back.
+
+    Turn 2 retrieves nothing, so the composer returns
+    `user_input.extra_system_prompt` untouched from its early exit and never
+    reaches the line that joins an instruction to a block. What is on trial
+    here is the *restore*: ``user_input.extra_system_prompt or
+    sticky_extra_system_prompt``. Read the other way round it would write the
+    turn-1 instruction back over the turn-2 one, and turn 3 would inherit an
+    order the caller had already replaced.
+
+    The composer's own copy of that priority is a separate decision on a
+    separate line, reached only on a turn that does retrieve; it is guarded by
+    the test below.
+    """
     ent = _entity(hass)
     log_one = _fresh_log(hass)
 
@@ -301,6 +314,42 @@ async def test_a_new_extra_prompt_on_turn_two_replaces_the_old_one(
 
     assert log_two.extra_system_prompt == "Отвечай подробно."
     assert "Будь краток." not in log_two.content[0].content
+
+
+async def test_a_new_instruction_on_a_retrieving_turn_two_wins_over_the_kept_one(
+    hass: HomeAssistant,
+) -> None:
+    """The kept instruction is a fallback, not a floor.
+
+    Carrying turn 1's instruction into a retrieving turn is only correct while
+    the caller has not spoken again. When turn 2 supplies its own
+    `extra_system_prompt`, that is the user changing their standing order, and
+    it has to be the one that goes to the model — the composer's
+    ``user_input.extra_system_prompt or sticky_user_prompt`` in that order.
+
+    Swap the two and the failure is silent in the worst way: the caller sets a
+    new instruction, sees no error, and the model keeps obeying the old one for
+    the rest of the session. Nothing in the stored field would show it — the
+    restore line writes "Отвечай подробно." there either way — so the evidence
+    is only in the prompt turn 2 was actually sent.
+    """
+    ent = _entity(hass)
+    log_one = _fresh_log(hass)
+
+    with patch(_BUILD_RETRIEVED, new=AsyncMock(side_effect=[BLOCK_ONE, BLOCK_TWO])):
+        await _run(ent, log_one, "включи свет на кухне", extra="Будь краток.")
+        log_two = _next_turn(log_one)
+        await _run(ent, log_two, "что с телевизором", extra="Отвечай подробно.")
+
+    prompt = log_two.content[0].content
+    assert "Отвечай подробно." in prompt, (
+        "turn 2's own instruction never reached the model:\n" + prompt
+    )
+    assert "Будь краток." not in prompt, (
+        f"turn 2 replaced the instruction, but the superseded one is still in force:\n{prompt}"
+    )
+    assert "media_player.tv" in prompt, "turn 2 lost its own block"
+    assert log_two.extra_system_prompt == "Отвечай подробно."
 
 
 async def test_with_the_feature_off_the_field_is_left_exactly_as_ha_left_it(

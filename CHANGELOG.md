@@ -11,6 +11,17 @@ project follows [Semantic Versioning](https://semver.org/).
 > **Note:** the `5.4.0` section below is a roll-up: it covers `5.4.0` through
 > `5.4.7`, which were developed on one branch and are not separated here.
 
+## [5.4.17] - unreleased
+
+### Changed
+- Three guarantees that were named in a docstring but watched by nothing now
+  have a test that fails when they are removed: which of the two instruction
+  sources wins on a retrieving turn, and the two halves of the sensor handover
+  check — what the registry says and what the state machine says — which no
+  earlier test could tell apart, because every existing failure was injected
+  into the constructor and so never reached the registry at all. Production code
+  was correct in all three cases; only the tests changed.
+
 ## [5.4.16] - unreleased
 
 ### Fixed
