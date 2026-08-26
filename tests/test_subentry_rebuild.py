@@ -11,6 +11,11 @@ and the next setup rebuilds, and with a second entry configured that accident
 stops happening.
 
 The two halves of this file are the two halves of that defect.
+
+What this file does *not* measure is the price. 5.4.4 serialised the two
+rebuilds; 5.4.8 stopped there being two, and stopped a tool write reloading the
+hub at all. Those are numbers, and they live in
+`tests/test_subentry_single_entry_rebuild.py`.
 """
 
 import asyncio
@@ -198,18 +203,33 @@ def _store_payload() -> dict:
 # --- the racy path --------------------------------------------------------
 
 
-async def test_a_panel_save_runs_one_rebuild_at_a_time(
+async def test_a_panel_save_runs_exactly_one_rebuild(
     hass: HomeAssistant, hass_ws_client, tmp_path, patched_store
 ) -> None:
-    """One `smartchain/store/save` starts two rebuilds; they must not overlap.
+    """One `smartchain/store/save` starts one rebuild, and no second one lands in it.
 
     The websocket handler awaits its own rebuild, and the `async_add_subentry`
-    inside it has already scheduled `update_listener` as a background task,
-    which reloads the entry and rebuilds again. Both were in flight together.
+    inside it has already scheduled `update_listener` as a background task. Both
+    used to rebuild; 5.4.4 serialised them with `_rebuild_lock` so they could no
+    longer corrupt each other, and this test asserted the pair — `passes >= 2`
+    with `max_inside == 1`.
 
-    The first pass is held at the moment it swaps the memory registry, long
-    enough for the second to catch up — the window that made the race
-    destructive rather than merely wasteful.
+    Serialised was not the same as *not run twice*, and the second pass was
+    never free: it bounced every MCP server, reopened every backend and spent a
+    second embedding dimension probe. 5.4.8 moved the fingerprint check inside
+    `_reload_registry`, under the same lock, so whichever of the two arrives
+    second finds nothing to do. The claim this test makes is therefore now the
+    stronger one: exactly one pass.
+
+    The park stays. It holds that one pass at the moment it swaps the memory
+    registry — the window that made the old race destructive — so a second pass
+    arriving despite the gate would still be caught by `max_inside`, rather than
+    the count alone being read off a run where nothing overlapped by luck.
+
+    The lock itself is proved without this path, and still is:
+    `test_two_rebuilds_started_together_do_not_interleave` calls it twice
+    directly, and `test_unloading_the_last_entry_waits_for_a_rebuild_in_flight`
+    holds the teardown to it.
     """
     del patched_store
     entry = await _install(hass, tmp_path, second_entry=False, subentries=[_embeddings_subentry()])
@@ -229,11 +249,8 @@ async def test_a_panel_save_runs_one_rebuild_at_a_time(
         assert msg["result"]["reload_error"] is None
         await hass.async_block_till_done()
 
-    # The lock has to be *contended*, or this test proves nothing: more than
-    # one pass ran, and while the first was parked mid-build no other was
-    # inside the critical section with it.
-    assert watcher.passes >= 2, "only one rebuild ran; this save no longer races"
-    assert watcher.parked.is_set()
+    assert watcher.passes == 1, f"{watcher.passes} rebuilds for one save"
+    assert watcher.parked.is_set(), "the rebuild never reached the swap; the park proved nothing"
     assert watcher.entered_while_parked == 1, "a second rebuild entered mid-swap"
     assert watcher.max_inside == 1
     _assert_memory_survived(hass, watcher)

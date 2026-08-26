@@ -1112,16 +1112,35 @@ async def _rebuild_after_subentry_write(hass: HomeAssistant) -> str | None:
     will not start, comes back as a safe reason string for the panel to show
     beside the successful save — via `_safe_loader_error`, so a `!secret` that
     a validation error interpolated cannot travel with it.
+
+    `only_if_changed` because the same write also fires `update_listener` as a
+    background task, and whichever of the two arrives second has nothing left
+    to do: the fingerprint check inside `_reload_registry` runs under the
+    rebuild lock, so exactly one of them rebuilds. Before that gate the panel
+    handler rebuilt unconditionally and the pair cost two — two MCP bounces,
+    two reopened backends, and two embedding dimension probes, each a fresh
+    OAuth exchange under a 30 s timeout.
+
+    Every caller of this function writes a subentry and nothing else. A handler
+    that edits tools.yaml — `tools/save`, `tools/rollback` — calls
+    `_reload_registry` directly and ungated, because the fingerprint digests
+    subentries and would not see the file move.
+
+    When the gate skips, the standing tools.yaml error is still what comes
+    back: the file is as broken as it was a moment ago, and reporting the save
+    as clean would hide a banner the user needs.
     """
     from . import _reload_registry
 
     try:
-        await _reload_registry(hass)
+        rebuilt = await _reload_registry(hass, only_if_changed=True)
     except Exception as err:  # noqa: BLE001 — the write succeeded regardless
         LOGGER.warning(  # detail stays server-side
             "registry rebuild after a subentry change failed: %s", err
         )
         return _safe_loader_error(err)
+    if rebuilt is None:
+        return hass.data.get(DOMAIN, {}).get("yaml_error")
     return None
 
 

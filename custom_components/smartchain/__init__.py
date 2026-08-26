@@ -88,37 +88,56 @@ except (ImportError, AttributeError):
 
 
 async def update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Reload the entry, and rebuild the shared subsystems if a subentry moved.
+    """Decide, per write, whether the hub reloads and whether the subsystems rebuild.
 
-    The reload is what an options change needs. The rebuild is what a
-    *subentry* change needs, and it is here because Home Assistant's own
-    subentry dialogs — the four types offered under Settings › Devices &
-    Services — write through `async_add_subentry` / `async_update_and_abort`
-    and call no rebuild path of their own. The panel's websocket handlers do
-    call one; the config-flow dialogs never did, so a tool or a memory store
-    created through HA's own UI did nothing until `smartchain.reload_tools` or
-    a restart, with no error anywhere. On a single-entry install it appeared to
-    work only by accident: unloading the last entry sets `subsystems_stopped`
-    and the following setup rebuilds. With two entries configured that flag is
-    never set and nothing rebuilds at all.
+    Two different things are wired to the one update listener, and they cost
+    very different amounts.
 
-    Gated on a fingerprint rather than run unconditionally, because every
-    rebuild bounces every MCP server and reopens every memory backend: an
-    options save that touched no subentry must not do that. The fingerprint
-    also makes the websocket path cost one rebuild rather than two — by the
-    time this listener runs, that path has usually already rebuilt and
-    recorded the new fingerprint, so there is nothing left to do.
+    **The reload** is what a change to the *entry* needs: its data, its options
+    and its conversation subentries are what `async_setup_entry` builds every
+    LLM client from, so an edited agent takes effect no other way. It is also
+    the expensive one — it unloads every platform, so every `conversation.*`
+    entity leaves the state machine and comes back, and an Assist request
+    landing in that window fails.
 
-    Ordered after the reload on purpose: `async_reload` may itself tear the
-    subsystems down and rebuild them (the `subsystems_stopped` path), and a
-    rebuild that ran first would simply be discarded by it.
+    **The rebuild** is what a change to a *subsystem* subentry needs — a tool, a
+    memory store, an embeddings binding — and it is here because Home
+    Assistant's own subentry dialogs write through `async_add_subentry` /
+    `async_update_and_abort` and call no rebuild path of their own. The panel's
+    websocket handlers do call one; the config-flow dialogs never did, so a
+    tool created through HA's own UI did nothing until `smartchain.reload_tools`
+    or a restart, with no error anywhere.
+
+    Until 5.4.8 the reload ran unconditionally, so the cheap change paid for the
+    expensive one: switching on a single ready-made tool took every agent
+    offline and back, and on a single-entry install — the shape most people
+    have — it rebuilt the subsystems a *second* time on top of the rebuild the
+    websocket handler had already awaited, because unloading the last entry
+    sets `subsystems_stopped` and the following setup honours it
+    unconditionally. Two rebuilds meant two dimension probes against the
+    embeddings provider, each a fresh OAuth exchange under a 30 s timeout.
+
+    So each half is now gated on its own fingerprint:
+
+    - `_entry_fingerprint` covers everything `async_setup_entry` reads. It is
+      written as *everything except the subsystem subentries* rather than as a
+      list of the keys that matter, so a field added to the entry later is
+      reloaded for by default — the safe direction.
+    - `_subsystem_fingerprint` covers the subsystem subentries, and the check
+      is made inside `_reload_registry`, under the rebuild lock, so that two
+      paths reacting to the same write cannot both find it stale and both
+      rebuild. That ordering was the second rebuild in the *two*-entry case.
+
+    Ordered reload-then-rebuild on purpose: `async_reload` may itself tear the
+    subsystems down and rebuild them, and a rebuild that ran first would simply
+    be discarded by it — after which the gated call below is a no-op, because
+    that rebuild recorded the current fingerprint.
     """
-    await hass.config_entries.async_reload(entry.entry_id)
+    if _entry_fingerprint(entry) != _entry_fingerprints(hass).get(entry.entry_id):
+        await hass.config_entries.async_reload(entry.entry_id)
 
-    if _subsystem_fingerprint(hass) == hass.data.get(DOMAIN, {}).get("subentry_fingerprint"):
-        return
     try:
-        await _reload_registry(hass)
+        await _reload_registry(hass, only_if_changed=True)
     except LoaderError as err:
         # The rebuild happened regardless; only tools.yaml failed to load, and
         # it is logged safely (never `str(err)` on a user surface — see
@@ -133,6 +152,61 @@ async def update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
 _SUBSYSTEM_SUBENTRY_TYPES = frozenset(
     {SUBENTRY_TYPE_TOOL, SUBENTRY_TYPE_MEMORY_STORE, SUBENTRY_TYPE_EMBEDDINGS}
 )
+
+
+@callback
+def _entry_fingerprints(hass: HomeAssistant) -> dict[str, str]:
+    """Per-entry digest of what the last `async_setup_entry` was built from."""
+    return hass.data.setdefault(DOMAIN, {}).setdefault("entry_fingerprints", {})
+
+
+@callback
+def _entry_fingerprint(entry: ConfigEntry) -> str:
+    """Digest of everything a reload of this entry would pick up.
+
+    Defined by exclusion: the entry's own data, options, title and minor
+    version, plus every subentry that is *not* one the shared subsystems are
+    built from. A conversation subentry is in here because its model and prompt
+    are what `get_client` builds from and what the `conversation.*` entity is
+    named after; a tool subentry is not, because nothing in setup reads one —
+    `custom_tools_for` reads the live registry at request time, so a tool
+    switched on is in the next message without the entity being touched.
+
+    Excluding rather than listing is deliberate. A new key on the entry, or a
+    fifth subentry type, is then reloaded for until someone decides otherwise,
+    and the failure mode of getting it wrong is a redundant reload rather than
+    a setting that silently does not apply.
+
+    Entry data and subentry data can both hold a credential. This is a one-way
+    digest kept in `hass.data`; it is never returned, logged or sent anywhere,
+    and nothing else may start reporting it.
+    """
+    parts = [
+        json.dumps(
+            [entry.title, entry.minor_version, dict(entry.data), dict(entry.options)],
+            sort_keys=True,
+            default=repr,
+        )
+    ]
+    for subentry in (entry.subentries or {}).values():
+        if subentry.subentry_type in _SUBSYSTEM_SUBENTRY_TYPES:
+            continue
+        parts.append(
+            json.dumps(
+                [
+                    subentry.subentry_id,
+                    subentry.subentry_type,
+                    subentry.title,
+                    dict(subentry.data),
+                ],
+                sort_keys=True,
+                default=repr,
+            )
+        )
+    # Sorted for the same reason `_subsystem_fingerprint` sorts: a reload
+    # rebuilds `entry.subentries` as a fresh mapping, and iteration order alone
+    # must not read as a change.
+    return hashlib.sha256("\n".join(sorted(parts)).encode()).hexdigest()
 
 
 @callback
@@ -623,7 +697,7 @@ def _memory_persist_dir(hass: HomeAssistant) -> Path:
     return Path(hass.config.config_dir) / ".storage" / MEMORY_PERSIST_DIRNAME
 
 
-async def _reload_registry(hass: HomeAssistant) -> int:
+async def _reload_registry(hass: HomeAssistant, *, only_if_changed: bool = False) -> int | None:
     """Serialise `_rebuild_subsystems`. Every caller goes through here.
 
     The rebuild is not re-entrant and there are several ways to start two at
@@ -636,8 +710,33 @@ async def _reload_registry(hass: HomeAssistant) -> int:
     inside it: the teardown in `async_unload_entry` needs the same lock, and
     keeping the acquisition at the boundary makes it impossible for a rebuild
     to acquire it twice and deadlock against itself.
+
+    `only_if_changed` is for the callers that react to a *subentry* write: the
+    update listener and every websocket handler that writes one. Those two
+    respond to the same write, so without a gate they rebuilt twice — bouncing
+    every MCP server, reopening every backend and spending a second embedding
+    dimension probe, one fresh OAuth exchange under a 30 s timeout, for nothing.
+    They pass it and get a rebuild only if some subsystem subentry actually
+    differs from what the last rebuild recorded.
+
+    The check is inside the lock, not at the call sites. Outside it, both paths
+    could read the stale fingerprint before either recorded the new one and both
+    would rebuild — which is exactly what happened on a two-entry install, where
+    the listener won the race and the websocket handler, which never checked at
+    all, rebuilt on top of it.
+
+    Callers that change tools.yaml — `tools/save`, `tools/rollback`,
+    `smartchain.reload_tools` — must not pass it. The fingerprint covers
+    subentries only; the file is invisible to it.
+
+    Returns the number of custom tools now in the registry, or None when the
+    gate skipped the rebuild.
     """
     async with _rebuild_lock(hass):
+        if only_if_changed and _subsystem_fingerprint(hass) == hass.data.get(DOMAIN, {}).get(
+            "subentry_fingerprint"
+        ):
+            return None
         return await _rebuild_subsystems(hass)
 
 
@@ -1058,6 +1157,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     entry.async_on_unload(entry.add_update_listener(update_listener))
 
+    # Record what this setup is building from, so `update_listener` can tell a
+    # write that changed the entry — reload — from one that only moved a tool,
+    # a store or an embeddings binding, which needs no reload at all and must
+    # not take every `conversation.*` entity offline to get one. Taken at the
+    # top rather than at the bottom because everything it digests is already
+    # final here, and an early `return False` further down must not leave the
+    # listener reloading forever on a fingerprint that was never written.
+    _entry_fingerprints(hass)[entry.entry_id] = _entry_fingerprint(entry)
+
     # `async_setup` runs once per HA run, so if a previous unload tore the shared
     # subsystems down (last entry removed, or the user hitting "Reload" on their
     # only entry) nothing else would ever bring them back. Rebuild here, gated on
@@ -1124,6 +1232,18 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # the domain dict to store itself — cannot turn "the domain was never set
     # up" into "the domain exists and is marked stopped".
     domain_data: dict[str, Any] | None = hass.data.get(DOMAIN)
+    if domain_data is not None:
+        # Nothing is built from this entry any more, so the digest of what it
+        # was built from answers nothing. The map is keyed by `entry_id`, so
+        # without this a user who adds and removes hubs accumulates one dead
+        # digest per removal for the rest of the process.
+        #
+        # It is not guarding against a stale digest suppressing a reload: the
+        # listener is registered through `entry.async_on_unload`, so unloading
+        # takes the listener with it and no write on an unloaded entry reaches
+        # `update_listener` at all. Setup writes a fresh digest on the way back
+        # in regardless.
+        domain_data.get("entry_fingerprints", {}).pop(entry.entry_id, None)
     if not remaining and domain_data is not None:
         # Under the rebuild lock: this stops the very MCP manager, memory
         # registry and skeleton cache a `_reload_registry` in flight is
