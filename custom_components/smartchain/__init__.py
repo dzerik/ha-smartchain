@@ -194,23 +194,31 @@ def _migrate_agent_tool_lists(hass: HomeAssistant, entry: ConfigEntry) -> None:
     and lists the built-ins in it, which leaves the two switches as a second
     opinion on the same question — so they are folded in here and removed.
 
-    `materialise_allowed_tools` produces exactly the set the old three controls
+    `legacy_allowed_tools` produces exactly the set the old three controls
     produced between them, so no agent changes behaviour. What does change, and
     is the point, is that the answer is now written down where the user can
     read and edit it.
+
+    Note which function that is. `materialise_allowed_tools` hands a stored
+    list straight back, which is right for the form and wrong here: an agent
+    that already had an `allowed_tools` list had it under the *old* semantics,
+    where it governed custom tools only and the six built-ins were granted
+    elsewhere. Reading it as an answer about built-ins stripped all six from
+    every such agent, and this function then deletes the switches that would
+    have said otherwise.
 
     A consequence worth stating: every migrated agent now carries an explicit
     list, so a built-in added in a *later* release is not granted to it
     automatically. That is the same conservative rule `allowed_tools` has
     always applied to custom tools, now applied to built-ins as well.
     """
-    from .tools.inventory import materialise_allowed_tools
+    from .tools.inventory import legacy_allowed_tools
 
     for subentry in list((entry.subentries or {}).values()):
         if subentry.subentry_type != SUBENTRY_TYPE_CONVERSATION:
             continue
         data = dict(subentry.data)
-        data[CONF_ALLOWED_TOOLS] = materialise_allowed_tools(data)
+        data[CONF_ALLOWED_TOOLS] = legacy_allowed_tools(data)
         data.pop(CONF_ENABLE_HISTORY_TOOL, None)
         data.pop(CONF_ENABLE_MULTI_AGENT_TOOLS, None)
         if data == dict(subentry.data):

@@ -118,6 +118,24 @@ def _allowed(options: Mapping[str, Any]) -> list[str] | None:
     return list(value)
 
 
+def _legacy_builtin_admitted(options: Mapping[str, Any], name: str) -> bool:
+    """The pre-v5.4.0 rule for one built-in, `allowed_tools` not consulted.
+
+    That last clause is the whole point. Before v5.4.0 `allowed_tools` governed
+    *custom* tools only: `ask_agent`, `search_memory` and `search_entities`
+    were appended unconditionally, `get_state_history` answered to
+    `enable_history_tool` and the multi-agent pair to
+    `enable_multi_agent_tools`. An agent restricted to one custom tool still
+    had all of those, so reading its list as an answer about built-ins reads an
+    answer to a question it was never asked.
+    """
+    if name == HISTORY_TOOL_NAME:
+        return bool(options.get(CONF_ENABLE_HISTORY_TOOL, DEFAULT_ENABLE_HISTORY_TOOL))
+    if name in _MULTI_AGENT_TOOL_NAMES:
+        return bool(options.get(CONF_ENABLE_MULTI_AGENT_TOOLS, DEFAULT_ENABLE_MULTI_AGENT_TOOLS))
+    return True
+
+
 def builtin_admitted(options: Mapping[str, Any], name: str) -> bool:
     """Does this agent's `allowed_tools` admit the built-in `name`?
 
@@ -129,13 +147,8 @@ def builtin_admitted(options: Mapping[str, Any], name: str) -> bool:
         # The list is authoritative. The sentinel is not consulted: it means
         # "every custom tool", so a built-in still needs its own name here.
         return name in allowed
-    # No list at all: the legacy shape. Only two built-ins ever had a switch;
-    # the other four were unconditional.
-    if name == HISTORY_TOOL_NAME:
-        return bool(options.get(CONF_ENABLE_HISTORY_TOOL, DEFAULT_ENABLE_HISTORY_TOOL))
-    if name in _MULTI_AGENT_TOOL_NAMES:
-        return bool(options.get(CONF_ENABLE_MULTI_AGENT_TOOLS, DEFAULT_ENABLE_MULTI_AGENT_TOOLS))
-    return True
+    # No list at all: the legacy shape.
+    return _legacy_builtin_admitted(options, name)
 
 
 def custom_admitted(options: Mapping[str, Any], name: str) -> bool:
@@ -146,21 +159,50 @@ def custom_admitted(options: Mapping[str, Any], name: str) -> bool:
     return ALL_TOOLS_SENTINEL in allowed or name in allowed
 
 
-def materialise_allowed_tools(options: Mapping[str, Any]) -> list[str]:
-    """The explicit `allowed_tools` list equivalent to this agent's legacy state.
+def legacy_allowed_tools(options: Mapping[str, Any]) -> list[str]:
+    """The explicit list equivalent to what the pre-v5.4.0 controls granted.
 
-    Used by the migration, so that after it runs the list says exactly what the
-    switches used to say and the switches can be deleted. Idempotent: an agent
-    that already carries a list gets it back untouched.
+    Used by the 2 -> 3 migration, so that after it runs the list says exactly
+    what the three old controls said between them and the two switches can be
+    deleted.
+
+    The built-ins come from `_legacy_builtin_admitted`, never from the stored
+    list — an agent that already carried an `allowed_tools` list carried it
+    under the old semantics, where it spoke for custom tools only. Deriving
+    them from the list instead silently stripped every built-in from exactly
+    those agents, and deleting the switches in the same breath made it
+    permanent.
+
+    Idempotent: a list this function has already produced names every built-in
+    it would add, and both switches default to off once they are gone, so a
+    second run adds nothing.
     """
     allowed = _allowed(options)
     custom_part = [ALL_TOOLS_SENTINEL] if allowed is None else list(allowed)
     builtin_part = [
         name
         for name in BUILTIN_TOOL_NAMES
-        if name not in custom_part and builtin_admitted(options, name)
+        if name not in custom_part and _legacy_builtin_admitted(options, name)
     ]
     return [*custom_part, *builtin_part]
+
+
+def materialise_allowed_tools(options: Mapping[str, Any]) -> list[str]:
+    """What the agent form should prefill `allowed_tools` with.
+
+    An agent that carries a list gets it back untouched: under v5.4.0 semantics
+    that list is already the whole answer, and re-deriving built-ins from the
+    old switches would hand back tools the user had deliberately removed.
+
+    Only an agent with no list at all is expanded, through
+    `legacy_allowed_tools` — so the form opens showing what that agent can
+    actually do, and saving it writes the list down. Same answer as
+    `builtin_admitted` gives the runtime, by construction.
+    """
+    allowed = _allowed(options)
+    if allowed is not None:
+        return list(allowed)
+    return legacy_allowed_tools(options)
 
 
 def _memory_registry(hass: HomeAssistant) -> Any:

@@ -552,6 +552,14 @@ RESERVED_TOOL_NAMES = frozenset(BUILTIN_TOOL_NAMES)
 # `ALL_TOOLS_LABELS` rather than in the translation files.
 BUILTIN_TOOL_LABELS = {"en": "built-in", "ru": "встроенный"}
 
+# Suffix for a name an agent's `allowed_tools` still holds while the registry
+# has no such tool — deleted, switched off, or belonging to an MCP server that
+# was unreachable at the last reload. The option is offered anyway (see
+# `config_flow.allowed_tools_selector`), because a name the form cannot submit
+# makes the agent unsavable and a name the form does not render cannot be
+# removed. Same convention, and the same two locales, as the labels above.
+MISSING_TOOL_LABELS = {"en": "missing tool", "ru": "инструмент отсутствует"}
+
 # Dynamic entity context (v5.0.0, roadmap subsystem C)
 CONF_DYNAMIC_ENTITY_CONTEXT = "dynamic_entity_context"
 DEFAULT_DYNAMIC_ENTITY_CONTEXT = True

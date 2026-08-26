@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from types import MappingProxyType
 from typing import Any
 
@@ -88,6 +88,7 @@ from .const import (
     MEMORY_SOURCE_TYPE_NONE,
     MEMORY_SOURCE_TYPES,
     MEMORY_STORE_NAME_PATTERN,
+    MISSING_TOOL_LABELS,
     OPENAI_COMPATIBLE,
     RESERVED_TOOL_NAMES,
     REST_DEFAULT_TIMEOUT,
@@ -618,17 +619,21 @@ def subentry_schema(
     # than the raw value means the form opens showing what the agent can
     # actually do, and saving it writes that down — which is how the last
     # agents leave the legacy branch in `tools.inventory.builtin_admitted`.
+    #
+    # The same value is handed to the selector as `keep`: it is what the form
+    # will echo back, so every name in it must be submittable.
+    prefill = materialise_allowed_tools(options)
     return schema.extend(
         {
             vol.Optional(
                 CONF_ALLOWED_TOOLS,
-                description={"suggested_value": materialise_allowed_tools(options)},
-            ): allowed_tools_selector(hass),
+                description={"suggested_value": prefill},
+            ): allowed_tools_selector(hass, keep=prefill),
         }
     )
 
 
-def allowed_tools_selector(hass) -> selector.SelectSelector:
+def allowed_tools_selector(hass, *, keep: Iterable[str] = ()) -> selector.SelectSelector:
     """The one place an agent's whole tool inventory is offered.
 
     Rendered unconditionally. Until v5.4.0 it appeared only when the tools
@@ -638,9 +643,24 @@ def allowed_tools_selector(hass) -> selector.SelectSelector:
 
     Built-ins are labelled as such, listed first and in a fixed order, so that
     a name in this list is never ambiguous about where it comes from.
+
+    `keep` is the agent's stored list, and every name in it is offered even
+    when the registry has no such tool right now — the same gap
+    `embeddings_binding_options(keep=…)` and `service_options(keep=…)` cover,
+    reached here by three routine events: deleting a tool, switching one off,
+    and reloading while an MCP server is unreachable. Without it the form
+    echoes back a value its own schema rejects, so *every* later save of that
+    agent fails, including edits that have nothing to do with tools — and the
+    offending name is not rendered either, so the user cannot even remove it.
+    Labelled `(missing tool)`, because a name the registry cannot resolve is
+    doing nothing and the user should be able to see which one it is.
     """
     builtin_label = BUILTIN_TOOL_LABELS.get(hass.config.language, BUILTIN_TOOL_LABELS["en"])
+    missing_label = MISSING_TOOL_LABELS.get(hass.config.language, MISSING_TOOL_LABELS["en"])
     registry = hass.data.get(DOMAIN, {}).get("tools")
+    custom_names = registry.names() if registry is not None else []
+    offered = {ALL_TOOLS_SENTINEL, *BUILTIN_TOOL_NAMES, *custom_names}
+    missing = [name for name in dict.fromkeys(keep) if name not in offered]
     return selector.SelectSelector(
         selector.SelectSelectorConfig(
             options=[
@@ -652,9 +672,10 @@ def allowed_tools_selector(hass) -> selector.SelectSelector:
                     selector.SelectOptionDict(value=name, label=f"{name} ({builtin_label})")
                     for name in BUILTIN_TOOL_NAMES
                 ),
+                *(selector.SelectOptionDict(value=name, label=name) for name in custom_names),
                 *(
-                    selector.SelectOptionDict(value=name, label=name)
-                    for name in (registry.names() if registry is not None else [])
+                    selector.SelectOptionDict(value=name, label=f"{name} ({missing_label})")
+                    for name in missing
                 ),
             ],
             multiple=True,

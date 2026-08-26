@@ -667,3 +667,254 @@ async def test_the_overview_count_matches_the_inventory(hass, hass_ws_client) ->
     assert agent["tool_count"] == sum(1 for row in inventory if row["enabled"])
     assert agent["tool_total"] == len(inventory)
     assert agent["tool_count"] == 2  # search_memory + ping
+
+
+# ---------------------------------------------------------------------------
+# A name in the list that the registry does not have right now
+# ---------------------------------------------------------------------------
+#
+# `allowed_tools` is a list of names, and a name can leave the registry without
+# the agent ever being edited: the tool is deleted, the tool is switched off,
+# or an MCP server is unreachable at reload time. The stored list is served
+# back to the form verbatim, so if the picker does not offer that name the form
+# echoes a value the schema rejects — and every later save of that agent fails,
+# including edits that have nothing to do with tools. Same shape, and the same
+# fix, as `embeddings_binding_options(keep=...)` and `service_options(keep=...)`.
+
+
+def _served_and_save(client):
+    """Fetch the agent form and send it straight back, as the panel does."""
+
+    async def _run(entry, subentry_id):
+        with patch(
+            "custom_components.smartchain.websocket_api.async_fetch_models",
+            return_value=["", "gpt-4.1-mini"],
+        ):
+            await client.send_json_auto_id(
+                {
+                    "type": "smartchain/agent/schema",
+                    "entry_id": entry.entry_id,
+                    "subentry_id": subentry_id,
+                }
+            )
+            served = (await client.receive_json())["result"]["data"]
+            await client.send_json_auto_id(
+                {
+                    "type": "smartchain/agent/save",
+                    "entry_id": entry.entry_id,
+                    "subentry_id": subentry_id,
+                    "data": {**served, CONF_PROMPT: "an unrelated edit"},
+                }
+            )
+            return served, await client.receive_json()
+
+    return _run
+
+
+def _allowed_option_values(hass, defaults) -> list[str]:
+    from custom_components.smartchain.config_flow import subentry_schema
+
+    schema = subentry_schema(hass, UNIQUE_ID_OPENAI, defaults, models=["gpt-4.1-mini"])
+    picker = next(
+        value for key, value in schema.schema.items() if str(key.schema) == CONF_ALLOWED_TOOLS
+    )
+    return [option["value"] for option in picker.config["options"]]
+
+
+async def test_a_deleted_tool_does_not_make_the_agent_unsavable(hass, hass_ws_client) -> None:
+    """Trigger one: the tool named in `allowed_tools` was deleted."""
+    await async_setup_component(hass, DOMAIN, {})
+    _register(hass, "ping")  # `weather` is gone
+    entry = _entry(hass, ("Home", {CONF_ALLOWED_TOOLS: ["weather", MEMORY_TOOL_NAME]}))
+    subentry_id = _agent(entry, "Home").subentry_id
+
+    client = await hass_ws_client(hass)
+    served, msg = await _served_and_save(client)(entry, subentry_id)
+
+    assert served[CONF_ALLOWED_TOOLS] == ["weather", MEMORY_TOOL_NAME]
+    assert msg["success"], msg.get("error")
+    stored = entry.subentries[subentry_id].data
+    assert stored[CONF_ALLOWED_TOOLS] == ["weather", MEMORY_TOOL_NAME]
+    assert stored[CONF_PROMPT] == "an unrelated edit"
+
+
+async def test_a_missing_tool_is_offered_so_it_can_be_removed(hass: HomeAssistant) -> None:
+    """Being savable is not enough: the name must be visible in the picker, or
+    the user has no way to take it off the list."""
+    await async_setup_component(hass, DOMAIN, {})
+    _register(hass, "ping")
+
+    values = _allowed_option_values(hass, {CONF_ALLOWED_TOOLS: ["weather", "ping"]})
+
+    assert "weather" in values
+    # Offered once. A name that is in `keep` *and* in the registry must not be
+    # listed twice — the picker would show the same tool on two rows.
+    assert values.count("weather") == 1
+    assert values.count("ping") == 1
+    assert values.count(MEMORY_TOOL_NAME) == 1
+    assert values.count(ALL_TOOLS_SENTINEL) == 1
+    # And a name nobody stored is not invented.
+    assert "weather" not in _allowed_option_values(hass, {CONF_ALLOWED_TOOLS: ["ping"]})
+
+
+async def test_a_disabled_tool_does_not_make_the_agent_unsavable(hass, hass_ws_client) -> None:
+    """Trigger two: the tool is still configured, but switched off — so
+    `tools_from_subentries` drops it and the registry has never heard of it."""
+    from homeassistant.config_entries import ConfigSubentry
+
+    from custom_components.smartchain.const import SUBENTRY_TYPE_TOOL
+    from custom_components.smartchain.tools.subentry_source import tools_from_subentries
+
+    await async_setup_component(hass, DOMAIN, {})
+    entry = _entry(hass, ("Home", {CONF_ALLOWED_TOOLS: ["weather"]}))
+    hass.config_entries.async_add_subentry(
+        entry,
+        ConfigSubentry(
+            data={
+                "description": "Weather",
+                "parameters": {"type": "object", "properties": {}},
+                "action": {"type": "template", "value_template": "sunny"},
+                "enabled": False,
+            },
+            subentry_type=SUBENTRY_TYPE_TOOL,
+            title="weather",
+            unique_id=None,
+        ),
+    )
+    hass.data[DOMAIN]["tools"].replace_all(tools_from_subentries(hass))
+    assert hass.data[DOMAIN]["tools"].names() == []
+
+    subentry_id = _agent(entry, "Home").subentry_id
+    client = await hass_ws_client(hass)
+    _served, msg = await _served_and_save(client)(entry, subentry_id)
+
+    assert msg["success"], msg.get("error")
+    assert entry.subentries[subentry_id].data[CONF_ALLOWED_TOOLS] == ["weather"]
+
+
+async def test_an_unreachable_mcp_server_does_not_make_the_agent_unsavable(
+    hass, hass_ws_client
+) -> None:
+    """Trigger three: a reload while the MCP server is down. `stop()`
+    deregisters its tools and the reconnecting `start()` registers none, so an
+    agent that lists one is holding a name the registry lost."""
+    from custom_components.smartchain.tools.mcp.config import StdioConfig
+    from custom_components.smartchain.tools.mcp.manager import MCPManager
+
+    await async_setup_component(hass, DOMAIN, {})
+    registry = hass.data[DOMAIN]["tools"]
+    manager = MCPManager(hass, registry)
+    manager.configure([StdioConfig(name="fs", command="npx")])
+
+    with patch("custom_components.smartchain.tools.mcp.manager.MCPClient") as cls:
+        instance = AsyncMock()
+        instance.list_tools = AsyncMock(
+            return_value=[
+                {
+                    "name": "read_file",
+                    "description": "Read a file",
+                    "inputSchema": {"type": "object", "properties": {}},
+                }
+            ]
+        )
+        cls.return_value = instance
+        await manager.start()
+        await manager.wait_idle()
+        assert "fs__read_file" in registry.names()
+
+        entry = _entry(hass, ("Home", {CONF_ALLOWED_TOOLS: ["fs__read_file"]}))
+        subentry_id = _agent(entry, "Home").subentry_id
+
+        # The reload: the server is now unreachable.
+        instance.connect = AsyncMock(side_effect=OSError("connection refused"))
+        await manager.stop()
+        await manager.start()
+        assert "fs__read_file" not in registry.names()
+
+        client = await hass_ws_client(hass)
+        _served, msg = await _served_and_save(client)(entry, subentry_id)
+        await manager.stop()
+
+    assert msg["success"], msg.get("error")
+    assert entry.subentries[subentry_id].data[CONF_ALLOWED_TOOLS] == ["fs__read_file"]
+
+
+async def test_the_migration_keeps_the_built_ins_of_an_agent_that_had_a_list(
+    hass: HomeAssistant,
+) -> None:
+    """Before v5.4.0 `allowed_tools` governed custom tools *only*: four
+    built-ins were unconditional and two answered to their own switches. So an
+    agent that carried a list was still calling every built-in, and folding the
+    switches in must not read that list as an answer about built-ins it was
+    never asked."""
+    from custom_components.smartchain import _migrate_agent_tool_lists
+
+    await async_setup_component(hass, DOMAIN, {})
+    entry = _entry(
+        hass,
+        (
+            "Home",
+            {
+                CONF_ALLOWED_TOOLS: ["weather_tool"],
+                CONF_ENABLE_HISTORY_TOOL: True,
+                CONF_ENABLE_MULTI_AGENT_TOOLS: True,
+            },
+        ),
+        ("Auditor", {}),
+    )
+
+    _migrate_agent_tool_lists(hass, entry)
+
+    data = _agent(entry, "Home").data
+    assert data[CONF_ALLOWED_TOOLS] == [
+        "weather_tool",
+        HISTORY_TOOL_NAME,
+        DELEGATE_TOOL_NAME,
+        DELEGATE_MANY_TOOL_NAME,
+        CRITIQUE_TOOL_NAME,
+        MEMORY_TOOL_NAME,
+        ENTITY_TOOL_NAME,
+    ]
+    assert CONF_ENABLE_HISTORY_TOOL not in data
+    assert CONF_ENABLE_MULTI_AGENT_TOOLS not in data
+
+
+@pytest.mark.parametrize(
+    ("switches", "granted", "withheld"),
+    [
+        (
+            {CONF_ENABLE_HISTORY_TOOL: False, CONF_ENABLE_MULTI_AGENT_TOOLS: False},
+            [DELEGATE_TOOL_NAME, MEMORY_TOOL_NAME, ENTITY_TOOL_NAME],
+            [HISTORY_TOOL_NAME, DELEGATE_MANY_TOOL_NAME, CRITIQUE_TOOL_NAME],
+        ),
+        (
+            {CONF_ENABLE_HISTORY_TOOL: True, CONF_ENABLE_MULTI_AGENT_TOOLS: False},
+            [HISTORY_TOOL_NAME, DELEGATE_TOOL_NAME, MEMORY_TOOL_NAME, ENTITY_TOOL_NAME],
+            [DELEGATE_MANY_TOOL_NAME, CRITIQUE_TOOL_NAME],
+        ),
+        (
+            {},
+            [DELEGATE_TOOL_NAME, MEMORY_TOOL_NAME, ENTITY_TOOL_NAME],
+            [HISTORY_TOOL_NAME, DELEGATE_MANY_TOOL_NAME, CRITIQUE_TOOL_NAME],
+        ),
+    ],
+)
+async def test_the_migration_honours_each_switch_beside_a_list(
+    hass: HomeAssistant, switches: dict, granted: list[str], withheld: list[str]
+) -> None:
+    """The switches still decide their own two built-ins; the other four were
+    unconditional and stay so. The defaults case (no switch stored at all) is
+    the third row — both switches default to off."""
+    from custom_components.smartchain import _migrate_agent_tool_lists
+
+    await async_setup_component(hass, DOMAIN, {})
+    entry = _entry(hass, ("Home", {CONF_ALLOWED_TOOLS: ["weather_tool"], **switches}))
+
+    _migrate_agent_tool_lists(hass, entry)
+
+    listed = _agent(entry, "Home").data[CONF_ALLOWED_TOOLS]
+    assert listed[0] == "weather_tool"
+    for name in granted:
+        assert name in listed, name
+    for name in withheld:
+        assert name not in listed, name
