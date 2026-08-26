@@ -12,6 +12,7 @@ from custom_components.smartchain.tools.model import (
     ServiceAction,
     TemplateAction,
 )
+from tests.conftest import BUILT_IN_TOOL_NAMES
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures"
 
@@ -209,3 +210,29 @@ def test_a_disabled_tool_does_not_reserve_its_name(tmp_path) -> None:
     names = [t.name for t in result.yaml_tools]
     assert names == ["weather"]
     assert result.yaml_tools[0].description == "the replacement"
+
+
+@pytest.mark.parametrize("reserved", sorted(BUILT_IN_TOOL_NAMES))
+def test_every_built_in_name_is_reserved_against_the_file(
+    tmp_path: Path, caplog, reserved: str
+) -> None:
+    """All six built-ins, not three.
+
+    `search_memory`, `ask_agents` and `critique_response` were shadowable until
+    v5.3.0: a tools.yaml tool taking one of those names reached `bind_tools`
+    alongside the built-in, appended last, so the model read the built-in's
+    description while the dispatch lookup resolved to the custom tool.
+    Parametrised over the whole frozenset so adding a built-in later cannot
+    quietly reopen the gap.
+    """
+    target = tmp_path / "tools.yaml"
+    target.write_text(
+        "tools:\n"
+        f"  - name: {reserved}\n"
+        "    description: shadow\n"
+        "    parameters: { type: object, properties: {} }\n"
+        "    action: { type: template, value_template: x }\n"
+    )
+    result = load_tools_file(target)
+    assert result.yaml_tools == []
+    assert "reserved" in caplog.text.lower()

@@ -262,3 +262,67 @@ async def test_all_three_commands_require_admin(
 
     assert not msg["success"]
     assert msg["error"]["code"] == "unauthorized"
+
+
+async def test_get_reports_whether_a_backup_exists(
+    hass: HomeAssistant, hass_ws_client, tools_dir: Path
+):
+    """The Rollback button's visibility is a fact read from disk, not a guess
+    the browser session has to make.
+
+    The panel used to keep a local `_backupAvailable` flag starting at False,
+    on the stated belief that "the backend exposes no 'does a backup exist'
+    query" — which was never true: `_read_tools_file` has computed
+    `backup_exists` all along. The consequence was that a backup left by an
+    earlier session or surviving a restart never surfaced the button, exactly
+    when the escape hatch was most wanted.
+    """
+    (tools_dir / "tools.yaml").write_text("tools: []\n")
+    await async_setup_component(hass, DOMAIN, {})
+    client = await hass_ws_client(hass)
+
+    await client.send_json_auto_id({"type": "smartchain/tools/get"})
+    msg = await client.receive_json()
+    assert msg["result"]["backup_exists"] is False
+
+    # A backup from "an earlier session" — nothing in this connection made it.
+    (tools_dir / "tools.yaml.bak").write_text("tools: []\n")
+
+    await client.send_json_auto_id({"type": "smartchain/tools/get"})
+    msg = await client.receive_json()
+    assert msg["result"]["backup_exists"] is True
+
+
+async def test_the_reload_tools_action_leaks_no_resolved_secret(
+    hass: HomeAssistant, tools_dir: Path
+):
+    """`smartchain.reload_tools` had the leak the websocket path was hardened
+    against — and it is the louder of the two.
+
+    `__init__.py` raised `HomeAssistantError(str(err))` on a `LoaderError`
+    wrapping a `vol.Invalid`, whose message interpolates the offending value,
+    and Home Assistant resolves `!secret` on mapping keys before validation
+    runs. Calling the action from Developer Tools on a file the schema rejects
+    therefore printed the resolved secret in the UI toast and wrote it into the
+    automation trace, where it persists. Both callers now go through
+    `_safe_loader_error`.
+    """
+    from homeassistant.exceptions import HomeAssistantError
+
+    (tools_dir.parent / "secrets.yaml").write_text(f"my_key: {SECRET_VALUE}\n")
+    (tools_dir / "tools.yaml").write_text(
+        "tools:\n"
+        "  - name: ping\n"
+        "    description: x\n"
+        "    parameters: { type: object, properties: {} }\n"
+        "    action:\n"
+        "      type: template\n"
+        "      value_template: pong\n"
+        "      !secret my_key: extra\n"
+    )
+    await async_setup_component(hass, DOMAIN, {})
+
+    with pytest.raises(HomeAssistantError) as excinfo:
+        await hass.services.async_call(DOMAIN, "reload_tools", {}, blocking=True)
+
+    assert SECRET_VALUE not in str(excinfo.value)

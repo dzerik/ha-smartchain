@@ -40,10 +40,15 @@ from .const import (
     SUBENTRY_TYPE_CONVERSATION,
     SUBENTRY_TYPE_EMBEDDINGS,
     SUBENTRY_TYPE_MEMORY_STORE,
+    SUBENTRY_TYPE_TOOL,
+    TOOL_DEFAULT_ACTION_TYPE,
+    TOOL_PARAMS_MODE_ADVANCED,
+    TOOL_PARAMS_MODE_SIMPLE,
     UNIQUE_ID,
 )
 from .tools.loader import LoaderError, load_tools_file
 from .tools.memory.registry import MemoryRegistry
+from .tools.subentry_source import SOURCE_SUBENTRY, SOURCE_YAML
 
 LOGGER = logging.getLogger(__name__)
 
@@ -66,6 +71,12 @@ def async_register(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_store_save)
     websocket_api.async_register_command(hass, ws_store_delete)
     websocket_api.async_register_command(hass, ws_store_status)
+    websocket_api.async_register_command(hass, ws_tool_schema)
+    websocket_api.async_register_command(hass, ws_tool_save)
+    websocket_api.async_register_command(hass, ws_tool_delete)
+    websocket_api.async_register_command(hass, ws_tool_list)
+    websocket_api.async_register_command(hass, ws_tools_import)
+    websocket_api.async_register_command(hass, ws_tools_export)
     websocket_api.async_register_command(hass, ws_overview)
     websocket_api.async_register_command(hass, ws_tools_get)
     websocket_api.async_register_command(hass, ws_tools_validate)
@@ -547,6 +558,14 @@ def _describe_entry(hass: HomeAssistant, entry: ConfigEntry) -> dict[str, Any]:
             _describe_store(registry, subentry)
             for subentry in entry.subentries.values()
             if subentry.subentry_type == SUBENTRY_TYPE_MEMORY_STORE
+        ],
+        # Present so the Tools tab knows which entry to create a tool on and
+        # which tools this entry already hosts. The tab's own list comes from
+        # `smartchain/tool/list`, which also covers tools.yaml and MCP.
+        "tools": [
+            _describe_tool_subentry(entry, subentry)
+            for subentry in entry.subentries.values()
+            if subentry.subentry_type == SUBENTRY_TYPE_TOOL
         ],
     }
 
@@ -1263,7 +1282,7 @@ def _safe_loader_error(err: Exception) -> str:
     `MultipleInvalid` — not its message, not its `.path` — is safe to forward:
 
     - `str(err)` / `.msg`: two of this schema's own validators
-      (`_validate_action`, `_validate_mcp_server` in tools/schema.py) build
+      (`validate_action`, `_validate_mcp_server` in tools/schema.py) build
       their message with the offending value interpolated straight in, e.g.
       ``unknown action type 'sk-...'`` — exactly what a `!secret` resolving
       into a `type:` field produces.
@@ -1619,3 +1638,484 @@ async def ws_tools_rollback(
 
     new = await hass.async_add_executor_job(_read_tools_file, path)
     connection.send_result(msg["id"], {"ok": True, "hash": new["hash"]})
+
+
+# ----- custom tools ------------------------------------------------------
+
+
+def _resolve_tool(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> tuple[ConfigEntry, Any] | None:
+    """Entry and tool subentry named by the message, or None after an error."""
+    entry = _get_entry(hass, msg["entry_id"])
+    if entry is None:
+        connection.send_error(msg["id"], "not_found", "Unknown config entry")
+        return None
+    subentry = entry.subentries.get(msg["subentry_id"])
+    if subentry is None or subentry.subentry_type != SUBENTRY_TYPE_TOOL:
+        connection.send_error(msg["id"], "not_found", "Unknown tool")
+        return None
+    return entry, subentry
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "smartchain/tool/schema",
+        vol.Required("entry_id"): str,
+        vol.Optional("subentry_id"): str,
+        vol.Optional("data"): dict,
+        vol.Optional("refresh", default=False): bool,
+    }
+)
+@websocket_api.async_response
+async def ws_tool_schema(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Serialise the tool constructor, reshaped around the choices made so far.
+
+    This is what makes the Tools tab a constructor rather than a text editor,
+    and it is deliberately the *only* place the tool's field names exist on the
+    wire: the panel renders whatever arrives through `<sc-config-form>`, the
+    same way the agents, embeddings and stores tabs do. Which fields a tool has
+    depends on its action type and on how its arguments are being authored, and
+    `<ha-form>` cannot change shape by itself — so this accepts the in-progress
+    values in `data` and rebuilds the schema around them, and `reactive` names
+    the two fields worth a round trip.
+
+    A `rest` action's header *values* are never served — only their names, plus
+    `headers_set` to say which ones hold something. A value the client itself
+    just sent comes back, since it is already the client's own.
+    """
+    from .config_flow import redact_tool_secrets, tool_form_defaults, tool_subentry_schema
+
+    entry = _get_entry(hass, msg["entry_id"])
+    if entry is None:
+        connection.send_error(msg["id"], "not_found", "Unknown config entry")
+        return
+
+    stored: dict[str, Any] = {}
+    raw: dict[str, Any] = {}
+    subentry_id = msg.get("subentry_id")
+    if subentry_id is not None:
+        subentry = entry.subentries.get(subentry_id)
+        if subentry is None or subentry.subentry_type != SUBENTRY_TYPE_TOOL:
+            connection.send_error(msg["id"], "not_found", "Unknown tool")
+            return
+        stored = tool_form_defaults(subentry)
+        raw = tool_form_defaults(subentry, redact=False)
+
+    draft = dict(msg.get("data") or {})
+    defaults = redact_tool_secrets({**stored, **draft})
+    schema = tool_subentry_schema(hass, defaults)
+
+    # Same trap as ws_agent_schema (see F1): only serve fields the schema still
+    # declares, or <ha-form> echoes a stale key back and PREVENT_EXTRA rejects
+    # the save forever.
+    declared = {str(key.schema) for key in schema.schema}
+    served = {name: value for name, value in defaults.items() if name in declared}
+
+    connection.send_result(
+        msg["id"],
+        {
+            "schema": voluptuous_serialize.convert(schema, custom_serializer=cv.custom_serializer),
+            "data": served,
+            "labels": await async_field_labels(
+                hass, "config_subentries", subentry_type=SUBENTRY_TYPE_TOOL
+            ),
+            "descriptions": await async_field_descriptions(
+                hass, "config_subentries", subentry_type=SUBENTRY_TYPE_TOOL
+            ),
+            # Changing one of these changes which fields exist, so the panel
+            # asks for the schema again rather than guessing.
+            "reactive": ["action_type", "params_mode"],
+            "headers_set": {key: bool(value) for key, value in (raw.get("headers") or {}).items()},
+        },
+    )
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "smartchain/tool/save",
+        vol.Required("entry_id"): str,
+        vol.Optional("subentry_id"): str,
+        vol.Required("data"): dict,
+    }
+)
+@websocket_api.async_response
+async def ws_tool_save(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Create or update a custom tool, then rebuild the registry.
+
+    Validated with exactly the schema `ws_tool_schema` served and exactly the
+    rules the config-flow dialog applies (`build_tool_subentry_data`), so a
+    tool made here and one made through Devices & Services are the same tool —
+    and both end at `tools.schema.validate_action` and `PARAMETERS_SCHEMA`, the
+    validators tools.yaml goes through.
+
+    Nothing about the submission is echoed back: `msg["data"]` can carry a REST
+    header holding a bearer token, so `_describe_invalid` reports field names
+    only and a rule failure reports a field name plus fixed text from
+    `TOOL_ERROR_TEXT`.
+    """
+    from .config_flow import (
+        TOOL_ERROR_TEXT,
+        build_tool_subentry_data,
+        merge_tool_secrets,
+        tool_form_defaults,
+        tool_subentry_schema,
+    )
+
+    entry = _get_entry(hass, msg["entry_id"])
+    if entry is None:
+        connection.send_error(msg["id"], "not_found", "Unknown config entry")
+        return
+
+    subentry_id = msg.get("subentry_id")
+    subentry = None
+    if subentry_id is not None:
+        subentry = entry.subentries.get(subentry_id)
+        if subentry is None or subentry.subentry_type != SUBENTRY_TYPE_TOOL:
+            connection.send_error(msg["id"], "not_found", "Unknown tool")
+            return
+
+    stored = tool_form_defaults(subentry, redact=False) if subentry is not None else {}
+    submitted = dict(msg["data"])
+    # The schema's *shape* follows the submission, not what is stored: a save
+    # that switches the action type must be validated against the new type's
+    # fields. Only the two shaping keys are taken on trust here, and the
+    # selectors in the schema reject an unknown value for either.
+    shape = {
+        **stored,
+        "action_type": submitted.get("action_type") or TOOL_DEFAULT_ACTION_TYPE,
+        "params_mode": submitted.get("params_mode") or TOOL_PARAMS_MODE_SIMPLE,
+    }
+    schema = tool_subentry_schema(hass, shape)
+
+    try:
+        form = dict(schema(submitted))
+    except vol.Invalid as err:
+        connection.send_error(msg["id"], "invalid_data", _describe_invalid(err))
+        return
+
+    form = merge_tool_secrets(form, stored)
+    data, error = build_tool_subentry_data(hass, form, subentry_id=subentry_id)
+    if error is not None:
+        field, key = error
+        connection.send_error(
+            msg["id"], "invalid_data", f"invalid_data: {field} — {TOOL_ERROR_TEXT[key]}"
+        )
+        return
+
+    title = str(form["name"]).strip()
+
+    if subentry is None:
+        new = ConfigSubentry(
+            data=data,
+            subentry_type=SUBENTRY_TYPE_TOOL,
+            title=title,
+            unique_id=None,
+        )
+        hass.config_entries.async_add_subentry(entry, new)
+        result_id = new.subentry_id
+    else:
+        hass.config_entries.async_update_subentry(entry, subentry, data=data, title=title)
+        result_id = subentry.subentry_id
+
+    reload_error = await _rebuild_after_subentry_write(hass)
+    connection.send_result(
+        msg["id"],
+        {
+            "subentry_id": result_id,
+            "reload_error": reload_error,
+            # A YAML tool of the same name is now ignored. Reported rather than
+            # left to a log line nobody reads.
+            "shadows_yaml": title in (hass.data.get(DOMAIN, {}).get("tools_shadowed") or []),
+        },
+    )
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "smartchain/tool/delete",
+        vol.Required("entry_id"): str,
+        vol.Required("subentry_id"): str,
+    }
+)
+@websocket_api.async_response
+async def ws_tool_delete(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Remove a custom tool and rebuild the registry."""
+    resolved = _resolve_tool(hass, connection, msg)
+    if resolved is None:
+        return
+    entry, subentry = resolved
+    name = subentry.title
+
+    hass.config_entries.async_remove_subentry(entry, subentry.subentry_id)
+    reload_error = await _rebuild_after_subentry_write(hass)
+    connection.send_result(msg["id"], {"name": name, "reload_error": reload_error})
+
+
+def _describe_tool_subentry(entry: ConfigEntry, subentry: Any) -> dict[str, Any]:
+    """Public description of one tool subentry.
+
+    Assembled field by field for the same reason `_describe_store` is: a REST
+    action's headers can hold a bearer token, so `subentry.data` is never
+    forwarded wholesale. Only whether a header holds a value travels.
+    """
+    data = subentry.data
+    action = dict(data.get("action") or {})
+    return {
+        "entry_id": entry.entry_id,
+        "subentry_id": subentry.subentry_id,
+        "name": subentry.title,
+        "description": data.get("description", ""),
+        "action_type": action.get("type", ""),
+        "enabled": bool(data.get("enabled", True)),
+        "source": SOURCE_SUBENTRY,
+        "headers_set": {key: bool(value) for key, value in (action.get("headers") or {}).items()},
+    }
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): "smartchain/tool/list"})
+@websocket_api.async_response
+async def ws_tool_list(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Every tool the installation has, and where each one comes from.
+
+    Three sources reach one registry, and the panel can only edit one of them,
+    so saying which is which is the whole point: a subentry tool is editable
+    here, a tools.yaml tool is editable in the Import/Export box, and an MCP
+    tool is not editable at all because it is discovered from a server.
+
+    Disabled subentry tools are listed even though they are *not* in the
+    registry — they exist, the user turned them off, and a list that hid them
+    would leave no way to turn one back on.
+    """
+    from .tools.model import MCPAction
+    from .tools.subentry_source import tool_subentries
+
+    tools = [_describe_tool_subentry(entry, subentry) for entry, subentry in tool_subentries(hass)]
+
+    registry = hass.data.get(DOMAIN, {}).get("tools")
+    sources = hass.data.get(DOMAIN, {}).get("tool_sources") or {}
+    subentry_names = {tool["name"] for tool in tools}
+    for tool in registry.all() if registry is not None else []:
+        if tool.name in subentry_names:
+            continue
+        tools.append(
+            {
+                "entry_id": None,
+                "subentry_id": None,
+                "name": tool.name,
+                "description": tool.description,
+                "action_type": tool.action.type,
+                "enabled": True,
+                "source": "mcp"
+                if isinstance(tool.action, MCPAction)
+                else sources.get(tool.name, SOURCE_YAML),
+                "headers_set": {},
+            }
+        )
+
+    connection.send_result(
+        msg["id"],
+        {
+            "tools": sorted(tools, key=lambda tool: tool["name"]),
+            "shadowed_yaml": list(hass.data.get(DOMAIN, {}).get("tools_shadowed") or []),
+        },
+    )
+
+
+def _scan_for_secret_tags(text: str) -> bool:
+    """Does this YAML text use `!secret` anywhere?
+
+    A cheap textual scan, on purpose. The alternative — parsing with a
+    `Secrets` store and inspecting the result — would resolve the secret in
+    order to find out that it is there, which is exactly what the import must
+    not do.
+    """
+    return "!secret" in text
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "smartchain/tools/import",
+        vol.Required("entry_id"): str,
+    }
+)
+@websocket_api.async_response
+async def ws_tools_import(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Turn the tools already in tools.yaml into editable `tool` subentries.
+
+    Parsed **without** a `Secrets` store, and refused outright if the file uses
+    `!secret` anywhere. Resolving one here would write the plaintext value into
+    `.storage`, silently moving a credential out of `secrets.yaml` — the same
+    rule and the same reasoning as the memory-store importer. The user is told
+    to replace those references with values typed into the form, where they are
+    at least stored knowingly.
+
+    tools.yaml is left exactly as it is. An imported tool then shadows its YAML
+    twin, which `tool/list` reports; deleting it from the file is the user's
+    call to make, not an importer's.
+    """
+    from . import _tools_yaml_path
+    from .config_flow import validate_tool_name
+
+    entry = _get_entry(hass, msg["entry_id"])
+    if entry is None:
+        connection.send_error(msg["id"], "not_found", "Unknown config entry")
+        return
+
+    path = _tools_yaml_path(hass)
+    current = await hass.async_add_executor_job(_read_tools_file, path)
+    if not current["exists"] or current["error"]:
+        connection.send_result(msg["id"], {"ok": False, "reason": "no_file", "imported": []})
+        return
+    if _scan_for_secret_tags(current["text"]):
+        connection.send_result(
+            msg["id"], {"ok": False, "reason": "secrets_present", "imported": []}
+        )
+        return
+
+    try:
+        # config_dir omitted deliberately — see the docstring. Without it HA's
+        # loader refuses `!secret` rather than resolving it, so even a form the
+        # scan above did not anticipate cannot leak.
+        result = await hass.async_add_executor_job(load_tools_file, path)
+    except LoaderError as err:
+        LOGGER.warning("tools.yaml import failed: %s", err)  # detail stays server-side
+        connection.send_result(
+            msg["id"],
+            {"ok": False, "reason": "invalid", "error": _safe_loader_error(err), "imported": []},
+        )
+        return
+
+    imported: list[str] = []
+    skipped: list[str] = []
+    for tool in result.yaml_tools:
+        form = {
+            "name": tool.name,
+            "description": tool.description,
+            "enabled": True,
+            "parameters": tool.parameters,
+        }
+        if validate_tool_name(hass, tool.name) is not None:
+            skipped.append(tool.name)
+            continue
+        data = {
+            "description": form["description"],
+            "parameters": dict(tool.parameters),
+            "action": _action_to_dict(tool.action),
+            "enabled": True,
+            "params_mode": _params_mode_for(tool.parameters),
+        }
+        hass.config_entries.async_add_subentry(
+            entry,
+            ConfigSubentry(
+                data=data, subentry_type=SUBENTRY_TYPE_TOOL, title=tool.name, unique_id=None
+            ),
+        )
+        imported.append(tool.name)
+
+    reload_error = await _rebuild_after_subentry_write(hass)
+    connection.send_result(
+        msg["id"],
+        {
+            "ok": True,
+            "imported": imported,
+            "skipped": skipped,
+            "reload_error": reload_error,
+        },
+    )
+
+
+def _params_mode_for(parameters: dict[str, Any]) -> str:
+    from .config_flow import _parameters_are_row_expressible
+
+    return (
+        TOOL_PARAMS_MODE_SIMPLE
+        if _parameters_are_row_expressible(parameters)
+        else TOOL_PARAMS_MODE_ADVANCED
+    )
+
+
+def _action_to_dict(action: Any) -> dict[str, Any]:
+    """A `ToolAction` dataclass back as the plain dict both sources store.
+
+    `dataclasses.asdict` rather than a hand-written per-type mapping: the field
+    names of `ServiceAction` and friends *are* the YAML keys, so a mapping
+    table would be a second place for them to live and the first place to drift.
+    """
+    import dataclasses
+
+    return dataclasses.asdict(action)
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): "smartchain/tools/export"})
+@websocket_api.async_response
+async def ws_tools_export(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Every tool subentry as tools.yaml text, for backup or for another install.
+
+    **REST header values are exported blank**, and the tools whose headers were
+    blanked are named in `redacted`. Export is a response like any other, and
+    the rule that no response carries a credential does not acquire an
+    exception because the user asked nicely — an `Authorization` header pasted
+    into the form would otherwise come back out as plaintext into a browser and
+    from there into wherever the text is pasted. The structure is complete and
+    importable; the values are retyped, or written as `!secret` once the file
+    is on disk.
+    """
+    from .tools.subentry_source import tool_from_subentry, tool_subentries
+
+    tools: list[dict[str, Any]] = []
+    redacted: list[str] = []
+    for _entry, subentry in tool_subentries(hass):
+        try:
+            tool = tool_from_subentry(subentry)
+        except Exception as err:  # noqa: BLE001 — one bad tool must not fail the export
+            LOGGER.warning(
+                "tool subentry %r could not be exported (%s)", subentry.title, type(err).__name__
+            )
+            continue
+        action = _action_to_dict(tool.action)
+        if action.get("headers"):
+            action["headers"] = dict.fromkeys(action["headers"], "")
+            redacted.append(tool.name)
+        entry_dict: dict[str, Any] = {
+            "name": tool.name,
+            "description": tool.description,
+            "parameters": tool.parameters,
+            "action": action,
+        }
+        if not tool.enabled:
+            entry_dict["enabled"] = False
+        tools.append(entry_dict)
+
+    text = yaml.safe_dump({"tools": tools}, sort_keys=False, allow_unicode=True) if tools else ""
+    connection.send_result(msg["id"], {"text": text, "count": len(tools), "redacted": redacted})

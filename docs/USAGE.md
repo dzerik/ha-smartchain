@@ -12,7 +12,7 @@ This document covers every SmartChain feature with a running example for each. F
 4. [Conversation entity options](#4-conversation-entity-options)
 5. [Services reference](#5-services-reference)
 6. [Built-in conversation tools](#6-built-in-conversation-tools)
-7. [Custom tools from YAML](#7-custom-tools-from-yaml)
+7. [Custom tools](#7-custom-tools)
 8. [MCP client — external tool servers](#8-mcp-client--external-tool-servers)
 9. [Long-term memory / RAG](#9-long-term-memory--rag)
 10. [Multi-agent orchestration](#10-multi-agent-orchestration)
@@ -241,11 +241,40 @@ Turn it on per sub-entry. Then:
 
 ---
 
-## 7. Custom tools from YAML
+## 7. Custom tools
 
-Declare your own LLM-callable tools in `/config/smartchain/tools.yaml`. Each tool has a name, description, JSON-Schema parameters block, and an `action` describing what to do when the tool is called.
+A custom tool is an LLM-callable action you define: a name, a description, a
+JSON-Schema `parameters` block describing its arguments, and an `action` saying
+what to do when the model calls it. Four action types: `service`, `template`,
+`rest`, `script`. Arguments are validated against the JSON Schema before
+execution; templated strings inside the action are Jinja-rendered with the
+LLM-supplied arguments as the variable scope.
 
-Four action types: `service`, `template`, `rest`, `script`. Arguments are validated against the JSON Schema before execution; templated strings inside the action are Jinja-rendered with the LLM-supplied arguments as the variable scope.
+**There are two ways to write one, and they produce the same tool.**
+
+### 7.0. The Tools tab *(v5.3.0+)* — build one without YAML
+
+Open the SmartChain panel and pick **Tools**, or add a **Tool** sub-entry from
+Settings → Devices & Services. Either way you get a form:
+
+- **Name**, **what it does** and **enabled** are plain fields.
+- **What happens when the model calls it** is a picker, and the rest of the form
+  changes to match it. A `service` tool asks for an action and a target — both
+  pickers, not text boxes; a `script` tool asks for a script entity; a `rest`
+  tool asks for a method, URL, headers, body and timeout.
+- **Arguments** is a row per argument — name, type, description, required. This
+  is the JSON Schema, built for you.
+- For a schema rows cannot express (`anyOf`, nested objects, arrays), switch
+  **How the arguments are described** to `advanced` and write the JSON Schema
+  directly. It is validated before it is saved, and again against every call.
+
+A tool built here is stored by Home Assistant, not in a file. `tools.yaml` keeps
+working — see §7.7 for how the two sources combine.
+
+> **REST header values are write-only.** A header is where an `Authorization`
+> token goes, so once saved its value never travels back to the browser: the
+> form shows the header's name with an empty value, and leaving it empty keeps
+> what is stored. Type a new value to replace it; delete the row to remove it.
 
 ### 7.1. Minimal example — `service` action
 
@@ -353,7 +382,18 @@ Semantics: missing/`None` = all tools available; empty list `[]` = no custom too
 
 ### 7.6. Reserved names
 
-`get_state_history` and `ask_agent` are reserved built-in tool names — using them in YAML drops the entry with an error logged at startup.
+All six built-in tool names are reserved: `get_state_history`, `ask_agent`, `ask_agents`, `critique_response`, `search_memory` and `search_entities`. Using one in `tools.yaml` drops the entry with an error logged at startup; using one in the Tools tab is refused while you are still looking at the name.
+
+> **Three of these were only reserved from v5.3.0.** Before that, a custom tool named `search_memory`, `ask_agents` or `critique_response` was registered alongside the built-in and appended last, so the model read the built-in's description while the call resolved to the custom tool. If you have such a tool, rename it — after upgrading it is skipped rather than silently winning.
+
+### 7.7. Two sources, one registry *(v5.3.0+)*
+
+Tools come from three places and land in one registry: the Tools tab (config sub-entries), `tools.yaml`, and connected MCP servers. The Tools tab lists all three and says which is which, because it can only edit the first.
+
+- **A name defined both in a sub-entry and in `tools.yaml` resolves in favour of the sub-entry**, for the same reason a memory store does: the sub-entry is the one the UI can edit. The shadowing is never silent — logged as a warning, reported by `smartchain/tool/list`, and shown on the tab.
+- **Import** turns the tools in `tools.yaml` into editable sub-entries. It leaves the file alone, so every imported tool then shadows its copy; delete the copies when you are satisfied. A file using `!secret` **anywhere** is refused outright: importing would have to resolve the secret and write the resolved value into `.storage` as plain text, quietly moving a credential out of `secrets.yaml`.
+- **Export** writes the sub-entry tools back out as YAML. REST header values are exported blank and the affected tools are named, for the same reason the form never shows them.
+- `mcp_servers:` and `memory:` are not importable and have no constructor here — MCP servers are configured in `tools.yaml`, memory stores on the Stores tab.
 
 ---
 
@@ -1076,7 +1116,7 @@ Click **SmartChain AI** in the HA sidebar. Administrators see five tabs; everyon
 | **Embeddings** | Embeddings bindings (§9.1). Hidden entirely when no configured provider can embed. Warns before a rename or delete that would unbind a store. |
 | **Stores** *(v5.2.0+)* | Memory and vector stores (§9.2), plus a health line per configured store — including the ones that still live in `tools.yaml` and cannot be edited here. |
 | **Settings** | The entry's connection settings. Most providers have none and the tab says so. |
-| **Tools** | The `tools.yaml` editor, with server-side validation, a backup and a rollback. |
+| **Tools** *(rebuilt in v5.3.0)* | A form-driven constructor for custom tools (§7.0), and a list of every registered tool with its source. The `tools.yaml` editor — with server-side validation, a backup and a rollback — is still there, demoted into an Import / Export block. |
 | **Camera** | Pick any camera entity, type a question, get a description. |
 
 The **Camera** tab calls `smartchain.analyze_image` under the hood — same behaviour as the service. Its result is mirrored to `sensor.smartchain_last_analysis` (a proper SensorEntity since v4.0.2) and to the `smartchain_image_analyzed` event for automation use.

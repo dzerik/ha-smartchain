@@ -122,7 +122,7 @@ SmartChain — кастомная интеграция Home Assistant, пред�
 **Настройки > Голосовые ассистенты > Добавить** — выберите SmartChain как conversation agent.
 
 ### 5. Открытие панели SmartChain AI
-Нажмите **SmartChain AI** в боковой панели Home Assistant. Администратору доступны вкладки **Agents**, **Embeddings**, **Stores** (хранилища памяти и векторов, со строкой состояния по каждому), **Settings**, **Tools** и **Camera**; всем остальным — только Camera.
+Нажмите **SmartChain AI** в боковой панели Home Assistant. Администратору доступны вкладки **Agents**, **Embeddings**, **Stores** (хранилища памяти и векторов, со строкой состояния по каждому), **Settings**, **Tools** (конструктор пользовательских инструментов на форме; tools.yaml остаётся импортом/экспортом) и **Camera**; всем остальным — только Camera.
 
 ![SmartChain AI Panel - Analyze Camera](img_1.png)
 

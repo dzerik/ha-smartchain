@@ -259,6 +259,13 @@ export const SC_STYLES = `
   .sc-entry-pick .sc-entry-engine { margin-left: auto; }
 
   /* ========== Tools Tab ========== */
+  /* The tools.yaml editor is no longer the tab — it is the escape hatch under
+     it, so it gets breathing room above and a picker that lines up with the
+     Add button beside it. */
+  .sc-tools-io { margin-top: 20px; }
+  .sc-tools-export { min-height: 160px; margin-bottom: 12px; }
+  .sc-entry-head .sc-tools-owner { max-width: 220px; margin-left: auto; }
+  .sc-entry-head .sc-tools-owner + .sc-add { margin-left: 8px; }
   .sc-tools-head {
     display: flex; align-items: center; gap: 12px;
     padding-bottom: 12px; margin-bottom: 12px;

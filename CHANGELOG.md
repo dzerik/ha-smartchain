@@ -8,6 +8,81 @@ project follows [Semantic Versioning](https://semver.org/).
 > **Note:** `5.0.1`–`5.0.7` were released without changelog entries and are not
 > reconstructed here.
 
+## [5.3.0] - unreleased
+
+### Added
+- **Custom tools are built in a form, not typed as YAML.** A tool is now a `tool`
+  config sub-entry — add one from the rebuilt **Tools** tab in the SmartChain
+  panel, or from **Settings > Devices & Services > SmartChain > Add tool**. Name,
+  description and enabled are plain fields; the action type is a picker and the
+  rest of the form follows it, so a `service` tool asks for a Home Assistant
+  action and a target (both pickers) and a `script` tool asks for a script
+  entity. Arguments are a row per argument — name, type, description, required —
+  which is the `parameters` JSON Schema, built for you.
+- **A raw JSON Schema box for the shapes rows cannot express.** `anyOf`, nested
+  objects and arrays are still writable: switch the parameter mode to `advanced`.
+  Both modes end at the same validator `tools.yaml` passes through, and a tool
+  reopened for editing lands in whichever mode can represent it — a schema the
+  rows would silently shrink opens in the advanced box instead.
+- **The whole constructor is a backend-served schema.** `smartchain/tool/schema`
+  serialises every field, its selector, and the two fields that reshape the form;
+  `<sc-config-form>` renders it. The Tools tab declares no field name of its own,
+  and a test enforces that.
+- **Websocket commands** `smartchain/tool/schema|save|delete|list` and
+  `smartchain/tools/import|export`, all admin-only, plus a `tools` list on
+  `smartchain/overview`.
+- **Import / export.** Import turns the tools in `tools.yaml` into editable
+  sub-entries, leaving the file untouched; export writes them back out as YAML.
+
+### Changed
+- **`ToolRegistry` builds from both sources.** An existing `tools.yaml` keeps
+  working unchanged — it is still the only home for `mcp_servers:` — but a name
+  defined in both resolves in favour of the sub-entry, the editable one, and the
+  shadowing is logged, reported by `smartchain/tool/list` and shown in the panel
+  rather than left to be discovered. Same rule, and same reasoning, as stores in
+  5.2.0.
+- The Tools tab's YAML editor is demoted into an **Import / Export** block. It
+  keeps its server-side validation, backup and rollback.
+- `smartchain.reload_tools`'s count now covers both sources. It still excludes
+  MCP tools, which arrive asynchronously after the reload returns.
+
+### Fixed
+- **`smartchain.reload_tools` could print a resolved secret.** It raised
+  `HomeAssistantError(str(err))` on a loader failure, and a schema failure's
+  message interpolates the offending value — which Home Assistant has already
+  resolved from `secrets.yaml`, including for mapping *keys*. Calling the action
+  from Developer Tools on a rejected `tools.yaml` therefore put the secret in the
+  UI toast and into the automation trace, where it persists. It now goes through
+  `_safe_loader_error`, the guard the websocket path already used.
+- **Three built-in tool names were shadowable.** `RESERVED_TOOL_NAMES` listed
+  three of six, so a custom tool named `search_memory`, `ask_agents` or
+  `critique_response` was registered alongside the built-in and appended last:
+  the model read the built-in's description while the dispatch resolved to the
+  custom tool. All six are reserved now, in `tools.yaml` and in the form.
+- **The Rollback button ignored a backup it could see.** The panel kept a local
+  "did *this session* make a backup" flag, on the stated belief that the backend
+  had no way to answer the question — but `smartchain/tools/get` has returned
+  `backup_exists` all along. A backup surviving a restart now surfaces the
+  button, which is when it is most wanted.
+- The tab's reserved-name note listed three of six names, and its `allowed_tools`
+  note claimed the setting restricts an agent to the names listed. It filters
+  custom tools only; enabled built-ins are added regardless. Both corrected.
+
+### Security
+- **A REST header value is write-only.** A header is where an `Authorization`
+  token goes, and it now lives in `.storage` rather than in a file the user knows
+  the browser can read. No `tool/*` response carries one back — the form shows the
+  header's name with an empty value, and an empty submission keeps what is stored
+  (per key, so a header can still be removed). Export blanks them too and names
+  the tools affected: an export is a response like any other, and the rule that
+  no response carries a credential does not acquire an exception because the user
+  asked for it.
+- **Importing a `tools.yaml` that uses `!secret` is refused outright**, naming no
+  value. Importing would have to resolve the reference and write the resolved
+  value into `.storage` as plain text, quietly moving a credential out of
+  `secrets.yaml`. The file is also parsed without a secrets store, so nothing can
+  resolve even if the scan were bypassed.
+
 ## [5.2.0] - unreleased
 
 ### Added

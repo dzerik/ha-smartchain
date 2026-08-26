@@ -132,7 +132,8 @@ simply provides no conversation entity.
 ### 5. Open SmartChain AI Panel
 Click **SmartChain AI** in the Home Assistant sidebar. Administrators get tabs for
 **Agents**, **Embeddings**, **Stores** (memory and vector stores, with a health line
-per store), **Settings**, **Tools** and **Camera**; everyone else sees Camera only.
+per store), **Settings**, **Tools** (a form-driven constructor for custom tools, with
+tools.yaml demoted to import/export) and **Camera**; everyone else sees Camera only.
 
 ![SmartChain AI Panel - Analyze Camera](img_1.png)
 

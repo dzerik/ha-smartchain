@@ -317,6 +317,46 @@ ALL_TOOLS_LABELS = {"en": "All tools", "ru": "Все инструменты"}
 # `__all__`, which is a legal tool name and must never be used here.
 ALL_TOOLS_SENTINEL = "*"
 
+# Custom tools as config subentries (v5.3.0)
+# A tool used to exist only as an entry under `tools:` in tools.yaml. It is now
+# also a subentry type, so it can be built by a form instead of typed.
+SUBENTRY_TYPE_TOOL = "tool"
+# The action types a user writes by hand. `mcp` is deliberately absent: an MCP
+# action is synthesised from a connected server, never authored.
+TOOL_ACTION_TYPES = ["service", "template", "rest", "script"]
+TOOL_DEFAULT_ACTION_TYPE = "service"
+# A script action targets one `script.*` entity, and the pattern is enforced in
+# both sources — the YAML schema and the subentry form — from this one literal.
+TOOL_SCRIPT_PATTERN = r"^script\.[a-z_][a-z0-9_]*$"
+REST_METHODS = ["GET", "POST", "PUT", "DELETE"]
+REST_RESPONSE_FORMATS = ["text", "json"]
+REST_DEFAULT_TIMEOUT = 10
+REST_MIN_TIMEOUT = 1
+REST_MAX_TIMEOUT = 120
+# How the `parameters` JSON Schema was authored. `simple` is a row per
+# argument, which covers the overwhelming majority of real tools; `advanced` is
+# a raw JSON Schema textarea, kept because rows cannot express `anyOf`, nested
+# objects or arrays and a constructor that refuses those shapes would be a
+# downgrade from the file it replaces.
+TOOL_PARAMS_MODE_SIMPLE = "simple"
+TOOL_PARAMS_MODE_ADVANCED = "advanced"
+TOOL_PARAMS_MODES = [TOOL_PARAMS_MODE_SIMPLE, TOOL_PARAMS_MODE_ADVANCED]
+# The JSON Schema scalar types a parameter row can declare. Deliberately not
+# `array` or `object`: a row has one type field and no way to describe an
+# element or a property, so offering them would produce a schema that validates
+# nothing. Those shapes are what `advanced` is for.
+TOOL_PARAM_TYPES = ["string", "integer", "number", "boolean"]
+# A parameter name becomes a key under `parameters.properties` and is what the
+# model passes back in a tool call, so it is looser than TOOL_NAME_PATTERN
+# (uppercase is legal in a JSON Schema property) but still an identifier — a
+# name with a space or a dot cannot be referenced from a Jinja template as
+# `{{ city }}`, which is how every action executor reads its arguments.
+TOOL_PARAM_NAME_PATTERN = r"^[A-Za-z_][A-Za-z0-9_]*\Z"
+# An empty JSON Schema object — a tool that takes no arguments. `_PARAMETERS`
+# in tools/schema.py requires `type` and `properties`, so "no arguments" still
+# has to be spelled out.
+TOOL_EMPTY_PARAMETERS: dict = {"type": "object", "properties": {}}
+
 # MCP client (v4.2.0)
 MCP_RECONNECT_INITIAL_DELAY = 1.0  # seconds
 MCP_RECONNECT_MAX_DELAY = 30.0  # seconds
@@ -482,7 +522,24 @@ ENTITY_MEANINGFUL_DEVICE_CLASSES = [
 # references that name — defining it up near the other tool-name constants
 # would forward-reference a name that doesn't exist yet at that point in the
 # module and raise NameError on import.
-RESERVED_TOOL_NAMES = frozenset({HISTORY_TOOL_NAME, DELEGATE_TOOL_NAME, ENTITY_TOOL_NAME})
+#
+# All six built-ins, not three. `search_memory`, `ask_agents` and
+# `critique_response` were shadowable until v5.3.0: a custom tool taking one of
+# those names reached `bind_tools` alongside the built-in, and which of the two
+# the model's call resolved to depended on list order — the custom tool is
+# appended last, so it won the dispatch lookup while the built-in's description
+# was the one the model read. Reserving the full set makes the collision a
+# refusal at the point it is written instead.
+RESERVED_TOOL_NAMES = frozenset(
+    {
+        HISTORY_TOOL_NAME,
+        DELEGATE_TOOL_NAME,
+        ENTITY_TOOL_NAME,
+        MEMORY_TOOL_NAME,
+        DELEGATE_MANY_TOOL_NAME,
+        CRITIQUE_TOOL_NAME,
+    }
+)
 
 # Dynamic entity context (v5.0.0, roadmap subsystem C)
 CONF_DYNAMIC_ENTITY_CONTEXT = "dynamic_entity_context"

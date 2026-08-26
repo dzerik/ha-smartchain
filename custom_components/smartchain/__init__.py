@@ -32,6 +32,7 @@ from .tools.mcp import MCPManager
 from .tools.memory.entity_context import SkeletonCache
 from .tools.memory.registry import MemoryRegistry
 from .tools.memory.subentry_source import merge_store_sources, stores_from_subentries
+from .tools.subentry_source import merge_tool_sources, tools_from_subentries
 
 __all__ = ["async_generate_structured"]
 from .const import (
@@ -340,17 +341,22 @@ def _memory_persist_dir(hass: HomeAssistant) -> Path:
 async def _reload_registry(hass: HomeAssistant) -> int:
     """Re-read tools.yaml into the registry. Raises LoaderError on failure.
 
-    Memory stores now have two sources: the `memory:` block of tools.yaml and
-    `memory_store` config subentries. Both are read here and merged by
-    `merge_store_sources`, which is also where a name defined in both is
-    resolved — in favour of the subentry — and logged.
+    Both tools and memory stores now have two sources: tools.yaml and config
+    subentries. Each pair is merged by its own `merge_*_sources`, which is also
+    where a name defined in both is resolved — in favour of the subentry, the
+    editable one — and logged.
     """
     path = _tools_yaml_path(hass)
     # The config dir is what lets HA's YAML loader resolve `!secret` against
     # secrets.yaml — without it the whole file fails on the first such tag.
     result = await hass.async_add_executor_job(load_tools_file, path, Path(hass.config.config_dir))
     registry: ToolRegistry = hass.data[DOMAIN]["tools"]
-    registry.replace_all(result.yaml_tools)
+    merged_tools, tool_sources, tools_shadowed = merge_tool_sources(
+        result.yaml_tools, tools_from_subentries(hass)
+    )
+    registry.replace_all(merged_tools)
+    hass.data[DOMAIN]["tool_sources"] = tool_sources
+    hass.data[DOMAIN]["tools_shadowed"] = tools_shadowed
 
     manager: MCPManager | None = hass.data[DOMAIN].get("mcp_manager")
     if manager is not None:
@@ -384,9 +390,11 @@ async def _reload_registry(hass: HomeAssistant) -> int:
     if skeleton is not None:
         skeleton.invalidate()
 
-    # MCP tools arrive asynchronously after start(); the count fired in the
-    # reload event therefore reflects only the synchronously-loaded YAML tools.
-    return len(result.yaml_tools)
+    # What this counts, precisely: the custom tools in the registry right now —
+    # tools.yaml plus tool subentries, after the collision merge. MCP tools are
+    # *not* included: they arrive asynchronously after `manager.start()`, so at
+    # this point the number of them is not yet knowable.
+    return len(merged_tools)
 
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
@@ -493,7 +501,18 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         try:
             count = await _reload_registry(hass)
         except LoaderError as err:
-            raise HomeAssistantError(str(err)) from err
+            # Never `str(err)`. A LoaderError raised from a schema failure wraps
+            # a `vol.Invalid` whose message interpolates the offending value,
+            # and HA resolves `!secret` before validation runs — so calling this
+            # action from Developer Tools on a tools.yaml the schema rejects
+            # used to print the resolved secret in the UI toast and into the
+            # automation trace. `_safe_loader_error` is the same guard the
+            # websocket path already applies; the full message is logged
+            # server-side, where only an admin can read it.
+            from .websocket_api import _safe_loader_error
+
+            LOGGER.warning("SmartChain tools reload failed: %s", err)
+            raise HomeAssistantError(_safe_loader_error(err)) from err
         hass.bus.async_fire(EVENT_TOOLS_RELOADED, {"count": count})
 
     async def _handle_clear_memory(call: ServiceCall) -> None:
