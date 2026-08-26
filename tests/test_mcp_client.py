@@ -82,6 +82,33 @@ async def test_call_tool_non_text_content_becomes_placeholder(fake_session) -> N
     assert "[non-text content]" in result
 
 
+async def test_ping_sends_the_protocol_ping(fake_session) -> None:
+    """The manager's liveness check has to reach the peer, so this must be a
+    request on the session — not a local truthiness test on the client."""
+    fake_session.send_ping = AsyncMock(return_value=MagicMock())
+    client = MCPClient(StdioConfig(name="fs", command="npx"))
+    client._session = fake_session
+
+    await client.ping()
+    fake_session.send_ping.assert_awaited_once_with()
+
+
+async def test_ping_propagates_a_dead_session(fake_session) -> None:
+    """A transport error must surface: the manager reads it as "reconnect"."""
+    fake_session.send_ping = AsyncMock(side_effect=RuntimeError("broken pipe"))
+    client = MCPClient(StdioConfig(name="fs", command="npx"))
+    client._session = fake_session
+
+    with pytest.raises(RuntimeError, match="broken pipe"):
+        await client.ping()
+
+
+async def test_client_not_connected_ping_raises() -> None:
+    client = MCPClient(StdioConfig(name="fs", command="npx"))
+    with pytest.raises(RuntimeError, match="not connected"):
+        await client.ping()
+
+
 async def test_client_not_connected_call_tool_raises() -> None:
     cfg = StdioConfig(name="fs", command="npx")
     client = MCPClient(cfg)

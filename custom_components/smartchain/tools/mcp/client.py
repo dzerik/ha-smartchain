@@ -144,6 +144,17 @@ class MCPClient:
             return f"Tool execution failed: {rendered}"
         return rendered
 
+    async def ping(self) -> None:
+        """Round-trip an MCP `ping`, raising if the peer no longer answers.
+
+        The protocol's own liveness request, so it works the same across stdio,
+        SSE and streamable HTTP. Deliberately returns nothing: the only
+        information wanted is whether it came back at all.
+        """
+        if self._session is None:
+            raise RuntimeError(f"MCPClient({self.config.name}) is not connected")
+        await self._session.send_ping()
+
     async def close(self) -> None:
         stack = self._exit_stack
         self._session = None

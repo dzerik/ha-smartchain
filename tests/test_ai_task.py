@@ -13,7 +13,7 @@ from homeassistant.exceptions import HomeAssistantError
 from langchain_core.messages import AIMessageChunk
 
 from custom_components.smartchain.ai_task import SmartChainAITaskEntity
-from custom_components.smartchain.const import CONF_ENGINE, ID_GIGACHAT
+from custom_components.smartchain.const import CONF_ENGINE, GENERIC_LLM_ERROR, ID_GIGACHAT
 
 
 def _make_chat_log(conversation_id="test-conv-id"):
@@ -139,7 +139,12 @@ async def test_generate_data_structured_invalid_json(ai_task_entity) -> None:
 
 
 async def test_generate_data_llm_error(ai_task_entity) -> None:
-    """Test that LLM errors are raised as HomeAssistantError."""
+    """Test that LLM errors are raised as HomeAssistantError.
+
+    The raised message is the one generic sentence; the provider's own words
+    stay in the log (see `test_provider_error_stays_in_the_log.py`), which is
+    why this no longer matches on "AI Task error: <what the provider said>".
+    """
 
     async def _error_astream(messages):
         raise RuntimeError("LLM API down")
@@ -150,8 +155,11 @@ async def test_generate_data_llm_error(ai_task_entity) -> None:
     chat_log = _make_chat_log()
     task = _make_gen_data_task()
 
-    with pytest.raises(HomeAssistantError, match="AI Task error"):
+    with pytest.raises(HomeAssistantError) as excinfo:
         await ai_task_entity._async_generate_data(task, chat_log)
+
+    assert str(excinfo.value) == GENERIC_LLM_ERROR
+    assert "LLM API down" not in str(excinfo.value)
 
 
 async def test_generate_data_with_tools(ai_task_entity) -> None:

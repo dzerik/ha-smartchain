@@ -4,6 +4,18 @@ from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+# Seconds a `service` or `script` action may block the conversation turn.
+#
+# These two are called with `blocking=True`, and Home Assistant core no longer
+# enforces a `SERVICE_CALL_LIMIT`, so without a budget of their own a script
+# holding a `delay` or a `wait_for_trigger` keeps the turn open indefinitely.
+# The bounds mirror the REST executor's (`REST_MIN_TIMEOUT`/`REST_MAX_TIMEOUT`
+# in const.py) so every timeout in tools.yaml behaves the same way; the default
+# is larger than REST's because a service call legitimately drives hardware.
+ACTION_DEFAULT_TIMEOUT = 30
+ACTION_MIN_TIMEOUT = 1
+ACTION_MAX_TIMEOUT = 300
+
 
 @dataclass(frozen=True)
 class ServiceAction:
@@ -15,6 +27,7 @@ class ServiceAction:
     target: dict[str, Any] = field(default_factory=dict)
     data: dict[str, Any] = field(default_factory=dict)
     response: bool = False
+    timeout: int = ACTION_DEFAULT_TIMEOUT
 
 
 @dataclass(frozen=True)
@@ -45,6 +58,7 @@ class ScriptAction:
     type: Literal["script"] = "script"
     script: str = ""
     variables: dict[str, Any] = field(default_factory=dict)
+    timeout: int = ACTION_DEFAULT_TIMEOUT
 
 
 @dataclass(frozen=True)

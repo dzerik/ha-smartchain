@@ -70,8 +70,13 @@ export class ScCameraTab extends HTMLElement {
           font-size: 13px;
           line-height: 1.6;
           white-space: pre-wrap;
-          background: var(--code-editor-background-color, #1e1e1e);
-          color: #d4d4d4;
+          /* Both halves of the pair come from the theme. Home Assistant
+             resolves --code-editor-background-color to the card background, so
+             a literal light-grey ink here was ~1.3:1 on every light theme; and
+             a literal dark background paired with a themed ink would fail the
+             other way round when the theme leaves the code variable unset. */
+          background: var(--code-editor-background-color, var(--card-background-color, #fff));
+          color: var(--primary-text-color, #212121);
         }
       </style>
 
@@ -82,17 +87,17 @@ export class ScCameraTab extends HTMLElement {
         <div class="ct-form">
           <div class="sc-row">
             <div>
-              <label class="sc-label">Agent</label>
+              <label class="sc-label" for="ct-agent">Agent</label>
               <select id="ct-agent" class="sc-select"></select>
             </div>
             <div>
-              <label class="sc-label">Camera</label>
+              <label class="sc-label" for="ct-camera">Camera</label>
               <select id="ct-camera" class="sc-select"></select>
             </div>
           </div>
 
           <div>
-            <label class="sc-label">Question / Instruction</label>
+            <label class="sc-label" for="ct-prompt">Question / Instruction</label>
             <textarea id="ct-prompt" class="sc-textarea"
               placeholder="What do you see? Is there anyone at the door? Describe the scene."></textarea>
           </div>
@@ -105,7 +110,9 @@ export class ScCameraTab extends HTMLElement {
         </div>
       </div>
 
-      <div id="ct-result" class="sc-hidden">
+      <!-- The result lands after an await, by which time focus has moved on;
+           without a live region it is drawn but never announced. -->
+      <div id="ct-result" class="sc-hidden" aria-live="polite">
         <div class="sc-card" style="padding:0;">
           <div class="ct-result-card">
             <div class="ct-result-header">

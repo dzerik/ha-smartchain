@@ -1,12 +1,16 @@
 """Execute a service action — call a Home Assistant service with rendered args."""
 
+import asyncio
 import json
+import logging
 from typing import Any
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import template as template_helper
 
 from ..model import ServiceAction
+
+LOGGER = logging.getLogger(__name__)
 
 
 def _render_value(value: Any, hass: HomeAssistant, args: dict[str, Any]) -> Any:
@@ -46,14 +50,31 @@ async def execute_service(
     target = _render_value(action.target, hass, args) if action.target else None
     data = _render_value(action.data, hass, args) if action.data else None
 
-    response = await hass.services.async_call(
-        action.domain,
-        action.service,
-        service_data=data,
-        target=target,
-        blocking=True,
-        return_response=action.response,
-    )
+    # `blocking=True` waits for the service to finish and Home Assistant core
+    # no longer enforces a `SERVICE_CALL_LIMIT`, so without this budget a
+    # service that waits — on a device, on a script, on a trigger — holds the
+    # conversation turn open for as long as it likes. Same shape as the REST
+    # executor's `asyncio.timeout`, and like it, going over is a sentence the
+    # model can read rather than an exception that ends the turn. The service
+    # itself is cancelled at the deadline; whatever it already did, it did.
+    try:
+        async with asyncio.timeout(action.timeout):
+            response = await hass.services.async_call(
+                action.domain,
+                action.service,
+                service_data=data,
+                target=target,
+                blocking=True,
+                return_response=action.response,
+            )
+    except TimeoutError:
+        LOGGER.warning(
+            "Service %s.%s did not finish within %ss",
+            action.domain,
+            action.service,
+            action.timeout,
+        )
+        return f"Error: {action.domain}.{action.service} timed out after {action.timeout}s"
 
     if action.response:
         return json.dumps(response, ensure_ascii=False, default=str)

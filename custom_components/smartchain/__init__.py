@@ -57,6 +57,7 @@ from .const import (
     EVENT_ENTITIES_REINDEXED,
     EVENT_MEMORY_CLEARED,
     EVENT_TOOLS_RELOADED,
+    GENERIC_LLM_ERROR,
     ID_GIGACHAT,
     MEMORY_PERSIST_DIRNAME,
     PANEL_STATIC_PATH,
@@ -643,7 +644,8 @@ SERVICE_ANALYZE_IMAGE_SCHEMA = vol.Schema(
 SENSOR_LAST_ANALYSIS = f"sensor.{DOMAIN}_last_analysis"
 EVENT_IMAGE_ANALYZED = f"{DOMAIN}_image_analyzed"
 
-_GENERIC_LLM_ERROR = "LLM request failed; see Home Assistant logs for details."
+# The LLM one moved to `const.GENERIC_LLM_ERROR` when the conversation and AI
+# Task paths started answering with it too — one text, spelled out once.
 _GENERIC_CAMERA_ERROR = "Failed to read camera image; see Home Assistant logs for details."
 
 # What `ai_task.py` appends to the agent's unique_id when it builds the second
@@ -969,12 +971,22 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         try:
             result = await client.ainvoke([HumanMessage(content=message)])
             return {"response": result.content}
-        except Exception:
+        except Exception as err:
             # Provider exception messages may embed credentials (e.g. OpenAI's
             # AuthenticationError includes the offending key fragment). Don't
             # surface them to service callers — full detail is in the log.
-            LOGGER.exception("SmartChain ask service error")
-            return {"response": _GENERIC_LLM_ERROR}
+            # `provider` is the client class rather than the engine id because
+            # `_find_client` hands back a client, not the entry behind it, and
+            # the class name (`ChatOpenAI`, `GigaChat`) is what identifies the
+            # provider from here.
+            LOGGER.exception(
+                "SmartChain ask service error (provider=%s, entity_id=%s, operation=%s): %s",
+                type(client).__name__,
+                entity_id or "<default>",
+                "ask",
+                err,
+            )
+            return {"response": GENERIC_LLM_ERROR}
 
     async def _handle_analyze_image(call: ServiceCall) -> ServiceResponse:
         """Handle smartchain.analyze_image service call."""
@@ -1004,9 +1016,15 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         try:
             result = await client.ainvoke([HumanMessage(content=multimodal_content)])
             response_text = result.content
-        except Exception:
-            LOGGER.exception("SmartChain analyze_image error")
-            return {"response": _GENERIC_LLM_ERROR}
+        except Exception as err:
+            LOGGER.exception(
+                "SmartChain analyze_image error (provider=%s, entity_id=%s, operation=%s): %s",
+                type(client).__name__,
+                entity_id or "<default>",
+                "analyze_image",
+                err,
+            )
+            return {"response": GENERIC_LLM_ERROR}
 
         now = dt_util.utcnow().isoformat()
         event_data = {

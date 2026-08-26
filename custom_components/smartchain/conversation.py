@@ -43,6 +43,7 @@ from .const import (
     CONF_DYNAMIC_CONTEXT_ON_ASSIST,
     CONF_DYNAMIC_CONTEXT_PRESET,
     CONF_DYNAMIC_ENTITY_CONTEXT,
+    CONF_ENGINE,
     CONF_LLM_HASS_API,
     CONF_PROCESS_BUILTIN_SENTENCES,
     CONF_PROMPT,
@@ -59,6 +60,7 @@ from .const import (
     ENTITY_DEFAULT_PRESET,
     ENTITY_SEARCH_DEFAULT_TOP_K,
     ENTITY_TOOL_NAME,
+    GENERIC_LLM_ERROR,
     HISTORY_TOOL_NAME,
     MAX_TOOL_ITERATIONS,
     MEMORY_TOOL_NAME,
@@ -191,6 +193,18 @@ class SmartChainConversationEntity(ConversationEntity):
         if self._subentry_id and isinstance(self.entry.runtime_data, dict):
             return self.entry.runtime_data[self._subentry_id]
         return self.entry.runtime_data
+
+    @property
+    def _engine(self) -> str:
+        """The provider id behind this agent, or "unknown" if it cannot be read.
+
+        Only ever used to say *which* provider failed in a log line, so it
+        never raises: `entry.data` is absent on a stub entry and is not a dict
+        on a half-migrated one, and a log line about a failure must not fail.
+        """
+        data = getattr(self.entry, "data", None) or {}
+        engine = data.get(CONF_ENGINE) if isinstance(data, dict) else None
+        return engine or "unknown"
 
     @property
     def _sibling_agents(self) -> list[dict[str, str]]:
@@ -504,11 +518,31 @@ class SmartChainConversationEntity(ConversationEntity):
                 ):
                     pass
             except Exception as err:
-                LOGGER.exception("Unexpected exception %s", type(err))
+                # The exception text does not go back to the person. It is
+                # whatever the provider wrote — a rejected key, an internal URL,
+                # a request id — and `async_set_error` becomes
+                # `async_set_speech`: it would be stored in the conversation
+                # history and spoken aloud by the satellite. The service path
+                # has answered with `GENERIC_LLM_ERROR` since v4.0.2; this is
+                # the same constant, so the two cannot say different things.
+                #
+                # Everything the person no longer sees goes here instead, and
+                # the log line carries the provider and the operation as well as
+                # the message, so making the reply general does not make the
+                # failure any harder to diagnose. `exception` keeps the
+                # traceback too.
+                LOGGER.exception(
+                    "SmartChain conversation request failed"
+                    " (provider=%s, agent=%s, operation=%s): %s",
+                    self._engine,
+                    user_input.agent_id,
+                    "chat_stream",
+                    err,
+                )
                 response = intent.IntentResponse(language=user_input.language)
                 response.async_set_error(
                     intent.IntentResponseErrorCode.UNKNOWN,
-                    f"Houston we have a problem: {err}",
+                    GENERIC_LLM_ERROR,
                 )
                 return ConversationResult(
                     conversation_id=chat_log.conversation_id, response=response

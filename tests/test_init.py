@@ -27,6 +27,7 @@ from custom_components.smartchain.const import (
     CONF_LLM_HASS_API,
     CONF_PROCESS_BUILTIN_SENTENCES,
     CONF_PROMPT,
+    GENERIC_LLM_ERROR,
     ID_GIGACHAT,
 )
 from custom_components.smartchain.conversation import (
@@ -202,7 +203,12 @@ async def test_handle_message_history_disabled(
 async def test_handle_message_llm_error(
     hass: HomeAssistant, entity, user_input, mock_chat_log
 ) -> None:
-    """Test _async_handle_message handles LLM errors gracefully."""
+    """Test _async_handle_message handles LLM errors gracefully.
+
+    The reply carries the error *code*, not the provider's words: this used to
+    assert `"API Error" in speech`, i.e. it pinned the leak that
+    `test_provider_error_stays_in_the_log.py` now closes.
+    """
 
     async def _error_stream(messages):
         raise RuntimeError("API Error")
@@ -214,7 +220,9 @@ async def test_handle_message_llm_error(
 
     assert isinstance(result, ConversationResult)
     assert result.response.error_code == intent.IntentResponseErrorCode.UNKNOWN
-    assert "API Error" in result.response.speech["plain"]["speech"]
+    speech = result.response.speech["plain"]["speech"]
+    assert speech == GENERIC_LLM_ERROR
+    assert "API Error" not in speech
 
 
 async def test_handle_message_with_builtin_not_recognized(

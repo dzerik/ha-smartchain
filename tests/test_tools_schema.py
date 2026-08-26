@@ -3,6 +3,13 @@
 import pytest
 import voluptuous as vol
 
+from custom_components.smartchain.tools.model import (
+    ACTION_DEFAULT_TIMEOUT,
+    ACTION_MAX_TIMEOUT,
+    ACTION_MIN_TIMEOUT,
+    ScriptAction,
+    ServiceAction,
+)
 from custom_components.smartchain.tools.schema import TOOL_SCHEMA, TOOLS_FILE_SCHEMA
 
 
@@ -125,6 +132,110 @@ def test_tools_file_schema_accepts_empty_dict_now() -> None:
     """With both keys Optional, an empty top-level dict is valid (yields empty registry)."""
     result = TOOLS_FILE_SCHEMA({})
     assert result == {"tools": [], "mcp_servers": []}
+
+
+def test_tool_schema_rejects_parameters_that_are_not_a_json_schema() -> None:
+    """`parameters` is held to the JSON Schema metaschema, not just its shell.
+
+    USAGE §7.0.1 promises the schema "is validated before it is saved, and
+    again against every call". Before this, only the outer three keys were
+    checked: `type: nosuchtype` on a property sailed through the file and the
+    form, and blew up inside `jsonschema.validate` at the first call. The
+    message names the offending path so the user knows which argument to fix.
+    """
+    raw = {
+        "name": "weather",
+        "description": "x",
+        "parameters": {
+            "type": "object",
+            "properties": {"city": {"type": "nosuchtype"}},
+        },
+        "action": {"type": "template", "value_template": "x"},
+    }
+    with pytest.raises(vol.Invalid) as err:
+        TOOL_SCHEMA(raw)
+    assert "properties.city.type" in str(err.value)
+
+
+def test_tool_schema_still_accepts_a_schema_the_rows_cannot_express() -> None:
+    """The metaschema check must not narrow what `advanced` mode may write."""
+    raw = {
+        "name": "complex_tool",
+        "description": "x",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "when": {"anyOf": [{"type": "string"}, {"type": "integer"}]},
+                "rooms": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["when"],
+        },
+        "action": {"type": "template", "value_template": "x"},
+    }
+    TOOL_SCHEMA(raw)
+
+
+def test_omitted_timeout_is_not_invented_by_the_validator() -> None:
+    """The budget is the dataclass's default, never a key this validator adds.
+
+    `validate_action` is also what the panel's save path runs, and a key it
+    invents is a key the form never wrote: opening a preset-installed tool and
+    pressing Save with nothing changed would rewrite the stored subentry. The
+    default belongs to `ScriptAction`/`ServiceAction`; here the key is only
+    validated when the user actually wrote one.
+    """
+    base = {
+        "name": "x",
+        "description": "x",
+        "parameters": {"type": "object", "properties": {}},
+    }
+    service = TOOL_SCHEMA(
+        {**base, "action": {"type": "service", "domain": "light", "service": "turn_on"}}
+    )
+    assert "timeout" not in service["action"]
+
+    script = TOOL_SCHEMA({**base, "action": {"type": "script", "script": "script.morning"}})
+    assert "timeout" not in script["action"]
+
+    # …and the budget still exists, because the dataclass carries it.
+    assert ServiceAction(domain="light", service="turn_on").timeout == ACTION_DEFAULT_TIMEOUT
+    assert ScriptAction(script="script.morning").timeout == ACTION_DEFAULT_TIMEOUT
+
+
+def test_service_action_timeout_is_accepted_and_bounded() -> None:
+    """An explicit timeout is kept; one outside the range is refused."""
+    base = {
+        "name": "x",
+        "description": "x",
+        "parameters": {"type": "object", "properties": {}},
+        "action": {"type": "service", "domain": "light", "service": "turn_on"},
+    }
+    ok = {**base, "action": {**base["action"], "timeout": 45}}
+    assert TOOL_SCHEMA(ok)["action"]["timeout"] == 45
+
+    too_big = {**base, "action": {**base["action"], "timeout": ACTION_MAX_TIMEOUT + 1}}
+    with pytest.raises(vol.Invalid):
+        TOOL_SCHEMA(too_big)
+
+    too_small = {**base, "action": {**base["action"], "timeout": ACTION_MIN_TIMEOUT - 1}}
+    with pytest.raises(vol.Invalid):
+        TOOL_SCHEMA(too_small)
+
+
+def test_script_action_timeout_is_accepted_and_bounded() -> None:
+    """Same bounds for `script`."""
+    base = {
+        "name": "x",
+        "description": "x",
+        "parameters": {"type": "object", "properties": {}},
+        "action": {"type": "script", "script": "script.morning_routine"},
+    }
+    ok = {**base, "action": {**base["action"], "timeout": 120}}
+    assert TOOL_SCHEMA(ok)["action"]["timeout"] == 120
+
+    too_big = {**base, "action": {**base["action"], "timeout": ACTION_MAX_TIMEOUT + 1}}
+    with pytest.raises(vol.Invalid):
+        TOOL_SCHEMA(too_big)
 
 
 def test_tool_schema_unknown_action_type_has_clear_message() -> None:

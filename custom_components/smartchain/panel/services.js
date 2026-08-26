@@ -74,18 +74,51 @@ export function populateSelect(selectEl, items, placeholder) {
 
 let toastContainer = null;
 
+/** Floor: even "Saved" needs long enough to notice something appeared. */
+const TOAST_MIN_MS = 4000;
+/** Ceiling: no single toast should own a corner of the screen for a minute. */
+const TOAST_MAX_MS = 20000;
+/** Roughly 200 words per minute of Cyrillic or Latin prose, plus a look-up cost. */
+const TOAST_MS_PER_CHAR = 55;
+
+/** How long `message` needs to be readable, in milliseconds. */
+export function toastDuration(message) {
+  const chars = String(message ?? "").length;
+  return Math.min(TOAST_MAX_MS, TOAST_MIN_MS + chars * TOAST_MS_PER_CHAR);
+}
+
 function ensureToastContainer() {
   if (toastContainer && document.body.contains(toastContainer)) return toastContainer;
   toastContainer = document.createElement("div");
   toastContainer.className = "sc-toast-container";
+  // The container is the live region: it exists before any toast does, which is
+  // what lets an assistive technology notice the insertion at all. Each toast
+  // additionally carries role="alert" so it is announced as its own message
+  // rather than as a re-reading of the whole stack.
+  toastContainer.setAttribute("aria-live", "polite");
+  toastContainer.setAttribute("aria-atomic", "false");
   document.body.appendChild(toastContainer);
   return toastContainer;
 }
 
-export function showToast(message, type = "info", duration = 3500) {
+/**
+ * Show a toast.
+ *
+ * The toast is the only place a panel failure is ever written down — it is not
+ * in Home Assistant's log and no tab re-renders it — so three rules follow:
+ * the text stays up long enough to read, an error stays up until it is
+ * dismissed, and there is always a way to dismiss it.
+ *
+ * @param {string} message text to show (escaped before it reaches the DOM)
+ * @param {"info"|"success"|"warning"|"error"} type
+ * @param {number|null} duration override in ms; ignored for `error`
+ * @returns {HTMLElement} the toast node
+ */
+export function showToast(message, type = "info", duration = null) {
   const container = ensureToastContainer();
   const toast = document.createElement("div");
   toast.className = `sc-toast sc-toast-${type}`;
+  toast.setAttribute("role", "alert");
 
   const icons = {
     success: "mdi:check-circle",
@@ -94,13 +127,35 @@ export function showToast(message, type = "info", duration = 3500) {
     warning: "mdi:alert",
   };
 
-  toast.innerHTML = `<ha-icon icon="${icons[type] || icons.info}"></ha-icon><span>${escapeHtml(message)}</span>`;
+  toast.innerHTML =
+    `<ha-icon icon="${icons[type] || icons.info}"></ha-icon>` +
+    `<span class="sc-toast-text">${escapeHtml(message)}</span>` +
+    `<button type="button" class="sc-toast-close" aria-label="Dismiss notification" title="Dismiss">✕</button>`;
   container.appendChild(toast);
 
-  setTimeout(() => {
+  let timer = null;
+  const dismiss = () => {
+    if (timer !== null) {
+      clearTimeout(timer);
+      timer = null;
+    }
     toast.classList.add("sc-toast-out");
+    // `animationend` is the graceful path. It never fires when the animation is
+    // suppressed — prefers-reduced-motion, a backgrounded tab — so arm a
+    // fallback slightly longer than the 0.25s out-animation and let whichever
+    // arrives first take the node away. Without it a dismissed toast would
+    // simply stay on screen.
     toast.addEventListener("animationend", () => toast.remove());
-  }, duration);
+    setTimeout(() => toast.remove(), 400);
+  };
+  toast.querySelector(".sc-toast-close").addEventListener("click", dismiss);
+
+  // An error is never recoverable once it scrolls away, so it waits for the
+  // reader. Everything else is a confirmation and can time out.
+  if (type !== "error") {
+    timer = setTimeout(dismiss, duration ?? toastDuration(message));
+  }
+  return toast;
 }
 
 /**

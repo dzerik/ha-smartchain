@@ -54,6 +54,56 @@ class SmartChainPanel extends HTMLElement {
     this._active = null;
     this._visibleTabs = [];
     this._overview = { entries: [] };
+    this._onBeforeUnload = (ev) => this._guardUnload(ev);
+  }
+
+  // Home Assistant mounts and unmounts this element as the user moves around
+  // its sidebar, so the listener is added and removed with the element rather
+  // than once at module scope: one left behind would go on blocking unloads
+  // for a panel that is no longer on screen.
+  connectedCallback() {
+    window.addEventListener("beforeunload", this._onBeforeUnload);
+  }
+
+  disconnectedCallback() {
+    window.removeEventListener("beforeunload", this._onBeforeUnload);
+  }
+
+  /**
+   * Which visible tab, if any, is holding something the user has not saved.
+   *
+   * A tab says so by exposing a `hasUnsavedChanges` getter. A tab that has no
+   * such state — Camera — exposes nothing, reads as `undefined`, and never
+   * produces a question: a confirmation that appears on every navigation is one
+   * the user learns to click through, which would cost the guarantee entirely.
+   * Only the selected tab is in the DOM, so this examines at most one element.
+   */
+  _unsavedTab() {
+    for (const tab of TABS) {
+      const el = this.querySelector(tab.tag);
+      if (el && el.hasUnsavedChanges) return tab;
+    }
+    return null;
+  }
+
+  /** True if it is all right to replace the tab body now. */
+  _confirmLeave() {
+    const tab = this._unsavedTab();
+    if (!tab) return true;
+    return confirm(
+      `The ${tab.label} tab has unsaved changes.\n\n` +
+        "Leave it anyway? What you have entered there will be lost."
+    );
+  }
+
+  // The browser's own leave prompt, for the routes this element never sees:
+  // closing the tab, reloading, following a link out of Home Assistant.
+  // Browsers show their own wording; `preventDefault` is what asks at all.
+  _guardUnload(ev) {
+    if (!this._unsavedTab()) return;
+    ev.preventDefault();
+    // Still required by Chrome and Safari to trigger the dialog.
+    ev.returnValue = "";
   }
 
   set panel(panel) {
@@ -176,11 +226,15 @@ class SmartChainPanel extends HTMLElement {
       next.some((tab, i) => tab.id !== this._visibleTabs[i].id);
     if (!changed) return;
     this._visibleTabs = next;
-    if (!next.find((tab) => tab.id === this._active)) {
-      this._active = next[0]?.id;
-    }
+    // The open tab disappearing (admin status resolving to false, Embeddings
+    // going away with its last capable entry) is not navigation the user chose,
+    // so it is not theirs to decline: leaving them on a tab that is no longer
+    // visible would be worse than the lost edit. Every other case re-selects
+    // the tab already open, which `_select` now recognises and leaves alone.
+    const dropped = !next.find((tab) => tab.id === this._active);
+    if (dropped) this._active = next[0]?.id;
     this._buildBar();
-    this._select(this._active);
+    this._select(this._active, { force: dropped });
   }
 
   _buildBar() {
@@ -218,20 +272,40 @@ class SmartChainPanel extends HTMLElement {
     const delta = ev.key === "ArrowRight" ? 1 : -1;
     const nextId = ids[(idx + delta + ids.length) % ids.length];
     this._select(nextId);
+    // The move can be declined (unsaved changes). Focus follows the selection,
+    // so when the selection did not move, focus must not either — otherwise it
+    // sits on a button that is not the selected tab and the next arrow key
+    // counts from the wrong place.
+    if (this._active !== nextId) return;
     const bar = this.querySelector(".sc-tabs");
     const button = [...bar.children].find((b) => b.dataset.tabId === nextId);
     if (button) button.focus();
   }
 
-  _select(id) {
+  _select(id, { force = false } = {}) {
     // Never select a tab that isn't in the currently visible list — the
     // list can shrink out from under `id` if admin status changes.
     if (!this._visibleTabs.find((tab) => tab.id === id)) {
       id = this._visibleTabs[0]?.id;
     }
+    const tab = this._visibleTabs.find((t) => t.id === id);
+    const mounted = tab ? this.querySelector(tab.tag) : null;
+    // Selecting the tab that is already on screen: there is nothing to do, and
+    // rebuilding it was the cheapest way to lose a half-filled form — a stray
+    // click on the current tab, or any recomputation of the tab list.
+    if (id === this._active && mounted) {
+      this._syncBar();
+      return;
+    }
+    // Past this point the tab body is destroyed, so this is the last moment to
+    // ask. Declining leaves `_active` untouched — the bar is re-synced so it
+    // keeps agreeing with what is actually on screen.
+    if (!force && !this._confirmLeave()) {
+      this._syncBar();
+      return;
+    }
     this._active = id;
     this._syncBar();
-    const tab = this._visibleTabs.find((t) => t.id === id);
     const body = this.querySelector(".sc-tab-body");
     body.innerHTML = tab ? `<${tab.tag}></${tab.tag}>` : "";
     // A newly mounted tab has neither yet — this is the other legitimate

@@ -444,6 +444,25 @@ Non-2xx responses become `"Error: HTTP <status>"`. Network failures and timeouts
       user_name: "{{ name }}"
 ```
 
+> **`service` and `script` have a `timeout:` too** *(v5.5.2+)*. Both are called
+> blocking — a `script` waits for its whole sequence, `delay` and
+> `wait_for_trigger` included — and Home Assistant core no longer enforces a
+> service-call limit of its own. Without a budget, `script.morning_routine` with
+> `delay: 00:05:00` held the conversation turn open for five minutes, and a
+> `wait_for_trigger` held it until the trigger fired. The key is optional and
+> defaults to **30 seconds**, bounded to 1–300, exactly like the `rest` action's
+> (§7.3); files written before it existed keep loading and simply gain the
+> default. Going over it is a `"Error: … timed out after Ns"` string handed to
+> the model, not a failed turn — the model can say so, retry, or do something
+> else. A long-running script therefore wants an explicit budget:
+>
+> ```yaml
+>   action:
+>     type: script
+>     script: script.morning_routine
+>     timeout: 300
+> ```
+
 ### 7.5. Per-agent visibility
 
 `allowed_tools` is the single control over what one agent may call. The agent form labels

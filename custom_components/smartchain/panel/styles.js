@@ -97,12 +97,21 @@ export const SC_STYLES = `
     flex-direction: column-reverse;
     gap: 8px;
     pointer-events: none;
+    /* Errors wait for the reader now, so the stack has no natural ceiling.
+       Cap it at the viewport and let it scroll: the wheel lands on a toast,
+       whose pointer-events: auto puts it in the hit test, and the scroll
+       chains up to here. The max-width keeps a long toast on a phone from
+       running off the left edge. */
+    max-width: calc(100vw - 48px);
+    max-height: calc(100vh - 48px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
   }
   .sc-toast {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     gap: 10px;
-    padding: 12px 20px;
+    padding: 12px 16px 12px 20px;
     border-radius: var(--sc-radius-md);
     font-size: 13px;
     font-weight: 500;
@@ -113,6 +122,25 @@ export const SC_STYLES = `
     line-height: 1.4;
   }
   .sc-toast ha-icon { --mdc-icon-size: 20px; flex-shrink: 0; }
+  /* A reload_failed toast is a paragraph. It must wrap inside the toast
+     rather than widen it, and min-width:0 is what lets a flex item wrap at all. */
+  .sc-toast-text { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+  .sc-toast-close {
+    appearance: none;
+    border: none;
+    background: none;
+    color: inherit;
+    flex: 0 0 auto;
+    padding: 0 2px;
+    margin-left: 2px;
+    font-size: 15px;
+    line-height: 1.4;
+    opacity: 0.85;
+    cursor: pointer;
+    border-radius: 4px;
+  }
+  .sc-toast-close:hover { opacity: 1; }
+  .sc-toast-close:focus-visible { outline: 2px solid currentColor; outline-offset: 1px; opacity: 1; }
   .sc-toast-success { background: var(--success-color, #4caf50); color: #fff; }
   .sc-toast-error { background: var(--error-color, #f44336); color: #fff; }
   .sc-toast-info { background: var(--primary-color, #03a9f4); color: #fff; }
@@ -123,23 +151,39 @@ export const SC_STYLES = `
 
   /* ========== Tab Shell ========== */
   .sc-tabs-row {
-  display: flex;
-  align-items: center;
-  border-bottom: 1px solid var(--divider-color, #e0e0e0);
-  background: var(--primary-background-color, #fafafa);
-}
-.sc-tabs-row .sc-tabs { border-bottom: none; background: none; flex: 1; }
-.sc-version {
-  padding: 0 16px;
-  font-size: 12px;
-  color: var(--secondary-text-color);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-.sc-tabs {
+    display: flex;
+    align-items: center;
+    border-bottom: 1px solid var(--divider-color, #e0e0e0);
+    background: var(--primary-background-color, #fafafa);
+  }
+  /* flex: 1 alone leaves min-width at its auto default, which is the
+     content width — the strip then refuses to shrink and shoves the version
+     label out of the window instead of scrolling. min-width: 0 is what makes
+     the overflow-x below reachable. */
+  .sc-tabs-row .sc-tabs {
+    border-bottom: none;
+    background: none;
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+  .sc-version {
+    padding: 0 16px;
+    font-size: 12px;
+    color: var(--secondary-text-color);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  .sc-tabs {
     display: flex;
     gap: 4px;
     padding: 0 16px;
+    /* Six tabs are ~700px wide; a phone is 360px. Without this the tabs past
+       the edge are not merely ugly, they are unreachable — there is no other
+       way into those tabs. */
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: thin;
     border-bottom: 1px solid var(--divider-color, #e0e0e0);
     background: var(--primary-background-color, #fafafa);
   }
@@ -147,6 +191,8 @@ export const SC_STYLES = `
     appearance: none;
     border: none;
     background: none;
+    flex: 0 0 auto;
+    white-space: nowrap;
     padding: 14px 16px;
     font-size: 14px;
     font-weight: 500;
@@ -167,6 +213,18 @@ export const SC_STYLES = `
   }
   sc-camera-tab { display: block; max-width: 800px; margin: 0 auto; }
   sc-agents-tab, sc-embeddings-tab, sc-stores-tab, sc-settings-tab, sc-tools-tab { display: block; max-width: 1100px; margin: 0 auto; }
+
+  /* Narrow screens. 28px of card padding plus 24px of body padding takes 104px
+     of a 360px phone before any content is drawn, and a two-up .sc-row leaves
+     each select too narrow to read an entity name in. */
+  @media (max-width: 600px) {
+    .sc-tab-body { padding: 16px 12px; }
+    .sc-card { padding: 20px 16px; }
+    .sc-tabs { padding: 0 8px; }
+    .sc-tab { padding: 14px 10px; font-size: 13px; }
+    .sc-version { padding: 0 10px; }
+    .sc-row { flex-direction: column; }
+  }
 
   /* ========== Agents Tab ========== */
   .sc-entry { margin-bottom: 24px; }
@@ -315,8 +373,13 @@ export const SC_STYLES = `
     line-height: 1.6;
     white-space: pre;
     overflow: auto;
-    background: var(--code-editor-background-color, #1e1e1e);
-    color: #d4d4d4;
+    /* Home Assistant resolves --code-editor-background-color from the theme —
+       on a light theme it is the card background, i.e. white — so the literal
+       #d4d4d4 ink that used to sit here read at about 1.3:1. Both halves of
+       the pair must come from the same theme, fallbacks included: a fixed dark
+       slab under a themed ink fails the same way from the other side. */
+    background: var(--code-editor-background-color, var(--card-background-color, #fff));
+    color: var(--primary-text-color, #212121);
     border: 1px solid var(--divider-color, #e0e0e0);
     border-radius: var(--sc-radius-md);
     box-sizing: border-box;
@@ -344,7 +407,7 @@ export const SC_STYLES = `
     background: var(--primary-background-color, #fafafa);
   }
   .sc-tools-editor::placeholder {
-    color: #6a6a6a;
+    color: var(--secondary-text-color, #727272);
     opacity: 1;
   }
   .sc-tools-help {
@@ -390,13 +453,13 @@ export const SC_STYLES = `
     margin: 0;
     padding: 12px 14px;
     overflow-x: auto;
-    background: var(--code-editor-background-color, #1e1e1e);
+    background: var(--code-editor-background-color, var(--card-background-color, #fff));
     border-radius: var(--sc-radius-sm);
   }
   .sc-tools-help-body pre code {
     background: none;
     padding: 0;
-    color: #d4d4d4;
+    color: var(--primary-text-color, #212121);
     font-size: 12px;
     line-height: 1.6;
     white-space: pre;

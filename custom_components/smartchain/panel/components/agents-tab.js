@@ -58,6 +58,17 @@ export class ScAgentsTab extends HTMLElement {
     this._editing = null; // {entryId, subentryId|null}
   }
 
+  /**
+   * Whether this tab is holding an edit the user would lose if its DOM were
+   * replaced. The answer belongs to the open form — this tab has no state of
+   * its own — and is `false` whenever no form is open, which is most of the
+   * time. The panel shell reads this before it navigates away.
+   */
+  get hasUnsavedChanges() {
+    const form = this.querySelector("sc-config-form");
+    return !!(form && form.hasUnsavedChanges);
+  }
+
   set hass(val) {
     this._hass = val;
     const form = this.querySelector("sc-config-form");

@@ -1,6 +1,29 @@
 import { callWS, showToast } from "../services.js";
 
 /**
+ * Structural equality for the values <ha-form> carries: primitives, arrays
+ * (a multi-select such as "allowed tools") and plain objects. Used to tell a
+ * real edit from <ha-form> re-emitting the value it already had — `!==` on two
+ * freshly built objects is always true, so it would call every emission an
+ * edit and every form dirty the moment it rendered.
+ */
+function sameValue(a, b) {
+  if (a === b) return true;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+    return a.every((item, i) => sameValue(item, b[i]));
+  }
+  if (a && b && typeof a === "object" && typeof b === "object") {
+    const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
+    for (const key of keys) {
+      if (!sameValue(a[key], b[key])) return false;
+    }
+    return true;
+  }
+  return false;
+}
+
+/**
  * <sc-config-form> — renders whatever schema the backend serialises.
  *
  * This component knows nothing about agents, settings or embeddings: no
@@ -19,6 +42,9 @@ import { callWS, showToast } from "../services.js";
  *              cannot be satisfied at all, e.g. a required dropdown whose
  *              options are empty. Still a generic toggle: this component is
  *              told, it does not work it out)
+ * Read-only:  .hasUnsavedChanges — true between the first real edit and the
+ *              save that stores it. A host tab surfaces this so the panel shell
+ *              can ask before it replaces the tab's DOM.
  *
  * Some forms change shape as they are filled in: a memory store on the qdrant
  * backend asks for different fields than one on sqlite. A schema command can
@@ -72,6 +98,28 @@ export class ScConfigForm extends HTMLElement {
     // _loadIfReady) — it does not affect explicit calls to load(), which is
     // how the Refresh control keeps working after the first load.
     this._loaded = false;
+    // True only while a save is in flight. A save is one round trip away from
+    // creating a config subentry, so a second click during the first would
+    // create a second agent — same title, same prompt, no way to tell which is
+    // which. Same shape as `_setBusy` in <sc-tools-tab>.
+    this._busy = false;
+    // True from the first field the user actually changes until the save that
+    // stores it. Deliberately *not* recomputed by comparing against the loaded
+    // data: a reactive form re-fetches its schema mid-edit and the server
+    // echoes the entered values back as `data`, so "differs from what the
+    // server last sent" would quietly go false while the edit is still unsaved.
+    // Cleared in exactly one place — a successful save.
+    this._dirty = false;
+    // True only while `_apply` is assigning to <ha-form>; see `_apply`.
+    this._applying = false;
+  }
+
+  /**
+   * Whether this form holds something the user would lose. Read by the host
+   * tab, and through it by the panel shell before it replaces the DOM.
+   */
+  get hasUnsavedChanges() {
+    return this._dirty;
   }
 
   set hass(val) {
@@ -148,7 +196,17 @@ export class ScConfigForm extends HTMLElement {
     // form has no Save", where a greyed one plus the host's notice reads as
     // "not until you do that first".
     const save = this.querySelector("#sc-form-save");
-    if (save) save.disabled = !this._saveEnabled;
+    if (save) save.disabled = !this._saveEnabled || this._busy;
+  }
+
+  /**
+   * Mark a save as in flight, or done. The button going grey is the visible
+   * half — a button that still looks pressable while nothing happens is what
+   * makes a user click it again in the first place.
+   */
+  _setBusy(busy) {
+    this._busy = busy;
+    this._syncActions();
   }
 
   async load(refresh = false) {
@@ -167,6 +225,7 @@ export class ScConfigForm extends HTMLElement {
       this._descriptions = result.descriptions || {};
       this._reactive = Array.isArray(result.reactive) ? result.reactive : [];
       this._fieldErrors = null;
+      this._showLoadError(null);
       this._apply();
       this.dispatchEvent(
         new CustomEvent("sc-loaded", { detail: result, bubbles: true, composed: true })
@@ -174,7 +233,15 @@ export class ScConfigForm extends HTMLElement {
     } catch (err) {
       // Leave whatever schema/data we already had in place — a failed
       // refresh should not blank out a form the user was mid-edit on.
-      showToast(err.message || "Could not load the form", "error");
+      const message = err.message || "Could not load the form";
+      showToast(message, "error");
+      // ...but if there is nothing in place, the toast is the *only* record of
+      // what happened, and it fades. A form that never loaded renders nothing
+      // at all — `_apply` returns early with no schema — and on the store, tool
+      // and settings forms "Refresh models" is hidden, so `load()` had no
+      // caller left. That is a dead rectangle with a Save button. Say what
+      // failed, and put the retry where the user is looking.
+      if (!this._schema) this._showLoadError(message);
     } finally {
       this._reloading = false;
     }
@@ -212,11 +279,28 @@ export class ScConfigForm extends HTMLElement {
    * `sc-before-save` can call it once its own confirmation is satisfied.
    */
   async save() {
+    // Not a refusal being swallowed: the first save is still running and will
+    // report whatever it reports. This drops only the duplicate submission.
+    if (this._busy) return undefined;
+    this._setBusy(true);
+    try {
+      return await this._save();
+    } finally {
+      this._setBusy(false);
+    }
+  }
+
+  /** The save itself, wrapped by `save()`'s in-flight guard. */
+  async _save() {
     const payload = { entry_id: this._entryId, data: this._data };
     if (this._subentryId) payload.subentry_id = this._subentryId;
     try {
       const result = await callWS(this._hass, this._commands.save, payload);
       this._fieldErrors = null;
+      // Stored: there is nothing left to lose to a tab click. The only place
+      // this is cleared — a refused save leaves the form dirty, which is
+      // exactly when the edit is most worth protecting.
+      this._dirty = false;
       this._apply();
       showToast("Saved", "success");
       this.dispatchEvent(
@@ -232,6 +316,15 @@ export class ScConfigForm extends HTMLElement {
       if (fields.length) {
         this._fieldErrors = Object.fromEntries(fields.map((f) => [f, message]));
         this._apply();
+        // The field error alone is not the report. On a form taller than the
+        // viewport — an agent's prompt box is — the field carrying it is
+        // usually off-screen, and the only thing the user observes is a Save
+        // button that did nothing. Say it where they are looking, in the label
+        // they can see on the field rather than the backend's field name, and
+        // move the form to it.
+        const named = fields.map((name) => (this._labels && this._labels[name]) || name).join(", ");
+        showToast(`Not saved — ${named}: ${message}`, "error");
+        this._scrollToFields();
       } else {
         showToast(message, "error");
       }
@@ -243,6 +336,27 @@ export class ScConfigForm extends HTMLElement {
         })
       );
       return undefined;
+    }
+  }
+
+  /**
+   * Bring the form back into view after a refusal.
+   *
+   * The target is <ha-form> as a whole, not the offending row: <ha-form>
+   * renders its fields inside its own shadow root and exposes no node per
+   * field, so a per-row scroll would have to reach into another component's
+   * internals — and would break silently the day Home Assistant reorganises
+   * them. The whole form scrolling into view puts the error on screen, which is
+   * the point; the toast says which field.
+   *
+   * `scrollIntoView` is guarded because jsdom does not implement it — and,
+   * deliberately, so that a browser without it costs the scroll and not the
+   * toast that has already been shown.
+   */
+  _scrollToFields() {
+    const form = this.querySelector("ha-form");
+    if (form && typeof form.scrollIntoView === "function") {
+      form.scrollIntoView({ behavior: "smooth", block: "center" });
     }
   }
 
@@ -291,7 +405,16 @@ export class ScConfigForm extends HTMLElement {
       <style>
         .sc-form-actions { display: flex; gap: 8px; justify-content: flex-end; align-items: center; margin-top: 16px; }
         .sc-form-actions .sc-form-spacer { flex: 1; }
+        .sc-form-error { display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+          padding: 12px; border-radius: 6px; margin-bottom: 12px;
+          background: var(--error-color, #db4437); color: var(--text-primary-color, #fff); }
+        .sc-form-error .sc-form-error-text { flex: 1; min-width: 12em; }
       </style>
+      <div class="sc-form-error sc-hidden">
+        <ha-icon icon="mdi:alert-circle"></ha-icon>
+        <span class="sc-form-error-text"></span>
+        <mwc-button id="sc-form-retry">Retry</mwc-button>
+      </div>
       <ha-form></ha-form>
       <div class="sc-form-actions">
         <mwc-button id="sc-form-refresh">Refresh models</mwc-button>
@@ -303,6 +426,9 @@ export class ScConfigForm extends HTMLElement {
     this.querySelector("ha-form").addEventListener("value-changed", (ev) => {
       const previous = this._data;
       this._data = ev.detail.value;
+      // Our own `form.data =` assignment coming back around is not an edit.
+      if (this._applying) return;
+      if (!sameValue(previous, this._data)) this._dirty = true;
       // A field the backend named as reactive decides which other fields
       // exist, so the schema is asked for again rather than guessed at here.
       if (!this._reloading && this._reactiveChanged(previous, this._data)) this.load();
@@ -318,11 +444,35 @@ export class ScConfigForm extends HTMLElement {
       this.load(true);
     });
 
+    this.querySelector("#sc-form-retry").addEventListener("click", () => {
+      this.load();
+    });
+
     this._syncActions();
   }
 
+  /**
+   * Show — or clear — the "this form never loaded" banner.
+   *
+   * Only reached with a message when there is no schema at all, so it can never
+   * cover a form the user is working in. The wording has to carry both halves:
+   * what failed (the backend's own message, which never contains a credential)
+   * and what to do about it, naming the control that is right there.
+   */
+  _showLoadError(message) {
+    const box = this.querySelector(".sc-form-error");
+    if (!box) return;
+    box.classList.toggle("sc-hidden", !message);
+    const text = box.querySelector(".sc-form-error-text");
+    if (text) {
+      text.textContent = message
+        ? `This form could not be loaded: ${message}. Nothing has been changed — press Retry to load it again.`
+        : "";
+    }
+  }
+
   async _trySave() {
-    if (!this._saveEnabled) return;
+    if (!this._saveEnabled || this._busy) return;
     const proceed = this.dispatchEvent(
       new CustomEvent("sc-before-save", {
         detail: { data: this._data },
@@ -338,6 +488,19 @@ export class ScConfigForm extends HTMLElement {
   _apply() {
     const form = this.querySelector("ha-form");
     if (!form || !this._schema) return;
+    // `form.data = …` below can come straight back as a value-changed. That is
+    // this component talking to itself, not the user typing, so it must not
+    // mark the form dirty — otherwise every form is dirty from the moment it
+    // renders and the leave-confirmation becomes noise to click through.
+    this._applying = true;
+    try {
+      this._applyTo(form);
+    } finally {
+      this._applying = false;
+    }
+  }
+
+  _applyTo(form) {
     form.hass = this._hass;
     form.schema = this._schema;
     form.data = this._data;

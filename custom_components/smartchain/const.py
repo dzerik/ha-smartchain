@@ -325,6 +325,26 @@ CONF_FOLDER_ID = "folder_id"
 MAX_TOOL_ITERATIONS = 10
 SUBENTRY_TYPE_CONVERSATION = "conversation"
 
+# What a person is told when a request to a provider failed, on every path out
+# of this integration — the conversation turn, the AI Task, and the two
+# services. It lives here rather than beside any one of them because the point
+# of it is that all of them say the same thing.
+#
+# Why they say so little: a provider client raises with whatever the endpoint
+# wrote back, and that routinely includes the rejected credential (OpenAI's
+# AuthenticationError quotes the offending key), the internal base URL, and a
+# request id. On the conversation path that string became `async_set_speech` —
+# written into the conversation history and read aloud by the satellite that
+# asked the question.
+#
+# This sentence is *only* defensible because the exception it replaces is
+# logged at the same moment with the provider and the operation next to it (see
+# `conversation._async_handle_message`, `ai_task._async_generate_data`,
+# `__init__._handle_ask` / `_handle_analyze_image`). A generic message with an
+# empty log would be the trade this project keeps getting wrong: a failure made
+# quieter for the person and invisible to the operator.
+GENERIC_LLM_ERROR = "LLM request failed; see Home Assistant logs for details."
+
 # Dispatcher signal: emitted by analyze_image, consumed by the Last Analysis sensor.
 SIGNAL_NEW_ANALYSIS = f"{DOMAIN}_new_analysis"
 

@@ -11,6 +11,33 @@ project follows [Semantic Versioning](https://semver.org/).
 > **Note:** the `5.4.0` section below is a roll-up: it covers `5.4.0` through
 > `5.4.7`, which were developed on one branch and are not separated here.
 
+## [5.6.0] - unreleased
+
+### Added
+- **`service` and `script` tools take a `timeout`.** They were the only executors
+  with no time budget — REST, MCP and delegation all have one — so the
+  documented `script.morning_routine` with a five-minute `delay` held the
+  conversation turn for five minutes, and `wait_for_trigger` held it forever.
+
+### Fixed
+- **A provider's exception text no longer reaches the person.** `v4.0.2` decided
+  this and applied it to the services; the conversation path and AI Task still
+  interpolated the error into what the assistant says — which is spoken aloud by
+  a speaker and kept in the conversation history. There is now one sentence, in
+  `const.py`, used by all four paths, and a test that fails if a second copy of
+  it appears anywhere in the package. The trade is only defensible because the
+  detail moved into the log, so the log now names the provider, the entity and
+  the operation, and a mutation lowering it below `exception` fails the build.
+- **A typo in a tool's JSON Schema took the whole turn down.** The dispatcher
+  caught `ValidationError` but not `SchemaError`, which is not a subclass of it,
+  and `check_schema` was never called anywhere — so `type: str` for `type:
+  string` raised out of the turn instead of answering the model. The schema is
+  now checked when the file is loaded, which is what `USAGE` §7.0.1 has been
+  promising.
+- **MCP tools are checked against the reserved names** the two other tool
+  sources already check, so a server publishing `search_memory` under an empty
+  prefix can no longer shadow the built-in one.
+
 ## [5.5.1] - unreleased
 
 ### Fixed

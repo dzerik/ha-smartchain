@@ -9,6 +9,7 @@ from custom_components.smartchain.tools.loader import (
     load_tools_file,
 )
 from custom_components.smartchain.tools.model import (
+    ACTION_DEFAULT_TIMEOUT,
     ServiceAction,
     TemplateAction,
 )
@@ -236,3 +237,75 @@ def test_every_built_in_name_is_reserved_against_the_file(
     result = load_tools_file(target)
     assert result.yaml_tools == []
     assert "reserved" in caplog.text.lower()
+
+
+def test_broken_parameters_schema_is_caught_at_load_and_names_tool_and_field(
+    tmp_path: Path,
+) -> None:
+    """A `type: str` typo is a load error, not a first-call surprise.
+
+    USAGE §7.0.1 promises the JSON Schema is validated before it is saved. It
+    was not: only the outer shell was checked, so the file loaded clean and the
+    tool detonated inside `jsonschema.validate` the first time a model reached
+    for it. The message has to name the tool and the field, because the
+    voluptuous path alone says `data['tools'][3]` and nobody counts list items.
+    """
+    target = tmp_path / "tools.yaml"
+    target.write_text(
+        "tools:\n"
+        "  - name: ping\n"
+        "    description: fine\n"
+        "    parameters: { type: object, properties: {} }\n"
+        "    action: { type: template, value_template: pong }\n"
+        "  - name: weather\n"
+        "    description: broken\n"
+        "    parameters:\n"
+        "      type: object\n"
+        "      properties:\n"
+        "        city: { type: str }\n"
+        "    action: { type: template, value_template: x }\n"
+    )
+    with pytest.raises(LoaderError) as err:
+        load_tools_file(target)
+    message = str(err.value)
+    assert "weather" in message
+    assert "parameters" in message
+
+
+def test_action_without_timeout_key_still_loads_with_a_default(tmp_path: Path) -> None:
+    """Files written before the key existed keep working, with a budget."""
+    target = tmp_path / "tools.yaml"
+    target.write_text(
+        "tools:\n"
+        "  - name: morning\n"
+        "    description: x\n"
+        "    parameters: { type: object, properties: {} }\n"
+        "    action: { type: script, script: script.morning_routine }\n"
+        "  - name: lights\n"
+        "    description: x\n"
+        "    parameters: { type: object, properties: {} }\n"
+        "    action: { type: service, domain: light, service: turn_on }\n"
+    )
+    result = load_tools_file(target)
+    assert [t.action.timeout for t in result.yaml_tools] == [
+        ACTION_DEFAULT_TIMEOUT,
+        ACTION_DEFAULT_TIMEOUT,
+    ]
+
+
+def test_explicit_timeout_reaches_the_action(tmp_path: Path) -> None:
+    """An explicit `timeout:` is what the executor gets, not the default."""
+    target = tmp_path / "tools.yaml"
+    target.write_text(
+        "tools:\n"
+        "  - name: morning\n"
+        "    description: x\n"
+        "    parameters: { type: object, properties: {} }\n"
+        "    action: { type: script, script: script.morning_routine, timeout: 7 }\n"
+        "  - name: lights\n"
+        "    description: x\n"
+        "    parameters: { type: object, properties: {} }\n"
+        "    action: { type: service, domain: light, service: turn_on, timeout: 9 }\n"
+    )
+    result = load_tools_file(target)
+    assert [t.action.timeout for t in result.yaml_tools] == [7, 9]

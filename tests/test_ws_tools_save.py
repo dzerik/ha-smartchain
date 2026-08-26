@@ -128,7 +128,7 @@ async def test_secret_reference_survives_a_save_round_trip_byte_for_byte(
     assert tools_path.read_bytes() == original.encode()
     assert "!secret my_key" in tools_path.read_text()
     assert SECRET_VALUE not in tools_path.read_text()
-    assert not (tools_dir / "tools.yaml.tmp").exists()
+    assert list(tools_dir.glob("*.tmp")) == []
 
 
 async def test_invalid_file_is_never_written(hass: HomeAssistant, hass_ws_client, tools_dir: Path):
@@ -150,7 +150,7 @@ async def test_invalid_file_is_never_written(hass: HomeAssistant, hass_ws_client
     assert msg["result"]["ok"] is False
     assert msg["result"]["reason"] == "invalid"
     assert tools_path.read_text() == VALID_TOOL
-    assert not (tools_dir / "tools.yaml.tmp").exists()
+    assert list(tools_dir.glob("*.tmp")) == []
 
 
 async def test_stale_base_hash_is_refused(hass: HomeAssistant, hass_ws_client, tools_dir: Path):
@@ -177,7 +177,7 @@ async def test_stale_base_hash_is_refused(hass: HomeAssistant, hass_ws_client, t
     assert msg["result"]["ok"] is False
     assert msg["result"]["reason"] == "stale"
     assert tools_path.read_text() == concurrent_edit
-    assert not (tools_dir / "tools.yaml.tmp").exists()
+    assert list(tools_dir.glob("*.tmp")) == []
 
 
 async def test_backup_precedes_replace_and_rollback_restores_exactly(
@@ -241,7 +241,7 @@ async def test_failing_reload_restores_the_previous_file(
     assert msg["result"]["ok"] is False
     assert msg["result"]["reason"] == "reload_failed"
     assert tools_path.read_text() == VALID_TOOL
-    assert not (tools_dir / "tools.yaml.tmp").exists()
+    assert list(tools_dir.glob("*.tmp")) == []
 
 
 async def test_a_non_loader_reload_failure_still_restores(
@@ -274,7 +274,7 @@ async def test_a_non_loader_reload_failure_still_restores(
     assert msg["result"]["ok"] is False
     assert msg["result"]["reason"] == "reload_failed"
     assert tools_path.read_text() == VALID_TOOL
-    assert not (tools_dir / "tools.yaml.tmp").exists()
+    assert list(tools_dir.glob("*.tmp")) == []
 
 
 async def test_a_non_loader_reload_failure_on_rollback_is_reported_cleanly(
@@ -341,7 +341,7 @@ async def test_a_failed_first_save_leaves_no_file_behind(
     assert msg["result"]["ok"] is False
     assert msg["result"]["reason"] == "reload_failed"
     assert not (tools_dir / "tools.yaml").exists()
-    assert not (tools_dir / "tools.yaml.tmp").exists()
+    assert list(tools_dir.glob("*.tmp")) == []
     assert not (tools_dir / "tools.yaml.bak").exists()
 
 

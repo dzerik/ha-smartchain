@@ -1,6 +1,8 @@
 """voluptuous schemas for /config/smartchain/tools.yaml."""
 
+import jsonschema
 import voluptuous as vol
+from jsonschema.validators import validator_for
 
 from ..const import (
     ENTITY_DEFAULT_PRESET,
@@ -22,18 +24,53 @@ from ..const import (
     TOOL_NAME_PATTERN,
     TOOL_SCRIPT_PATTERN,
 )
+from .model import ACTION_MAX_TIMEOUT, ACTION_MIN_TIMEOUT
 
 _NAME = vol.All(str, vol.Match(TOOL_NAME_PATTERN))
 _NON_EMPTY_STR = vol.All(str, vol.Length(min=1))
 _MEMORY_IDENTIFIER = vol.All(str, vol.Match(MEMORY_IDENTIFIER_PATTERN))
 
-PARAMETERS_SCHEMA = vol.Schema(
-    {
-        vol.Required("type"): "object",
-        vol.Required("properties"): dict,
-        vol.Optional("required"): [str],
-    },
-    extra=vol.ALLOW_EXTRA,
+# Bounded exactly like the REST executor's `timeout`, but deliberately WITHOUT
+# `default=`: the default lives on the dataclass (`model.ACTION_DEFAULT_TIMEOUT`)
+# and is applied by `loader.action_from_dict`. A `default=` here would make
+# `validate_action` add a key the panel's own form never wrote, so opening a
+# preset-installed tool and pressing Save with nothing changed would rewrite the
+# stored subentry — the round trip `test_a_preset_survives_open_and_save_unchanged`
+# exists to protect. Validated when present, defaulted when absent.
+_ACTION_TIMEOUT = vol.All(int, vol.Range(min=ACTION_MIN_TIMEOUT, max=ACTION_MAX_TIMEOUT))
+
+
+def _valid_json_schema(value: dict) -> dict:
+    """Hold `parameters` to the JSON Schema metaschema, not just to its shell.
+
+    The shell check below only says `type: object`, `properties` is a dict and
+    `required` is a list of strings — nothing about what is *inside* a property.
+    So `city: {type: str}` passed the file and the form and first failed inside
+    `jsonschema.validate` at call time, as a `SchemaError`, in front of the
+    model. USAGE §7.0.1 promises the opposite: validated before it is saved.
+
+    `validator_for` picks the same validator `jsonschema.validate` will pick for
+    this schema — honouring a `$schema` key if the user wrote one — so what
+    passes here cannot fail there, and what fails here would have failed there.
+    """
+    try:
+        validator_for(value, default=jsonschema.Draft202012Validator).check_schema(value)
+    except jsonschema.SchemaError as err:
+        location = ".".join(str(part) for part in err.absolute_path) or "(root)"
+        raise vol.Invalid(f"invalid JSON Schema at {location}: {err.message}") from err
+    return value
+
+
+PARAMETERS_SCHEMA = vol.All(
+    vol.Schema(
+        {
+            vol.Required("type"): "object",
+            vol.Required("properties"): dict,
+            vol.Optional("required"): [str],
+        },
+        extra=vol.ALLOW_EXTRA,
+    ),
+    _valid_json_schema,
 )
 
 _SERVICE_ACTION = vol.Schema(
@@ -44,6 +81,7 @@ _SERVICE_ACTION = vol.Schema(
         vol.Optional("target", default=dict): dict,
         vol.Optional("data", default=dict): dict,
         vol.Optional("response", default=False): bool,
+        vol.Optional("timeout"): _ACTION_TIMEOUT,
     }
 )
 
@@ -73,6 +111,7 @@ _SCRIPT_ACTION = vol.Schema(
         vol.Required("type"): "script",
         vol.Required("script"): vol.All(str, vol.Match(TOOL_SCRIPT_PATTERN)),
         vol.Optional("variables", default=dict): dict,
+        vol.Optional("timeout"): _ACTION_TIMEOUT,
     }
 )
 

@@ -20,6 +20,7 @@ from .memory.config import (
     StoreConfig,
 )
 from .model import (
+    ACTION_DEFAULT_TIMEOUT,
     CustomTool,
     RESTAction,
     ScriptAction,
@@ -43,6 +44,38 @@ class LoaderResult:
     yaml_tools: list[CustomTool] = field(default_factory=list)
     mcp_servers: list[MCPServerConfig] = field(default_factory=list)
     memory_settings: MemorySettings = field(default_factory=MemorySettings)
+
+
+# List sections whose entries carry a `name`, so a validation failure inside
+# one can be reported by name instead of by index.
+_NAMED_SECTIONS = ("tools", "mcp_servers")
+
+
+def _locate(raw: object, err: vol.Invalid) -> str:
+    """Return a `tool 'weather': ` prefix for an error inside a named entry.
+
+    Voluptuous reports the position — `... @ data['tools'][3]['parameters']` —
+    and nobody counts list items in a file they wrote by hand. The name is read
+    back out of the RAW mapping, because validation aborted and there is no
+    validated copy to read it from. Anything unexpected yields an empty prefix:
+    this decorates the error, it must never replace or suppress it.
+    """
+    path = list(err.path)
+    if len(path) < 2 or path[0] not in _NAMED_SECTIONS or not isinstance(path[1], int):
+        return ""
+    if not isinstance(raw, dict):
+        return ""
+    section = raw.get(path[0])
+    if not isinstance(section, list) or not 0 <= path[1] < len(section):
+        return ""
+    entry = section[path[1]]
+    if not isinstance(entry, dict):
+        return ""
+    name = entry.get("name")
+    if not isinstance(name, str) or not name:
+        return ""
+    label = "tool" if path[0] == "tools" else "mcp_server"
+    return f"{label} {name!r}: "
 
 
 def load_tools_file(path: Path, config_dir: Path | None = None) -> LoaderResult:
@@ -79,7 +112,7 @@ def load_tools_file(path: Path, config_dir: Path | None = None) -> LoaderResult:
     try:
         validated = TOOLS_FILE_SCHEMA(raw)
     except vol.Invalid as err:
-        raise LoaderError(f"tools.yaml validation error: {err}") from err
+        raise LoaderError(f"tools.yaml validation error: {_locate(raw, err)}{err}") from err
 
     out: list[CustomTool] = []
     seen: set[str] = set()
@@ -133,6 +166,7 @@ def action_from_dict(d: dict[str, Any]) -> ToolAction:
             target=d.get("target", {}),
             data=d.get("data", {}),
             response=d.get("response", False),
+            timeout=d.get("timeout", ACTION_DEFAULT_TIMEOUT),
         )
     if t == "template":
         return TemplateAction(value_template=d["value_template"])
@@ -149,6 +183,7 @@ def action_from_dict(d: dict[str, Any]) -> ToolAction:
         return ScriptAction(
             script=d["script"],
             variables=d.get("variables", {}),
+            timeout=d.get("timeout", ACTION_DEFAULT_TIMEOUT),
         )
     raise LoaderError(f"unknown action type {t!r}")
 

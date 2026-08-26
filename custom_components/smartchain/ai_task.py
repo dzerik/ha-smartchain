@@ -15,7 +15,13 @@ from homeassistant.helpers import llm
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from langchain_core.messages import BaseMessage, SystemMessage
 
-from .const import CONF_ENGINE, ID_OLLAMA, MAX_TOOL_ITERATIONS, SUBENTRY_TYPE_CONVERSATION
+from .const import (
+    CONF_ENGINE,
+    GENERIC_LLM_ERROR,
+    ID_OLLAMA,
+    MAX_TOOL_ITERATIONS,
+    SUBENTRY_TYPE_CONVERSATION,
+)
 from .conversation import (
     EMPTY_RESPONSE_NATIVE,
     _async_langchain_stream,
@@ -343,8 +349,22 @@ class SmartChainAITaskEntity(ai_task.AITaskEntity):
                 ):
                     pass
             except Exception as err:
-                LOGGER.exception("AI Task error: %s", type(err))
-                raise HomeAssistantError(f"AI Task error: {err}") from err
+                # Same rule as the conversation path, and the same constant: a
+                # provider's exception text may quote the rejected credential or
+                # the internal endpoint, and this message is what Home Assistant
+                # shows in the UI toast and writes into the automation trace
+                # that called the task — both readable by anyone who can open
+                # the trace. The detail goes to the log, with the provider and
+                # the operation beside it; `from err` keeps the original in the
+                # traceback, which never leaves the log either.
+                LOGGER.exception(
+                    "SmartChain AI Task request failed (provider=%s, entity=%s, operation=%s): %s",
+                    self._engine or "unknown",
+                    self.entity_id,
+                    "generate_data",
+                    err,
+                )
+                raise HomeAssistantError(GENERIC_LLM_ERROR) from err
 
             if not chat_log.unresponded_tool_results:
                 break

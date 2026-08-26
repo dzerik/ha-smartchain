@@ -6,11 +6,13 @@ config flow builds, so the field list has one definition rather than two.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
 import os
 import shutil
+import tempfile
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
@@ -1840,8 +1842,36 @@ def _backup_path(path: Path) -> Path:
     return path.with_name(path.name + ".bak")
 
 
-def _tmp_path(path: Path) -> Path:
-    return path.with_name(path.name + ".tmp")
+def _new_temp_file(path: Path) -> Path:
+    """Create an empty, uniquely named staging file beside `path`.
+
+    Two properties, both load-bearing, neither of which a fixed
+    `tools.yaml.tmp` has:
+
+    **Unique.** The name used to be derived from the target alone, so every
+    save in the process shared one staging file. Saves run in Home
+    Assistant's *thread pool*, so two panels saving at once wrote the same
+    file: one save could validate, back up and publish bytes the other had
+    put there, and answer the first panel "saved" with a hash of text it
+    never submitted. `mkstemp` also creates exclusively, so the name cannot
+    collide with anything already on disk either.
+
+    **In the target's own directory.** `os.replace` is atomic only within a
+    single filesystem, and the entire crash-safety argument of the save path
+    rests on that atomicity; a staging file under the system temp dir would
+    quietly degrade the replace into a cross-device copy. `dir=path.parent`
+    is what keeps the two on one filesystem — the caller must therefore have
+    created that directory first.
+
+    The descriptor `mkstemp` returns is closed immediately: callers write
+    through `Path.write_text` / `shutil.copy2`, which open the name
+    themselves. The file it leaves behind is mode 0600, so nothing is
+    briefly world-readable while it is being staged — `_write_tools_file`
+    restores the target's own mode before publishing it.
+    """
+    fd, name = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".", suffix=".tmp")
+    os.close(fd)
+    return Path(name)
 
 
 def _restore_backup(path: Path) -> bool:
@@ -1870,7 +1900,7 @@ def _restore_backup(path: Path) -> bool:
     if not backup.is_file():
         return False
     if path.exists():
-        tmp = _tmp_path(path)
+        tmp = _new_temp_file(path)
         try:
             shutil.copy2(path, tmp)
             os.replace(backup, path)
@@ -1888,11 +1918,15 @@ def _write_tools_file(
     """Blocking body of a save: check staleness, write, validate, back up,
     atomically replace — all inside one executor job.
 
-    The staleness check lives here rather than in a separate executor call
-    before this one so that nothing can slip in between "the file matches
-    base_hash" and "the file is being written": two hops give the event loop
-    a yield point between them where another save could land; one hop
-    doesn't.
+    One executor job, but **not** on its own an indivisible one: executor
+    jobs run in a thread pool, so two of these genuinely overlap. What makes
+    the check-then-write pair indivisible is `_tools_file_lock`, which the
+    only caller — `ws_tools_save` — holds around this call and its reload;
+    read that docstring for what interleaving used to cost. Keeping the
+    check in the same job as the write still buys something on top of the
+    lock: a separate executor hop for the check would put an `await` between
+    the two, and every `await` is a place a future caller can be interleaved
+    at, whether or not today's caller holds a lock.
 
     The temp-file write, the real `load_tools_file` validation (the
     integration's own loader, so what passes here is what will load at
@@ -1916,19 +1950,37 @@ def _write_tools_file(
     a `UnicodeEncodeError` (not an `OSError`) must still land in
     `write_failed` rather than escape uncaught.
 
-    The temp file is removed on every exit path, including `mkdir` and
-    `write_text` failures: a stray `.tmp` beside a config file is confusing
-    at best, and `os.replace` already consumes it on the success path, so
-    `missing_ok=True` covers both.
+    The temp file is removed on every exit path, including `write_text`
+    failures: a stray staging file beside a config file is confusing at
+    best, and `os.replace` already consumes it on the success path, so
+    `missing_ok=True` covers both. Creating the directory and the staging
+    file happens *before* that cleanup block is armed, since a failure there
+    means there is nothing to clean up (see
+    test_write_failure_is_reported_as_write_failed, where `path.parent` is a
+    plain file and `mkdir` is what raises).
+
+    The staging file is private to Home Assistant (mode 0600, from
+    `mkstemp`), so the target's own mode is copied onto it before the
+    replace: a save rewrites the contents of tools.yaml, not its
+    permissions. A file the user had made group-readable for a file-editor
+    add-on must not quietly become unreadable to it after the first save
+    from the panel. A file this save creates from nothing has no prior mode
+    to preserve and keeps `mkstemp`'s 0600 — owner-only, a deliberate
+    default for a file that names `!secret` keys, and one the user can widen
+    once if their own tooling needs it.
     """
     current = _read_tools_file(path)
     if current["hash"] != base_hash:
         return "stale", None
 
-    tmp = _tmp_path(path)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = _new_temp_file(path)
+    except (OSError, UnicodeError) as err:
+        return "write_failed", type(err).__name__
+
     try:
         try:
-            path.parent.mkdir(parents=True, exist_ok=True)
             tmp.write_text(text, encoding="utf-8")
         except (OSError, UnicodeError) as err:
             return "write_failed", type(err).__name__
@@ -1943,27 +1995,27 @@ def _write_tools_file(
             backup = _backup_path(path)
             if path.exists():
                 shutil.copy2(path, backup)
+                shutil.copymode(path, tmp)
             os.replace(tmp, path)
         except (OSError, UnicodeError) as err:
             return "write_failed", type(err).__name__
 
         return "ok", None
     finally:
-        # Best-effort: `missing_ok=True` only swallows FileNotFoundError.
-        # When `path.parent` itself turned out not to be a directory (the
-        # write_failed case exercised by
-        # test_write_failure_is_reported_as_write_failed), unlinking a path
-        # beneath it raises NotADirectoryError instead — cleanup must not
-        # itself raise and mask the real status this function already
-        # decided on.
+        # Best-effort: `missing_ok=True` only swallows FileNotFoundError,
+        # and the directory holding the staging file can go away underneath
+        # this (an unlink beneath a path that is no longer a directory
+        # raises NotADirectoryError, not FileNotFoundError). Cleanup must
+        # not raise and mask the real status this function already decided
+        # on.
         try:
             tmp.unlink(missing_ok=True)
         except OSError:
             pass
 
 
-def _restore_after_failed_reload(path: Path) -> None:
-    """Undo a save whose reload failed.
+def _restore_after_failed_reload(path: Path) -> bool:
+    """Undo a save whose reload failed. Returns whether a backup now exists.
 
     Ordinarily there is a `.bak` — the pre-save file — to put back, via the
     same swap `_restore_backup` always does. The one case there is not is a
@@ -1971,6 +2023,14 @@ def _restore_after_failed_reload(path: Path) -> None:
     this save either; then "restore" means removing the file `save` just
     wrote, returning to that same fresh-install state rather than leaving a
     file nothing backs up.
+
+    The return value is read from disk rather than inferred, and the two
+    branches disagree about it: the swap leaves the text of the failed save
+    as the new `.bak`, so a backup is still there and Rollback still has
+    something to do, while the fresh-install branch leaves nothing at all.
+    Without it on the wire the panel has to guess, and it guessed the
+    restore had consumed the backup — hiding the escape hatch at the one
+    moment the user is looking for it.
     """
     if not _restore_backup(path):
         # No prior file means nothing here has adopted this text yet, and a
@@ -1979,6 +2039,53 @@ def _restore_after_failed_reload(path: Path) -> None:
         # user's work, it schedules a breakage for their next restart. The
         # panel still holds their text, so removing it loses nothing visible.
         path.unlink(missing_ok=True)
+    return _backup_path(path).is_file()
+
+
+@callback
+def _tools_file_lock(hass: HomeAssistant) -> asyncio.Lock:
+    """The one lock every command that writes tools.yaml takes.
+
+    `smartchain/tools/save` promises that a save made against a file that
+    has since changed is refused, never merged — that is the entire purpose
+    of `base_hash`. The promise only holds if the comparison and the
+    `os.replace` cannot be pulled apart, and they were: the whole write runs
+    through `async_add_executor_job`, in a *thread pool*, so two admins (or
+    two tabs of one admin) saving at once ran both writes simultaneously.
+    Both compared against the same on-disk hash, both passed, and both
+    published — the second silently discarding the first.
+
+    The worst part was not the lost text but what the survivor was told. The
+    winning save answers `ok` with the hash it reads back from disk, so the
+    panel that had in fact been overwritten stored *the other panel's* hash
+    as its new baseline and showed a green "saved" toast. Its next save then
+    matched that hash and sailed straight past the staleness check —
+    protection inverted precisely in the scenario it exists for.
+
+    So the lock spans the whole operation, not just the write: staleness
+    check, write, validate, backup, replace, reload, and the rollback a
+    failed reload performs. A lock released before the reload would let a
+    second save's staleness check pass against a file the first save is
+    about to restore from backup.
+
+    **Lock order: this one first, `_rebuild_lock` second, never the
+    reverse.** `_reload_registry` takes `_rebuild_lock` internally, so this
+    is held across an acquisition of that one. Nothing may take this lock
+    while holding `_rebuild_lock` — no rebuild path writes tools.yaml, and
+    none may start to without revisiting this. Two separate locks rather
+    than reusing `_rebuild_lock` here, because `asyncio.Lock` is not
+    re-entrant: holding it across `_reload_registry` would deadlock the
+    handler against itself on the very first save.
+
+    Created lazily, for the same reason `_rebuild_lock` is: the lock must
+    belong to the running event loop, and a module-level one would be shared
+    across the loops a test session creates.
+    """
+    domain_data = hass.data.setdefault(DOMAIN, {})
+    lock = domain_data.get("tools_file_lock")
+    if lock is None:
+        lock = domain_data["tools_file_lock"] = asyncio.Lock()
+    return lock
 
 
 @websocket_api.require_admin
@@ -1998,17 +2105,23 @@ async def ws_tools_save(
     """Write `text` to tools.yaml, refusing anything that could take the
     integration down.
 
+    The whole of it runs under `_tools_file_lock`, so two saves arriving at
+    once are serialised into two sequential saves and the second is refused
+    as stale — rather than both passing a check the other was about to
+    invalidate. That lock's docstring carries the full account, including
+    why it must be taken before `_rebuild_lock` and never after.
+
     The order below is the safety argument and must not be rearranged:
 
     1. Refuse if the file's hash no longer matches `base_hash` — someone may
        be editing through a file editor, SSH, or a second tab. Refusing is
        the whole behaviour; there is no merge and no last-write-wins. This
-       check and the write below both happen inside `_write_tools_file`'s
-       single executor job, not two separate ones — see its docstring for
-       why two hops would leave a race the event loop could step into.
-    2. Write the submitted text to a temp file beside the target, so the
-       later `os.replace` stays on one filesystem and therefore stays
-       atomic.
+       check and the write below happen inside a single `_write_tools_file`
+       call, under the lock, with no `await` between them.
+    2. Write the submitted text to a uniquely named temp file beside the
+       target, so the later `os.replace` stays on one filesystem and
+       therefore stays atomic, and so no other save can be staging through
+       the same file (see `_new_temp_file`).
     3. Validate the temp file with `load_tools_file` — what passes here is
        what will load at startup.
     4. Back up the current file, before the replace.
@@ -2020,7 +2133,9 @@ async def ws_tools_save(
        from the backup and reload again, then report: the user asked to
        save a file, not to lose their tools. A file can validate and still
        fail to load — an MCP server that will not start, an embeddings
-       binding that no longer resolves.
+       binding that no longer resolves. The refusal carries
+       `backup_exists`, read from disk after the restore, so the panel does
+       not have to guess whether Rollback still has anything to offer.
 
     Nothing here parses `text` into a structure and re-serialises it — raw
     text in, raw text out — which is what lets `!secret openai_key` survive
@@ -2032,35 +2147,43 @@ async def ws_tools_save(
     path = _tools_yaml_path(hass)
     config_dir = Path(hass.config.config_dir)
 
-    # 1-5: check staleness, write, validate, back up, atomically replace —
-    # all in one executor job. See _write_tools_file for why.
-    status, error = await hass.async_add_executor_job(
-        _write_tools_file, path, msg["text"], msg["base_hash"], config_dir
-    )
-    if status != "ok":
-        connection.send_result(msg["id"], {"ok": False, "reason": status, "error": error})
-        return
-
-    # 6. Reload; on failure, restore and report. Deliberately `Exception`,
-    # not `LoaderError`: see the docstring note above.
-    try:
-        await _reload_registry(hass)
-    except Exception as err:  # noqa: BLE001
-        LOGGER.warning(  # detail stays server-side
-            "tools.yaml reload after save failed; restoring previous file: %s", err
+    # Steps 1-6 are one operation as far as any other writer is concerned.
+    async with _tools_file_lock(hass):
+        # 1-5: check staleness, write, validate, back up, atomically replace
+        # — all in one executor job. See _write_tools_file for why.
+        status, error = await hass.async_add_executor_job(
+            _write_tools_file, path, msg["text"], msg["base_hash"], config_dir
         )
-        await hass.async_add_executor_job(_restore_after_failed_reload, path)
+        if status != "ok":
+            connection.send_result(msg["id"], {"ok": False, "reason": status, "error": error})
+            return
+
+        # 6. Reload; on failure, restore and report. Deliberately `Exception`,
+        # not `LoaderError`: see the docstring note above.
         try:
             await _reload_registry(hass)
-        except Exception:  # noqa: BLE001
-            LOGGER.exception("tools.yaml reload after restoring the backup also failed")
-        connection.send_result(
-            msg["id"],
-            {"ok": False, "reason": "reload_failed", "error": _safe_loader_error(err)},
-        )
-        return
+        except Exception as err:  # noqa: BLE001
+            LOGGER.warning(  # detail stays server-side
+                "tools.yaml reload after save failed; restoring previous file: %s", err
+            )
+            backup_exists = await hass.async_add_executor_job(_restore_after_failed_reload, path)
+            try:
+                await _reload_registry(hass)
+            except Exception:  # noqa: BLE001
+                LOGGER.exception("tools.yaml reload after restoring the backup also failed")
+            connection.send_result(
+                msg["id"],
+                {
+                    "ok": False,
+                    "reason": "reload_failed",
+                    "error": _safe_loader_error(err),
+                    "backup_exists": backup_exists,
+                },
+            )
+            return
 
-    new = await hass.async_add_executor_job(_read_tools_file, path)
+        new = await hass.async_add_executor_job(_read_tools_file, path)
+
     connection.send_result(msg["id"], {"ok": True, "hash": new["hash"]})
 
 
@@ -2080,26 +2203,34 @@ async def ws_tools_rollback(
     it swapped in turns out to be broken) is left in place as the *new*
     backup by `_restore_backup`'s swap — not restored a second time here —
     so a second rollback can undo this one.
+
+    Holds `_tools_file_lock` for the swap and the reload together, the same
+    way `ws_tools_save` does and for the same reason: a rollback landing in
+    the middle of a save would have the save's staleness check pass against
+    a file the rollback is about to replace, and the two would fight over
+    the single `.bak` slot.
     """
     from . import _reload_registry, _tools_yaml_path
 
     path = _tools_yaml_path(hass)
-    restored = await hass.async_add_executor_job(_restore_backup, path)
-    if not restored:
-        connection.send_result(msg["id"], {"ok": False, "reason": "no_backup"})
-        return
+    async with _tools_file_lock(hass):
+        restored = await hass.async_add_executor_job(_restore_backup, path)
+        if not restored:
+            connection.send_result(msg["id"], {"ok": False, "reason": "no_backup"})
+            return
 
-    try:
-        await _reload_registry(hass)
-    except Exception as err:  # noqa: BLE001
-        LOGGER.warning("tools.yaml reload after rollback failed: %s", err)  # server-side only
-        connection.send_result(
-            msg["id"],
-            {"ok": False, "reason": "reload_failed", "error": _safe_loader_error(err)},
-        )
-        return
+        try:
+            await _reload_registry(hass)
+        except Exception as err:  # noqa: BLE001
+            LOGGER.warning("tools.yaml reload after rollback failed: %s", err)  # server-side only
+            connection.send_result(
+                msg["id"],
+                {"ok": False, "reason": "reload_failed", "error": _safe_loader_error(err)},
+            )
+            return
 
-    new = await hass.async_add_executor_job(_read_tools_file, path)
+        new = await hass.async_add_executor_job(_read_tools_file, path)
+
     connection.send_result(msg["id"], {"ok": True, "hash": new["hash"]})
 
 
