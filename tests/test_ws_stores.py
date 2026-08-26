@@ -716,3 +716,145 @@ async def test_store_commands_refuse_an_unknown_entry(hass, hass_ws_client, entr
         msg = await client.receive_json()
         assert not msg["success"], command
         assert msg["error"]["code"] == "not_found", command
+
+
+# --- the first store, before any binding exists ---------------------------
+
+
+def _unpicked(**overrides):
+    """What the panel submits when the embeddings dropdown was never touched.
+
+    <ha-form> sends back only what it holds, and a select the user could not
+    answer holds nothing — so the key is absent, not empty.
+    """
+    data = _basic(**overrides)
+    data.pop("embeddings")
+    return data
+
+
+async def test_the_store_form_says_when_no_binding_exists_to_pick(
+    hass, hass_ws_client, tmp_path, patched_store
+):
+    """The dropdown is Required and its options are empty: there is no value
+    the user could enter. The tab has to be able to say so *before* a Save,
+    which it can only do from something on the wire."""
+    del patched_store
+    entry = await _make_entry(hass, titles=(), tmp_path=tmp_path)
+    client = await hass_ws_client(hass)
+
+    await client.send_json_auto_id({"type": "smartchain/store/schema", "entry_id": entry.entry_id})
+    msg = await client.receive_json()
+    assert msg["success"], msg
+    assert msg["result"]["embeddings_available"] == []
+    field = next(f for f in msg["result"]["schema"] if f["name"] == "embeddings")
+    assert field["required"] is True
+    assert field["selector"]["select"]["options"] == []
+
+
+async def test_saving_with_no_binding_at_all_says_where_to_make_one(
+    hass, hass_ws_client, tmp_path, patched_store
+):
+    """The dead end: `invalid_data: embeddings` attached to a field that cannot
+    be filled in. The voluptuous schema used to answer first, so the rule's own
+    sentence never ran — and that sentence still would not have said what to do
+    about a dropdown with nothing in it."""
+    del patched_store
+    entry = await _make_entry(hass, titles=(), tmp_path=tmp_path)
+    client = await hass_ws_client(hass)
+
+    msg = await _save(client, entry, _unpicked())
+    assert not msg["success"], msg
+    message = msg["error"]["message"]
+    fields, _, text = message.removeprefix("invalid_data: ").partition(" — ")
+    assert [name.strip() for name in fields.split(",")] == ["embeddings"]
+    assert text, message
+    assert "Embeddings tab" in text, text
+    assert _stores(entry) == {}
+
+
+async def test_an_unanswered_dropdown_gets_the_rule_sentence_not_the_schema_error(
+    hass, hass_ws_client, entry
+):
+    """With bindings to choose from, leaving the dropdown alone is an ordinary
+    'you have to pick one' — `STORE_ERROR_TEXT["embeddings_required"]`, which
+    was equally unreachable behind the schema."""
+    client = await hass_ws_client(hass)
+    msg = await _save(client, entry, _unpicked())
+    assert not msg["success"], msg
+    _, _, text = msg["error"]["message"].removeprefix("invalid_data: ").partition(" — ")
+    assert text == "Pick which embeddings binding this store uses."
+
+
+async def test_the_stores_tab_uses_what_the_schema_already_tells_it(hass) -> None:
+    """`embeddings_available` was on the wire and read by nobody; the tab must
+    consume it and hold the Save rather than let it hit the wall."""
+    from pathlib import Path
+
+    import custom_components.smartchain as package
+
+    source = (Path(package.__file__).parent / "panel" / "components" / "stores-tab.js").read_text(
+        encoding="utf-8"
+    )
+    assert "embeddings_available" in source
+    # Read, said out loud, and acted on: a notice, a held Save, and a refused
+    # submit.
+    assert "preventDefault" in source
+    assert "saveEnabled" in source
+
+
+# --- a store that failed to build -----------------------------------------
+
+
+async def test_a_store_row_says_why_it_is_not_running(
+    hass, hass_ws_client, tmp_path, patched_store
+):
+    """`_describe_store` read `failures` only when `bool(registry)` — and a
+    registry whose every store failed has no live stores, so it is falsy and
+    the row that most needed a reason was the one guaranteed not to get one."""
+    del patched_store
+    await _make_entry(
+        hass,
+        subentries=[_store_subentry("orphan", {"embeddings": "Nothing Named This"})],
+        titles=(),
+        tmp_path=tmp_path,
+    )
+    client = await hass_ws_client(hass)
+    await client.send_json_auto_id({"type": "smartchain/overview"})
+    msg = await client.receive_json()
+    assert msg["success"], msg
+
+    store = next(row for row in msg["result"]["entries"][0]["stores"] if row["title"] == "orphan")
+    assert store["ok"] is False
+    assert store["reason"], "the only failing store in the registry got no reason"
+    assert "Nothing Named This" in store["reason"]
+
+
+async def test_a_store_that_did_not_start_is_not_reported_as_a_plain_success(
+    hass, hass_ws_client, entry
+):
+    """The write succeeded, so the command answers success — but the panel
+    showed a green "Saved" and nothing else while the store sat dead. The
+    rebuild has just run and knows why; the answer carries it."""
+    client = await hass_ws_client(hass)
+
+    ok = await _save(client, entry, _basic())
+    assert ok["success"], ok
+    assert ok["result"]["store_error"] is None
+
+    def _dead(hass_, embeddings, backend):
+        st = MagicMock()
+        st.is_available = False
+        st.unavailable_reason = "the database refused the connection"
+        st.async_setup = AsyncMock()
+        st.close = AsyncMock()
+        return st
+
+    with patch("custom_components.smartchain.tools.memory.registry.MemoryStore", side_effect=_dead):
+        msg = await _save(
+            client,
+            entry,
+            _basic(description="edited"),
+            subentry_id=_stores(entry)["conversations"].subentry_id,
+        )
+    assert msg["success"], msg
+    assert msg["result"]["store_error"] == "the database refused the connection"

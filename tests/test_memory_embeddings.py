@@ -15,7 +15,9 @@ async def test_create_from_subentry_uses_entry_credentials(hass: HomeAssistant) 
         create_embeddings_from_subentry,
     )
 
-    entry = SimpleNamespace(data={CONF_ENGINE: ID_GIGACHAT, CONF_API_KEY: "creds-from-entry"})
+    entry = SimpleNamespace(
+        data={CONF_ENGINE: ID_GIGACHAT, CONF_API_KEY: "creds-from-entry"}, options={}
+    )
     subentry = SimpleNamespace(title="GigaChat Embeddings", data={"model": "Embeddings"})
 
     with patch("custom_components.smartchain.tools.memory.embeddings.GigaChatEmbeddings") as gc:
@@ -108,3 +110,59 @@ async def test_create_from_subentry_yandex_uses_folder_id(hass: HomeAssistant) -
     adapter.assert_called_once_with(
         api_key="yandex-key", model="text-search-doc", folder_id="b1gfolder"
     )
+
+
+async def test_gigachat_embeddings_honour_the_hubs_verify_ssl_switch(hass: HomeAssistant) -> None:
+    """The switch on the hub's connection form is the one place TLS
+    verification is decided. v5.4.1 fixed the chat client to read it; the
+    embeddings client kept its own hardcoded `verify_ssl_certs=False`, so
+    turning the switch on left every embedding request unverified."""
+    from types import SimpleNamespace
+
+    from custom_components.smartchain.const import (
+        CONF_API_KEY,
+        CONF_ENGINE,
+        CONF_VERIFY_SSL,
+        ID_GIGACHAT,
+    )
+    from custom_components.smartchain.tools.memory.embeddings import (
+        create_embeddings_from_subentry,
+    )
+
+    entry = SimpleNamespace(
+        data={CONF_ENGINE: ID_GIGACHAT, CONF_API_KEY: "creds"},
+        options={CONF_VERIFY_SSL: True},
+    )
+    subentry = SimpleNamespace(title="GigaChat Embeddings", data={"model": "Embeddings"})
+
+    with patch("custom_components.smartchain.tools.memory.embeddings.GigaChatEmbeddings") as gc:
+        create_embeddings_from_subentry(hass, entry, subentry)
+
+    assert gc.call_args.kwargs["verify_ssl_certs"] is True
+
+
+async def test_gigachat_embeddings_default_to_the_same_answer_as_the_chat_client(
+    hass: HomeAssistant,
+) -> None:
+    """An entry that predates the switch keeps DEFAULT_VERIFY_SSL, which is
+    what `get_client` gives the chat client for the same entry — the two must
+    not disagree about one hub's TLS."""
+    from types import SimpleNamespace
+
+    from custom_components.smartchain.const import (
+        CONF_API_KEY,
+        CONF_ENGINE,
+        DEFAULT_VERIFY_SSL,
+        ID_GIGACHAT,
+    )
+    from custom_components.smartchain.tools.memory.embeddings import (
+        create_embeddings_from_subentry,
+    )
+
+    entry = SimpleNamespace(data={CONF_ENGINE: ID_GIGACHAT, CONF_API_KEY: "creds"}, options={})
+    subentry = SimpleNamespace(title="GigaChat Embeddings", data={"model": "Embeddings"})
+
+    with patch("custom_components.smartchain.tools.memory.embeddings.GigaChatEmbeddings") as gc:
+        create_embeddings_from_subentry(hass, entry, subentry)
+
+    assert gc.call_args.kwargs["verify_ssl_certs"] is DEFAULT_VERIFY_SSL

@@ -11,6 +11,17 @@ const STORE_COMMANDS = {
 };
 
 /**
+ * Said when `embeddings_available` comes back empty — the one state this form
+ * cannot be filled in at all. The dropdown is required and has no options, so
+ * there is no value to type; the only useful thing to say names the tab that
+ * makes one. Shown before anything is pressed, with Save held, rather than
+ * left for the backend to refuse afterwards.
+ */
+const NO_BINDINGS_NOTICE =
+  "No embeddings binding exists yet, so this store has nothing to bind to. " +
+  "Create one on the Embeddings tab first, then come back here.";
+
+/**
  * <sc-stores-tab> — every memory and vector store on one screen.
  *
  * Stores used to be configurable only by editing the `memory:` block of
@@ -31,6 +42,12 @@ const STORE_COMMANDS = {
  *    those titles in `embeddings_ambiguous` and refuses to save one, so the
  *    warning lands before the write rather than after a store quietly stops
  *    answering.
+ *  - **When there is nothing to bind to at all.** On a fresh install
+ *    `embeddings_available` is empty, which makes the required `embeddings`
+ *    dropdown unanswerable — the form is not merely blank, it cannot be
+ *    filled in. That is said up front and Save is held (NO_BINDINGS_NOTICE),
+ *    because the alternative is a user pressing Save into a refusal about a
+ *    control they were never able to touch.
  *
  * The form itself is <sc-config-form> over a backend-serialised schema, like
  * every other tab — this file names `name` and `embeddings` only to phrase its
@@ -191,7 +208,10 @@ export class ScStoresTab extends HTMLElement {
                   store.ok ? "" : " ⚠"
                 }</span>
                 <span class="sc-embed-model">${escapeHtml(
-                  `${store.backend_type} · ${store.embeddings || "unbound"}`
+                  // The reason a store is not running belongs on the store, not
+                  // only in the health block above it.
+                  `${store.backend_type} · ${store.embeddings || "unbound"}` +
+                    (store.ok ? "" : ` · ${store.reason || "not running"}`)
                 )}</span>
                 <span class="sc-embed-actions">
                   <button data-act="edit" data-entry="${escapeHtml(entry.entry_id)}" data-sub="${escapeHtml(store.subentry_id)}">Edit</button>
@@ -206,7 +226,8 @@ export class ScStoresTab extends HTMLElement {
   }
 
   _paintForm(root) {
-    root.innerHTML = `<sc-config-form></sc-config-form>`;
+    root.innerHTML = `<div class="sc-store-notice"></div><sc-config-form></sc-config-form>`;
+    const notice = root.querySelector(".sc-store-notice");
     const form = root.querySelector("sc-config-form");
     form.hass = this._hass;
     form.commands = STORE_COMMANDS;
@@ -222,12 +243,29 @@ export class ScStoresTab extends HTMLElement {
 
     const originalTitle = this._editing.originalTitle;
     let ambiguous = [];
+    let blocked = "";
 
     form.addEventListener("sc-loaded", (ev) => {
-      ambiguous = (ev.detail && ev.detail.embeddings_ambiguous) || [];
+      const detail = ev.detail || {};
+      ambiguous = detail.embeddings_ambiguous || [];
+      // Re-read on every load, not just the first: `backend_type` is reactive,
+      // so this form reloads its schema while it is open.
+      blocked = this._blockedFor(detail.embeddings_available);
+      notice.innerHTML = blocked
+        ? `<p class="sc-empty sc-store-blocked">${escapeHtml(blocked)}</p>`
+        : "";
+      form.saveEnabled = !blocked;
     });
 
     form.addEventListener("sc-before-save", (ev) => {
+      // Belt as well as braces: `saveEnabled` greys the button, this refuses
+      // the save itself — a host that called `form.save()` for its own reasons
+      // would otherwise walk straight past the notice.
+      if (blocked) {
+        ev.preventDefault();
+        showToast(blocked, "error");
+        return;
+      }
       const data = (ev.detail && ev.detail.data) || {};
       const warning = this._warningFor(data, originalTitle, ambiguous);
       if (!warning) return;
@@ -239,6 +277,10 @@ export class ScStoresTab extends HTMLElement {
       const detail = ev.detail || {};
       if (detail.reload_error) {
         showToast(`Saved, but the reload failed: ${detail.reload_error}`, "warning");
+      } else if (detail.store_error) {
+        // The subentry was written; the store it describes did not come up.
+        // Without this the only word about it was a green "Saved".
+        showToast(`Saved, but the store did not start: ${detail.store_error}`, "warning");
       } else if (detail.shadows_yaml) {
         showToast("Saved. A store of this name in tools.yaml is now ignored.", "warning");
       }
@@ -253,6 +295,18 @@ export class ScStoresTab extends HTMLElement {
       this._editing = null;
       this._paint();
     });
+  }
+
+  /**
+   * Why this form cannot be submitted at all, or "" if it can.
+   *
+   * Only an explicitly empty list blocks. `undefined` — a backend that does
+   * not send `embeddings_available` — means "unknown", and an unknown must
+   * not disable a Save that would have worked.
+   */
+  _blockedFor(available) {
+    if (!Array.isArray(available) || available.length) return "";
+    return NO_BINDINGS_NOTICE;
   }
 
   /**

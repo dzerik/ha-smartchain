@@ -547,6 +547,8 @@ A **store** binds one embeddings sub-entry to one vector backend and carries its
 
 **In the UI *(v5.2.0+)*, which is the recommended way.** **Settings > Devices & Services > SmartChain > Add memory store**, or the **Stores** tab of the SmartChain panel. Every option below is a field on that form, and the Stores tab additionally shows whether each configured store actually came up.
 
+> **Step 1 first.** A store must name an embeddings binding, and the field is a dropdown over the bindings that exist — with none, there is nothing to pick. The Stores tab says so above the form and holds **Save** until you have made one on the **Embeddings** tab *(v5.4.7+)*.
+
 Prefer the UI when the backend needs a credential. `backend.dsn` embeds a PostgreSQL password and `backend.api_key` is a qdrant token; written in `tools.yaml` they are handed to your browser whenever the panel's Tools tab opens that file. A store sub-entry keeps them in `.storage` and never serves them back — the form shows an empty field and "leave empty to keep the stored one".
 
 **In `tools.yaml`**, which keeps working unchanged. The smallest working configuration is two lines:

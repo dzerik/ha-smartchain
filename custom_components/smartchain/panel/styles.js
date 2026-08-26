@@ -254,6 +254,12 @@ export const SC_STYLES = `
   .sc-store-origin { color: var(--secondary-text-color); font-size: 13px; }
   .sc-store-reason { color: var(--secondary-text-color); font-size: 13px; }
   .sc-store-status.sc-bad .sc-store-reason { color: var(--error-color, #db4437); }
+  /* The store form cannot be filled in at all — see NO_BINDINGS_NOTICE. */
+  .sc-store-blocked {
+    color: var(--error-color, #db4437);
+    border-left: 3px solid var(--error-color, #db4437);
+    padding: 8px 10px; margin: 0 0 12px;
+  }
   @media (max-width: 600px) {
     .sc-store-status { grid-template-columns: 1fr; gap: 4px; }
   }

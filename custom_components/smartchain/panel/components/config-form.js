@@ -14,7 +14,11 @@ import { callWS, showToast } from "../services.js";
  * Properties: .hass, .commands ({schema, save}), .entryId, .subentryId,
  *             .showCancel (default true — a generic UI toggle, not a field),
  *             .showRefresh (default true — "Refresh models" is meaningless on
- *              a form whose schema has no model in it)
+ *              a form whose schema has no model in it),
+ *             .saveEnabled (default true — false when the host knows this form
+ *              cannot be satisfied at all, e.g. a required dropdown whose
+ *              options are empty. Still a generic toggle: this component is
+ *              told, it does not work it out)
  *
  * Some forms change shape as they are filled in: a memory store on the qdrant
  * backend asks for different fields than one on sqlite. A schema command can
@@ -55,6 +59,7 @@ export class ScConfigForm extends HTMLElement {
     this._fieldErrors = null;
     this._showCancel = true;
     this._showRefresh = true;
+    this._saveEnabled = true;
     // Field names whose value changes the shape of the form — supplied by the
     // schema command, never known here. Empty for every command that does not
     // send one, which is what keeps this inert for the other tabs.
@@ -91,12 +96,17 @@ export class ScConfigForm extends HTMLElement {
 
   set showCancel(val) {
     this._showCancel = val !== false;
-    this._syncCancelVisibility();
+    this._syncActions();
   }
 
   set showRefresh(val) {
     this._showRefresh = val !== false;
-    this._syncCancelVisibility();
+    this._syncActions();
+  }
+
+  set saveEnabled(val) {
+    this._saveEnabled = val !== false;
+    this._syncActions();
   }
 
   connectedCallback() {
@@ -129,11 +139,16 @@ export class ScConfigForm extends HTMLElement {
     this.load();
   }
 
-  _syncCancelVisibility() {
+  _syncActions() {
     const cancel = this.querySelector("#sc-form-cancel");
     if (cancel) cancel.classList.toggle("sc-hidden", !this._showCancel);
     const refresh = this.querySelector("#sc-form-refresh");
     if (refresh) refresh.classList.toggle("sc-hidden", !this._showRefresh);
+    // Disabled rather than hidden: a Save that vanished would read as "this
+    // form has no Save", where a greyed one plus the host's notice reads as
+    // "not until you do that first".
+    const save = this.querySelector("#sc-form-save");
+    if (save) save.disabled = !this._saveEnabled;
   }
 
   async load(refresh = false) {
@@ -276,10 +291,11 @@ export class ScConfigForm extends HTMLElement {
       this.load(true);
     });
 
-    this._syncCancelVisibility();
+    this._syncActions();
   }
 
   async _trySave() {
+    if (!this._saveEnabled) return;
     const proceed = this.dispatchEvent(
       new CustomEvent("sc-before-save", {
         detail: { data: this._data },

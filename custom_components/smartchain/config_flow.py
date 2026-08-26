@@ -844,6 +844,16 @@ STORE_ERROR_TEXT: dict[str, str] = {
     ),
     "name_taken": "another memory store already uses this name",
     "embeddings_required": "pick which embeddings binding this store uses",
+    # Distinct from `embeddings_required` because the two are different
+    # situations for the person reading them: one is "you skipped a question",
+    # the other is "the question has no answers yet". The dropdown is Required
+    # and its option list is empty, so there is no value that could be typed —
+    # telling someone to pick one is telling them to do the impossible. This
+    # sentence names the tab that makes the missing thing instead.
+    "embeddings_none": (
+        "no embeddings binding exists yet; create one on the Embeddings tab "
+        "first, then bind this store to it"
+    ),
     "embeddings_unknown": "no embeddings binding has that name",
     "embeddings_ambiguous": (
         "that embeddings title is claimed by more than one binding, so it "
@@ -1057,9 +1067,11 @@ def validate_store_input(
             return "name", "name_taken"
 
     title = str(data.get("embeddings") or "").strip()
-    if not title:
-        return "embeddings", "embeddings_required"
     available = embeddings_subentries_by_title(hass)
+    if not title:
+        # An empty dropdown and an unanswered one look identical here and are
+        # not the same problem — see `embeddings_none` in STORE_ERROR_TEXT.
+        return "embeddings", ("embeddings_required" if available else "embeddings_none")
     if title not in available:
         return "embeddings", "embeddings_unknown"
     if available[title] is None:

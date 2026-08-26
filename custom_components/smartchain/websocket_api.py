@@ -809,8 +809,11 @@ def _describe_store(registry: Any, subentry: Any) -> dict[str, Any]:
     """
     data = subentry.data
     name = subentry.title
-    failures = getattr(registry, "failures", {}) if registry else {}
-    live = bool(registry) and name in registry.stores
+    # `is not None`, not truthiness: MemoryRegistry defines __len__ over its
+    # *live* stores, so a registry whose every store failed is falsy — and the
+    # row that most needed a reason was the one guaranteed to be told `None`.
+    failures = getattr(registry, "failures", None) or {}
+    live = registry is not None and name in registry.stores
     return {
         "subentry_id": subentry.subentry_id,
         "title": name,
@@ -836,7 +839,10 @@ def _describe_binding(registry: Any, subentry: Any) -> dict[str, Any]:
         "subentry_id": subentry.subentry_id,
         "title": subentry.title,
         "model": model,
-        "bound_stores": registry.stores_bound_to(subentry.title) if registry else [],
+        # `is not None` for the reason spelled out in `_describe_store`: an
+        # all-failed registry is falsy and would answer this as "nothing is
+        # bound", which is a different claim from "nothing came up".
+        "bound_stores": registry.stores_bound_to(subentry.title) if registry is not None else [],
     }
 
 
@@ -1253,7 +1259,7 @@ async def ws_store_save(
     Nothing about the submission is echoed back: `msg["data"]` can carry a
     database password, so no error message is built from a submitted value —
     `_describe_invalid` reports field names only, and a rule failure reports a
-    field name plus fixed text from `STORE_ERROR_TEXT`.
+    field name plus a fixed sentence keyed by `STORE_ERROR_TEXT`.
     """
     from .config_flow import (
         STORE_ERROR_TEXT,
@@ -1287,6 +1293,40 @@ async def ws_store_save(
         "source_type": submitted.get("source_type") or MEMORY_SOURCE_TYPE_NONE,
     }
     schema = memory_store_subentry_schema(hass, shape)
+    declared = {str(key.schema) for key in schema.schema}
+
+    # Rules first, schema second. The other way round — as this was — the
+    # `embeddings` dropdown answers for itself before any rule runs: it is
+    # vol.Required, and on an install with no embeddings binding its option
+    # list is *empty*, so the first Save a new user presses returns
+    # `required key not provided` and the panel labels an unanswerable field
+    # `invalid_data: embeddings`. Every sentence in STORE_ERROR_TEXT about
+    # `embeddings` was unreachable on this path. Nothing is validated less:
+    # a submission that clears the rules still goes through the schema below,
+    # and the rules read only strings the schema does not coerce.
+    #
+    # Same shape of failure, and the same fix, as `model_required` on the
+    # agent form (see `MODEL_REQUIRED_FALLBACK`): named fields plus a
+    # translated sentence, never a bare key.
+    error = validate_store_input(
+        hass,
+        # Merged, because "keep the stored credential" is what an empty `dsn`
+        # means — validating the raw submission would report `dsn_required`
+        # for an untouched pgvector store.
+        merge_store_secrets(submitted, stored, declared),
+        subentry_id=subentry_id,
+    )
+    if error is not None:
+        field, key = error
+        text = await async_flow_error_text(
+            hass,
+            key,
+            "config_subentries",
+            fallback=STORE_ERROR_TEXT[key],
+            subentry_type=SUBENTRY_TYPE_MEMORY_STORE,
+        )
+        connection.send_error(msg["id"], "invalid_data", invalid_data([field], text))
+        return
 
     try:
         data = ensure_storable(schema(submitted))
@@ -1294,16 +1334,7 @@ async def ws_store_save(
         connection.send_error(msg["id"], "invalid_data", _describe_invalid(err))
         return
 
-    declared = {str(key.schema) for key in schema.schema}
     data = merge_store_secrets(data, stored, declared)
-
-    error = validate_store_input(hass, data, subentry_id=subentry_id)
-    if error is not None:
-        field, key = error
-        connection.send_error(
-            msg["id"], "invalid_data", invalid_data([field], STORE_ERROR_TEXT[key])
-        )
-        return
 
     title = str(data.pop("name")).strip()
 
@@ -1321,11 +1352,20 @@ async def ws_store_save(
         return
 
     reload_error = await _rebuild_after_subentry_write(hass)
+    registry = hass.data.get(DOMAIN, {}).get("memory")
     connection.send_result(
         msg["id"],
         {
             "subentry_id": result_id,
             "reload_error": reload_error,
+            # The write succeeded; the store it describes may still not have
+            # come up — a wrong DSN, an embeddings binding that resolves to
+            # nothing. `MemoryRegistry.build` contains that failure so the
+            # other stores start, which left this command answering a plain
+            # success and the panel toasting a green "Saved" over a store that
+            # never ran. The reason is the same safe text `store/status`
+            # serves, taken straight after the rebuild that produced it.
+            "store_error": (getattr(registry, "failures", None) or {}).get(title),
             # A YAML store of the same name is now ignored. Reported rather
             # than left to a log line nobody reads.
             "shadows_yaml": title in (hass.data.get(DOMAIN, {}).get("store_shadowed") or []),

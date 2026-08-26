@@ -397,6 +397,7 @@
         "invalid_name": "A store name must be lowercase letters, digits and underscores, starting with a letter or underscore.",
         "name_taken": "Another memory store already uses this name.",
         "embeddings_required": "Pick which embeddings binding this store uses.",
+        "embeddings_none": "No embeddings binding exists yet. Create one on the Embeddings tab first, then bind this store to it.",
         "embeddings_unknown": "No embeddings binding has that name.",
         "embeddings_ambiguous": "That embeddings title is claimed by more than one binding, so it resolves to nothing. Rename one of them first.",
         "dsn_required": "The pgvector backend needs a connection string.",

@@ -117,6 +117,31 @@ project follows [Semantic Versioning](https://semver.org/).
   Devices & Services dialog now merge.
 - The Tools tab's note on "Allowed tools" is rewritten again: as of this release
   it really does govern built-ins, which 5.3.0 corrected it to deny.
+- **The Stores tab dead-ended a first-time user with a machine key.** With no
+  embeddings binding configured, the store form's `embeddings` dropdown is
+  required and its option list is *empty* — a field no value can satisfy — and
+  pressing Save answered `invalid_data: embeddings`, which the panel rendered
+  under that unanswerable control. `smartchain/store/save` ran the voluptuous
+  schema before the rules, so every sentence `STORE_ERROR_TEXT` has about
+  `embeddings` was unreachable. The rules now run first (the same fix
+  `model_required` got on the agent form), the sentence is read from the
+  translation files in the user's language, and a new one says what to actually
+  do: create a binding on the Embeddings tab first. The tab no longer lets the
+  Save be pressed into that wall — it already received `embeddings_available`
+  from the schema command and ignored it; it now says so above the form and
+  holds Save until a binding exists.
+- **A store that failed to build was reported as a plain green "Saved".**
+  `smartchain/store/save` now carries `store_error`, the same safe text
+  `store/status` serves, and the tab says the store did not start. The per-store
+  row could not explain itself either: `_describe_store` read the registry's
+  failures only when the registry was truthy, and `MemoryRegistry.__len__`
+  counts *live* stores — so an install whose every store failed was exactly the
+  one told `reason: null`. The row now names the reason.
+- **The GigaChat embeddings client ignored "Verify SSL certificates".**
+  `verify_ssl_certs=False` was hardcoded, so turning the hub's switch on secured
+  the conversation client (fixed in 5.4.1) and left every embedding request
+  against the same host unverified. It reads `entry.options` like every other
+  client.
 
 ### Notes
 - **`ALL_TOOLS_SENTINEL` (`*`) still means every *custom* tool**, not every
