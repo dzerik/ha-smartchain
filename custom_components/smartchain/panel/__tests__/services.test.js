@@ -22,12 +22,23 @@ describe("escapeHtml", () => {
   });
 
   it("escapes the ampersand first, so an escape is never re-read as markup", () => {
-    // If `&` were escaped last, `&lt;` would come out as `&amp;lt;` and the
-    // browser would render the literal text `&lt;` instead of `<`. If it were
-    // escaped last on *this* input, `&amp;` would come out as `&amp;` — which
-    // decodes to `&`, losing the difference between the two inputs.
+    // Careful: on an input that is *already* an entity both orders agree —
+    // "&lt;" contains no `<`, so only the `&` rule ever fires and the answer is
+    // "&amp;lt;" whether that rule runs first or last. These two lines pin the
+    // double-escaping shape, but they cannot tell the orders apart.
     expect(escapeHtml("&lt;")).toBe("&amp;lt;");
     expect(escapeHtml("&amp;")).toBe("&amp;amp;");
+
+    // What discriminates is an input that *produces* entities: escape `&` last
+    // and it re-escapes the ampersand of every entity the earlier rules just
+    // wrote, so `<` reaches the browser as the literal text `&lt;`. A round
+    // trip through innerHTML is the strongest way to say that, since the whole
+    // claim is about what the browser finally reads.
+    const mixed = "<tag> & \"quoted\" 'text'";
+    expect(escapeHtml(mixed)).toBe("&lt;tag&gt; &amp; &quot;quoted&quot; &#39;text&#39;");
+    const host = document.createElement("div");
+    host.innerHTML = escapeHtml(mixed);
+    expect(host.textContent).toBe(mixed);
   });
 
   it("neutralises a script tag and an attribute break-out", () => {

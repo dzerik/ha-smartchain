@@ -505,8 +505,18 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """
         engine = entry.data.get(CONF_ENGINE, ID_GIGACHAT)
         schema = credentials_schema(engine, entry.data)
+        # Both descriptions name the hub, and Home Assistant supplies `name` by
+        # itself on `SOURCE_REAUTH` and on no other source. Supplying it here
+        # instead of relying on that covers reconfigure too, where the missing
+        # variable did not render as literal braces: the frontend formats
+        # through intl-messageformat, which raises on an unknown variable, so
+        # the reconfigure dialog dropped the whole sentence — the only one that
+        # tells the user a blank key keeps the stored one.
+        placeholders = {"name": entry.title}
         if user_input is None:
-            return self.async_show_form(step_id=step_id, data_schema=schema)
+            return self.async_show_form(
+                step_id=step_id, data_schema=schema, description_placeholders=placeholders
+            )
 
         updates = merge_entry_secrets(user_input, entry.data)
         updates[CONF_ENGINE] = engine
@@ -515,7 +525,12 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         # the mirror this hub actually talks to.
         errors = await self._probe_connection({**dict(entry.data), **updates})
         if errors:
-            return self.async_show_form(step_id=step_id, data_schema=schema, errors=errors)
+            return self.async_show_form(
+                step_id=step_id,
+                data_schema=schema,
+                errors=errors,
+                description_placeholders=placeholders,
+            )
 
         return self.async_update_reload_and_abort(entry, data_updates=updates)
 

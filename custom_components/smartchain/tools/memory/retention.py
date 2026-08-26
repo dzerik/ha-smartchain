@@ -59,6 +59,19 @@ class RetentionTask:
             self._task.cancel()
             try:
                 await self._task
+            # The tuple is NOT redundant — do not "simplify" it to a bare
+            # `except Exception`. Since Python 3.8 `asyncio.CancelledError`
+            # inherits directly from `BaseException`
+            # (`issubclass(CancelledError, Exception) is False`), so
+            # `Exception` alone cannot catch the cancellation we just asked
+            # for one line above. We swallow it deliberately: `_loop` usually
+            # absorbs its own cancellation, but it is not guaranteed to — a
+            # task cancelled before its coroutine is ever scheduled raises
+            # straight out of this `await`. `MemoryRegistry.shutdown()` stops
+            # every retention task in one sequential loop, so a CancelledError
+            # escaping here would abort the entire shutdown: pollers left
+            # running, stores left open. Pinned by
+            # `test_stop_swallows_cancellederror_from_the_cancelled_task`.
             except (asyncio.CancelledError, Exception):  # noqa: BLE001
                 pass
             self._task = None

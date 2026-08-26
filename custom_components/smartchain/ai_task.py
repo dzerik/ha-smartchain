@@ -149,6 +149,43 @@ def _with_structure_prompt(
     return [SystemMessage(content=block), *messages]
 
 
+def _image_attachments(chat_log: conversation.ChatLog) -> list[Any]:
+    """Every image attachment the request being built is meant to carry.
+
+    Read off the chat log rather than off the task, because the log is what
+    `_chatlog_to_langchain` converts — HA appends
+    `UserContent(task.instructions, attachments=task.attachments)` — and the
+    count is only meaningful next to what that conversion produced.
+    """
+    return [
+        attachment
+        for content in chat_log.content
+        if isinstance(content, conversation.UserContent) and content.attachments
+        for attachment in content.attachments
+        if (attachment.mime_type or "").startswith("image/")
+    ]
+
+
+def _delivered_image_parts(messages: list[BaseMessage]) -> int:
+    """How many images the built request actually carries."""
+    delivered = 0
+    for message in messages:
+        content = getattr(message, "content", None)
+        if not isinstance(content, list):
+            continue
+        delivered += sum(
+            1 for part in content if isinstance(part, dict) and part.get("type") == "image_url"
+        )
+    return delivered
+
+
+def _attachment_label(attachment: Any) -> str:
+    """What to call an attachment in an error a person has to act on."""
+    return getattr(attachment, "media_content_id", None) or str(
+        getattr(attachment, "path", "unknown")
+    )
+
+
 def _extract_json_object(text: str) -> Any:
     """Pull the JSON the model meant to send out of the text it actually sent.
 
@@ -260,8 +297,42 @@ class SmartChainAITaskEntity(ai_task.AITaskEntity):
             else:
                 bound_client = native
 
+        expected_images = _image_attachments(chat_log)
+        has_attachments = any(
+            isinstance(content, conversation.UserContent) and content.attachments
+            for content in chat_log.content
+        )
+
         for _iteration in range(MAX_TOOL_ITERATIONS):
-            messages = _chatlog_to_langchain(chat_log)
+            if has_attachments:
+                # `_chatlog_to_langchain` reads the attachment files and may run
+                # TurboJPEG on a large one — `Path.read_bytes` is in HA's
+                # `block_async_io` table, so doing this inline is a reported
+                # blocking call and a genuinely stalled loop. Offloading only
+                # when there is a file to read keeps the ordinary turn on one
+                # thread, the same trade conversation.py makes.
+                messages = await self.hass.async_add_executor_job(_chatlog_to_langchain, chat_log)
+            else:
+                messages = _chatlog_to_langchain(chat_log)
+
+            # An image that could not be read leaves no trace in the request:
+            # `_attachment_to_base64` returns None and the part is simply not
+            # added, so the model is asked the question with the picture
+            # missing and answers it anyway. Counting what arrived against what
+            # was attached is the only check that survives every reason a file
+            # might be unreadable, and it has to happen before the request is
+            # sent — an invented answer must not even be paid for.
+            if expected_images:
+                delivered = _delivered_image_parts(messages)
+                if delivered < len(expected_images):
+                    raise HomeAssistantError(
+                        "AI Task could not read "
+                        f"{len(expected_images) - delivered} of "
+                        f"{len(expected_images)} image attachment(s); answering "
+                        "without them would be a guess: "
+                        + ", ".join(_attachment_label(a) for a in expected_images)
+                    )
+
             if schema_in_prompt and json_schema is not None:
                 messages = _with_structure_prompt(messages, json_schema)
 

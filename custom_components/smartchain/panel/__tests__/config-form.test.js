@@ -220,6 +220,25 @@ describe("ScConfigForm load readiness", () => {
     expect(net.calls("smartchain/agent/schema")).toHaveLength(1);
   });
 
+  it("loads a form whose properties were all set before it was connected", async () => {
+    // The mirror image of the blank-form bug. A host that builds the element
+    // detached — createElement, set everything, then append — touches no setter
+    // after connection, so connectedCallback is the only thing left that can
+    // start the load. Nothing may load before then either: `_render()` runs
+    // there too, so a load started earlier would have no <ha-form> to fill.
+    const form = document.createElement("sc-config-form");
+    form.hass = net.hass;
+    form.commands = { schema: "smartchain/agent/schema", save: "smartchain/agent/save" };
+    form.entryId = "entry-1";
+    await flush();
+    expect(net.calls("smartchain/agent/schema")).toHaveLength(0);
+
+    document.body.appendChild(form);
+    await flush();
+    expect(net.calls("smartchain/agent/schema")).toHaveLength(1);
+    expect(form._data).toEqual({ prompt: "hello" });
+  });
+
   it("still lets Refresh reload explicitly after the automatic load is spent", async () => {
     // `_loaded` gates the *automatic* load only. If it gated `load()` itself,
     // the Refresh button would go dead after the form first appeared.

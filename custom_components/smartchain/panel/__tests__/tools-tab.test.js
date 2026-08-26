@@ -43,6 +43,41 @@ function type(editor, text) {
   editor.dispatchEvent(new Event("input"));
 }
 
+/**
+ * The answer <sc-config-form> gets when a tool form opens. Nothing in these
+ * tests reads the field — it only has to be a schema the form can render, so
+ * that "the form is open" is a real form and not a stub.
+ */
+const FORM_SCHEMA = {
+  "smartchain/tool/schema": {
+    schema: [{ name: "name", selector: { text: {} } }],
+    data: { name: "" },
+    labels: {},
+  },
+};
+
+/** Open the tool form the way the "+ Tool" button does, and let it load. */
+async function openForm(tab) {
+  tab._editing = { entryId: "entry-1", subentryId: null };
+  tab._paintList();
+  await flush();
+  const form = tab.querySelector("sc-config-form");
+  expect(form).not.toBeNull();
+  return form;
+}
+
+/**
+ * A keystroke in the form, delivered the way <ha-form> delivers one — which is
+ * also the only place the half-typed value lives, since nothing writes it back
+ * to the DOM until the next `_apply()`.
+ */
+function typeIntoForm(form, value) {
+  form
+    .querySelector("ha-form")
+    .dispatchEvent(new CustomEvent("value-changed", { detail: { value } }));
+  expect(form._data).toEqual(value);
+}
+
 let confirmSpy;
 
 beforeEach(() => {
@@ -202,14 +237,74 @@ describe("sc-tools-tab: a hass tick is not a repaint", () => {
   });
 
   it("does not repaint the tool list out from under an open tool form", async () => {
-    const { tab } = await boot();
-    tab._editing = { entryId: "entry-1", subentryId: null };
-    tab._paintList();
-    expect(tab.querySelector("sc-config-form")).not.toBeNull();
+    const { tab } = await boot(FORM_SCHEMA);
+    const form = await openForm(tab);
+    typeIntoForm(form, { name: "half_typed_tool" });
 
     // A refetched overview array is a new object, so `set entries` would
     // normally repaint — and would destroy the half-filled form.
     tab.entries = [{ entry_id: "entry-1", title: "GigaChat" }];
-    expect(tab.querySelector("sc-config-form")).not.toBeNull();
+
+    // `not.toBeNull()` would pass on a *replacement* form: repainting writes a
+    // fresh <sc-config-form> into the same container, so the query finds one
+    // either way. Only node identity distinguishes "still open" from "silently
+    // started over", which is the whole guarantee this test is named for.
+    const live = tab.querySelector("sc-config-form");
+    expect(live).toBe(form);
+    expect(form.isConnected).toBe(true);
+    expect(live.querySelector("ha-form")).toBe(form.querySelector("ha-form"));
+    // And what the user typed is still in it, not reset to the loaded defaults.
+    expect(live._data).toEqual({ name: "half_typed_tool" });
+  });
+
+  it("does not repaint when a tool-list refresh lands while a form is open", async () => {
+    // The same guarantee on the other path, and a race that really happens:
+    // `_loadList` is two awaited websocket calls long, so the user can open the
+    // form before its answer arrives. Without the guard, the answer's repaint
+    // destroys the form that was opened in the meantime.
+    let release;
+    const gate = new Promise((resolve) => {
+      release = resolve;
+    });
+    const net = fakeHass(
+      handlers({
+        ...FORM_SCHEMA,
+        "smartchain/tool/list": () => gate.then(() => ({ tools: [], shadowed_yaml: [] })),
+      })
+    );
+    const tab = mount("sc-tools-tab");
+    tab.entries = [{ entry_id: "entry-1", title: "GigaChat" }];
+    tab.hass = net.hass;
+    await flush();
+
+    const form = await openForm(tab);
+    typeIntoForm(form, { name: "typed_while_loading" });
+
+    release();
+    await flush();
+
+    expect(tab.querySelector("sc-config-form")).toBe(form);
+    expect(form.isConnected).toBe(true);
+    expect(form._data).toEqual({ name: "typed_while_loading" });
+  });
+
+  it("ignores an entries push that is the same array it already holds", async () => {
+    // Home Assistant's shell re-pushes `.entries` whenever it (re)mounts a tab;
+    // only a genuine refetch produces a new array. Repainting on the identical
+    // object would throw the rendered list away for nothing — and, before the
+    // form guard above existed, was exactly how an open form got destroyed.
+    const { tab } = await boot();
+    const entries = [{ entry_id: "entry-1", title: "GigaChat" }];
+    tab.entries = entries;
+    const section = tab.querySelector(".sc-tools-constructor .sc-entry");
+    expect(section).not.toBeNull();
+
+    tab.entries = entries;
+    expect(tab.querySelector(".sc-tools-constructor .sc-entry")).toBe(section);
+
+    // ...and a refetched array must still repaint, or the guard has gone from
+    // "skip the redundant push" to "never update".
+    tab.entries = [...entries];
+    expect(tab.querySelector(".sc-tools-constructor .sc-entry")).not.toBe(section);
   });
 });

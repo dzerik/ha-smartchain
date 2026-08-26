@@ -11,6 +11,36 @@ project follows [Semantic Versioning](https://semver.org/).
 > **Note:** the `5.4.0` section below is a roll-up: it covers `5.4.0` through
 > `5.4.7`, which were developed on one branch and are not separated here.
 
+## [5.5.1] - unreleased
+
+### Fixed
+- **A photo that could not be read was answered anyway.** Declaring attachment
+  support in `5.5.0` made this path reachable: an unreadable file came back as
+  `None` from the base64 helper, the part was simply not added, and the model
+  described a fridge it had never seen. The task now compares the images the
+  request was supposed to carry against the ones that reached the request, and
+  fails naming the attachment — the check sits between building the request and
+  sending it, so a wrong answer is not even paid for.
+- **Attachment reading blocked the event loop.** AI Task called the message
+  builder directly where the conversation path has always wrapped it in an
+  executor, with a comment saying why: it reads files and may run TurboJPEG.
+- **The reconfigure dialog lost the one sentence explaining itself.** Home
+  Assistant fills `{name}` in automatically for reauth only, so the reconfigure
+  description — the only place that tells the user a blank key keeps the stored
+  one — was rendering a formatter error. The test now reads every `{var}` out of
+  all three locale files and requires the flow to supply them, so the next
+  translation cannot drift the same way.
+
+### Changed
+- Tests that named a guarantee without watching it now fail when it is removed:
+  the open tool form surviving a list repaint (the old test only asked whether
+  *a* form existed, and a repaint destroys the node and builds a fresh empty
+  one, so it passed either way), the ampersand being escaped first, the two
+  `except asyncio.CancelledError` returns inside the retention loop, and the
+  whole `tools.yaml` → loader → client chain for `verify_ssl`, headers, env,
+  args and tool filters — where a mutation discarding the user's setting
+  outright had been leaving hundreds of tests green.
+
 ## [5.5.0] - unreleased
 
 ### Added

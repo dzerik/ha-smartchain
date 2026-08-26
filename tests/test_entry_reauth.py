@@ -14,6 +14,9 @@ is actually constructed, a rejected credential is not written, and a field the
 user did not touch comes out the other side unchanged.
 """
 
+import json
+import re
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -23,6 +26,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from custom_components import smartchain
 from custom_components.smartchain.config_flow import (
     ENTRY_SECRET_FIELDS,
     credentials_schema,
@@ -137,6 +141,55 @@ def _ollama_entry(hass: HomeAssistant) -> MockConfigEntry:
     return entry
 
 
+_COMPONENT_DIR = Path(smartchain.__file__).parent
+
+# Every file Home Assistant may pick the repair dialog's wording out of. All
+# three are kept in step with each other by hand, so a placeholder that is only
+# fixed in `strings.json` is fixed for nobody: `strings.json` is the source the
+# developer edits, `translations/en.json` is what an English install actually
+# loads, and `translations/ru.json` is what this integration's own audience
+# loads.
+_LOCALISATIONS = (
+    _COMPONENT_DIR / "strings.json",
+    _COMPONENT_DIR / "translations" / "en.json",
+    _COMPONENT_DIR / "translations" / "ru.json",
+)
+
+_PLACEHOLDER = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}")
+
+
+def _description_variables(step_id: str) -> dict[Path, set[str]]:
+    """The `{var}` names each localisation asks the flow to supply on ``step_id``.
+
+    The frontend formats these through intl-messageformat, which *raises* on a
+    variable it was not given rather than leaving the braces as literal text —
+    so an unsupplied placeholder does not degrade the sentence, it deletes it.
+    """
+    variables: dict[Path, set[str]] = {}
+    for path in _LOCALISATIONS:
+        text = json.loads(path.read_text(encoding="utf-8"))["config"]["step"][step_id][
+            "description"
+        ]
+        variables[path] = set(_PLACEHOLDER.findall(text))
+    return variables
+
+
+async def _open_repair_form(hass: HomeAssistant, entry: MockConfigEntry, source: str) -> dict:
+    """Open the reauth or the reconfigure form and return the form result.
+
+    Deliberately goes through the real flow rather than calling the step: Home
+    Assistant injects `name` into `description_placeholders` on its own for
+    `SOURCE_REAUTH` and for nothing else (`config_entries.ConfigFlow
+    .async_show_form`), so only a started flow shows what the browser is
+    actually handed.
+    """
+    if source == SOURCE_REAUTH:
+        return await entry.start_reauth_flow(hass)
+    return await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": source, "entry_id": entry.entry_id}
+    )
+
+
 # -- the classifier ------------------------------------------------------
 
 
@@ -166,15 +219,85 @@ def test_an_error_with_no_status_at_all_is_not_an_auth_error() -> None:
 # -- the form ------------------------------------------------------------
 
 
-def test_the_credential_never_travels_back_to_the_browser() -> None:
-    """The stored key must not be a suggested value on any repair form: the
-    subentry flows redact their secrets for exactly this reason."""
+def test_the_repair_schema_helper_omits_the_stored_credential() -> None:
+    """The helper's own contract. Not the guarantee — the guarantee is what the
+    step below hands the frontend, and a step is free to rebuild this."""
     schema = credentials_schema(ID_OPENAI, {CONF_API_KEY: "sk-old", CONF_BASE_URL: "https://x/v1"})
     for marker in schema.schema:
         suggested = (marker.description or {}).get("suggested_value")
         if str(marker.schema) in ENTRY_SECRET_FIELDS:
             assert suggested is None
         assert suggested != "sk-old"
+
+
+@pytest.mark.parametrize("source", [SOURCE_REAUTH, SOURCE_RECONFIGURE])
+async def test_the_credential_never_travels_back_to_the_browser(
+    hass: HomeAssistant, source: str
+) -> None:
+    """Asserted on `result["data_schema"]`, which is the object that is
+    serialised to the browser — not on the helper that step happens to call.
+
+    Pinning the helper leaves the guarantee unheld: a step that rebuilds the
+    schema with `suggested_value` taken from `entry.data` for every field puts
+    `sk-old` back on the wire while every schema-level test stays green.
+    """
+    entry = _openai_entry(hass)
+
+    result = await _open_repair_form(hass, entry, source)
+    assert result["type"] is FlowResultType.FORM
+
+    suggested = {
+        str(marker.schema): (marker.description or {}).get("suggested_value")
+        for marker in result["data_schema"].schema
+    }
+    for name in ENTRY_SECRET_FIELDS:
+        assert suggested.get(name) is None, name
+    assert "sk-old" not in suggested.values()
+    # The other half of the same form: blanking the key must not blank the rest.
+    assert suggested[CONF_BASE_URL] == "https://api.openai.com/v1"
+
+
+@pytest.mark.parametrize("source", [SOURCE_REAUTH, SOURCE_RECONFIGURE])
+async def test_a_repair_form_supplies_every_variable_its_wording_asks_for(
+    hass: HomeAssistant, source: str
+) -> None:
+    """The description is the only sentence in the integration that states the
+    contract "blank key = keep the stored one". Home Assistant fills `name` in
+    by itself on the reauth path and on no other, so the reconfigure dialog
+    rendered its whole description as nothing at all.
+    """
+    entry = _openai_entry(hass)
+
+    result = await _open_repair_form(hass, entry, source)
+    step_id = result["step_id"]
+    placeholders = result["description_placeholders"] or {}
+
+    for path, wanted in _description_variables(step_id).items():
+        assert wanted, f"{path.name}: {step_id} names no hub at all"
+        assert wanted <= set(placeholders), f"{path.name}: {wanted - set(placeholders)} unsupplied"
+    assert placeholders["name"] == "OpenAI"
+
+
+async def test_a_rejected_credential_is_shown_again_with_the_form_still_explained(
+    hass: HomeAssistant,
+) -> None:
+    """The re-shown form is where a user who mistyped a key actually lands, and
+    it is a second `async_show_form` call with its own placeholders to forget."""
+    entry = _openai_entry(hass)
+
+    result = await _open_repair_form(hass, entry, SOURCE_RECONFIGURE)
+    with patch(
+        "custom_components.smartchain.config_flow.validate_client",
+        new_callable=AsyncMock,
+        side_effect=_Status(401),
+    ):
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {CONF_API_KEY: "sk-wrong", CONF_BASE_URL: "https://api.openai.com/v1"},
+        )
+
+    assert result["errors"] == {"base": "invalid_auth"}
+    assert (result["description_placeholders"] or {})["name"] == "OpenAI"
 
 
 def test_a_non_secret_field_is_prefilled_from_what_is_stored() -> None:

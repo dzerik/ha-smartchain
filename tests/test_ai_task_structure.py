@@ -434,21 +434,31 @@ async def test_an_attachment_we_cannot_send_is_an_error(hass: HomeAssistant) -> 
         await entity._async_generate_data(task, _chat_log(hass))
 
 
-async def test_an_image_attachment_is_accepted(hass: HomeAssistant) -> None:
-    """The guard must not cost the camera snapshot the example is built on."""
+async def test_an_image_attachment_is_accepted(hass: HomeAssistant, tmp_path) -> None:
+    """The guard must not cost the camera snapshot the example is built on.
+
+    The file has to really be on disk and the chat log has to really carry the
+    attachment — HA appends `UserContent(instructions, attachments=…)` — or the
+    image path is never entered and the test greens on nothing. See
+    `tests/test_ai_task_attachments.py` for what happens when the file is not
+    there.
+    """
+    snapshot = tmp_path / "fridge.jpg"
+    snapshot.write_bytes(b"\xff\xd8\xff\xe0not-really-a-jpeg-but-really-a-file")
+    attachment = Attachment(
+        media_content_id="media-source://camera/camera.fridge",
+        mime_type="image/jpeg",
+        path=str(snapshot),
+    )
     client = _FakeClient(AIMessageChunk(content="Milk and eggs."))
     entity = _entity(hass, client, ID_GIGACHAT)
-    task = _task(
-        attachments=[
-            Attachment(
-                media_content_id="media-source://camera/camera.fridge",
-                mime_type="image/jpeg",
-                path="/tmp/does-not-exist.jpg",
-            )
-        ]
+
+    chat_log = _chat_log(hass)
+    chat_log.content[-1] = UserContent(
+        content="List what is in the fridge", attachments=[attachment]
     )
 
-    result = await entity._async_generate_data(task, _chat_log(hass))
+    result = await entity._async_generate_data(_task(attachments=[attachment]), chat_log)
 
     assert result.data == "Milk and eggs."
 

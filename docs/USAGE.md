@@ -1214,10 +1214,13 @@ The reply is then parsed leniently — a markdown fence around the JSON, or a se
 
 ### Attachments
 
-The entity declares `SUPPORT_ATTACHMENTS`, so `ai_task.generate_data` accepts them. Two things to know:
+The entity declares `SUPPORT_ATTACHMENTS`, so `ai_task.generate_data` accepts them. Three things to know:
 
 * Each attachment needs **both** `media_content_id` and `media_content_type`. The service's media selector rejects an item without the second one, which is easy to miss because the resolver itself never reads it for a camera source.
 * Only **images** are sent — they are base64-encoded into the request. An attachment of any other type fails the task with its MIME type in the message, rather than being dropped and answered without. Whether the model can actually read the image is still a question of the provider and the model you picked.
+* An image whose **file cannot be read** — the snapshot the resolver promised was never written, the path is gone, permissions changed — also fails the task, naming the attachment: *"AI Task could not read 1 of 1 image attachment(s); answering without them would be a guess: media-source://camera/camera.fridge"*. Sending the question with the picture quietly missing is worse than failing, because the model answers it anyway and the automation reading `result.data` has no way to tell an observation from an invention. The check counts the images that reached the request against the ones that were attached, and it runs before the request is sent.
+
+Reading those files is blocking work, so it happens in an executor thread rather than on the event loop — and only on a task that actually carries an attachment.
 
 ### Reading the result
 

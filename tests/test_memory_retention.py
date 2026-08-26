@@ -228,6 +228,180 @@ async def test_loop_survives_a_failing_sweep(hass: HomeAssistant) -> None:
     assert store.rows == {}
 
 
+def test_cancellederror_is_not_an_exception() -> None:
+    """The language fact the `stop()` handler is built on.
+
+    Since Python 3.8 `asyncio.CancelledError` inherits straight from
+    `BaseException`, so `except Exception` does *not* catch it. Every test
+    below that pins the tuple in `RetentionTask.stop()` rests on this; if a
+    future Python moved it back under `Exception` the tuple would become
+    genuinely redundant and this test would say so first.
+    """
+    assert asyncio.CancelledError.__mro__ == (asyncio.CancelledError, BaseException, object)
+    assert not issubclass(asyncio.CancelledError, Exception)
+
+
+async def test_stop_swallows_cancellederror_from_the_cancelled_task(
+    hass: HomeAssistant,
+) -> None:
+    """`stop()` cancels its own task, so awaiting it may raise CancelledError.
+
+    That exception must never leave `stop()`: `MemoryRegistry.shutdown()`
+    stops every retention task in one sequential loop, and a CancelledError
+    escaping the first one aborts the whole shutdown — later pollers keep
+    running and stores are never closed.
+
+    This is the test that dies if anyone "simplifies" the handler's tuple to
+    a bare `except Exception`, which cannot catch a BaseException subclass.
+    """
+    store = FakeStore()
+    task = RetentionTask(hass, store, days=30)
+    running = asyncio.Event()
+
+    async def loop_that_lets_cancellation_through() -> None:
+        running.set()
+        # A bare sleep has no CancelledError handler, so the cancellation
+        # propagates out of the task exactly as an unguarded await would.
+        await asyncio.sleep(3600)
+
+    with patch.object(task, "_loop", loop_that_lets_cancellation_through):
+        task.start()
+        # Bounded: if a regression stops the loop from running at all, this
+        # test must fail rather than hang the whole suite.
+        async with asyncio.timeout(5):
+            await running.wait()
+        await task.stop()
+
+    assert task._task is None
+
+
+async def test_start_sweeps_eagerly_and_stops_clean(hass: HomeAssistant) -> None:
+    """`start()` sweeps synchronously, and an instant `stop()` stays quiet.
+
+    There is deliberately no `await` between the two — a config-entry unload
+    straight after setup looks exactly like this. Two things are pinned:
+    `hass.async_create_background_task` starts the coroutine *eagerly*, so
+    the first sweep has already reached the store before `start()` returns;
+    and `stop()` then completes without raising.
+
+    Note for whoever runs mutation checks: this test does *not* die on the
+    `except (asyncio.CancelledError, Exception)` -> `except Exception`
+    mutation. Because the task starts eagerly it is suspended inside
+    `_loop`'s own guarded `wait_for`, so `_loop` absorbs the cancellation and
+    `stop()` never sees it. The test that does die is
+    `test_stop_swallows_cancellederror_from_the_cancelled_task` above.
+    """
+    store = FakeStore({"ancient": FROZEN - timedelta(days=400)})
+    task = RetentionTask(hass, store, days=30)
+
+    task.start()
+    assert len(store.cutoffs) == 1, "the background task did not start eagerly"
+
+    await task.stop()
+
+    assert task._task is None
+
+
+async def test_loop_absorbs_cancellation_while_waiting_between_sweeps(
+    hass: HomeAssistant,
+) -> None:
+    """`_loop` ends itself on cancellation instead of dying of it.
+
+    The task spends almost all its life parked in `wait_for`, so this is
+    where a shutdown cancellation lands. `_loop` catches it and returns, and
+    the assertion is on the *task state*: FINISHED, not CANCELLED.
+
+    That distinction is the whole point. `stop()` would swallow a
+    CancelledError anyway, so testing only "stop() was quiet" lets the
+    handler inside `_loop` rot away unnoticed. The two layers are deliberate
+    belt-and-braces; neither is allowed to become the single thing standing
+    between a cancellation and `MemoryRegistry.shutdown()`.
+    """
+    store = FakeStore()
+    task = RetentionTask(hass, store, days=30)
+
+    with patch.object(retention_module, "_SECONDS_PER_DAY", 3600):
+        task.start()
+        await asyncio.sleep(0.02)
+        raw = task._task
+        assert raw is not None
+        await task.stop()
+
+    assert raw.done()
+    assert not raw.cancelled(), "_loop let the cancellation kill the task"
+
+
+async def test_loop_absorbs_cancellation_landing_mid_sweep(hass: HomeAssistant) -> None:
+    """The same contract at the other await point: inside `delete_older_than`.
+
+    A slow backend means a shutdown can arrive while the sweep is still in
+    flight. `run_once` guards only `Exception`, so the cancellation travels
+    up to `_loop`, which must end the loop cleanly rather than let the task
+    finish in the CANCELLED state.
+    """
+    store = FakeStore()
+    reached_backend = asyncio.Event()
+    never = asyncio.Event()
+
+    async def hang_in_the_backend(cutoff: datetime) -> int:
+        store.cutoffs.append(cutoff)
+        reached_backend.set()
+        await never.wait()
+        return 0
+
+    store.delete_older_than = hang_in_the_backend  # type: ignore[method-assign]
+    task = RetentionTask(hass, store, days=30)
+
+    task.start()
+    # Bounded: a regression that never reaches the backend must fail here,
+    # not park the suite on an event nobody will ever set.
+    async with asyncio.timeout(5):
+        await reached_backend.wait()
+    raw = task._task
+    assert raw is not None
+    await task.stop()
+
+    assert raw.done()
+    assert not raw.cancelled(), "_loop let the cancellation kill the task mid-sweep"
+
+
+async def test_stop_is_safe_to_call_twice(hass: HomeAssistant) -> None:
+    """Shutdown paths can overlap; the second `stop()` must stay quiet."""
+    store = FakeStore()
+    task = RetentionTask(hass, store, days=30)
+
+    with patch.object(retention_module, "_SECONDS_PER_DAY", 3600):
+        task.start()
+        await asyncio.sleep(0.02)
+        await task.stop()
+        await task.stop()
+
+    assert task._task is None
+
+
+async def test_run_once_does_not_swallow_cancellation(hass: HomeAssistant) -> None:
+    """Only `Exception` is a backend failure — a cancellation must fly on.
+
+    If the guard around `delete_older_than` widened to `BaseException`, a
+    shutdown arriving mid-sweep would be logged as "cleanup failed",
+    reported as zero deletions and then swallowed, leaving `_loop` to go
+    straight back to sleep instead of exiting.
+    """
+    store = FakeStore()
+
+    async def cancel_mid_delete(cutoff: datetime) -> int:
+        store.cutoffs.append(cutoff)
+        raise asyncio.CancelledError
+
+    store.delete_older_than = cancel_mid_delete  # type: ignore[method-assign]
+    task = RetentionTask(hass, store, days=30)
+
+    with pytest.raises(asyncio.CancelledError):
+        await task.run_once()
+
+    assert store.cutoffs, "the sweep never reached the store"
+
+
 async def test_start_after_stop_resumes_sweeping(hass: HomeAssistant) -> None:
     """A restarted task must actually sweep again, not idle silently."""
     store = FakeStore({"ancient": FROZEN - timedelta(days=400)})
