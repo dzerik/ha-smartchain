@@ -1744,11 +1744,15 @@ async def ws_tool_schema(
     values in `data` and rebuilds the schema around them, and `reactive` names
     the two fields worth a round trip.
 
-    A `rest` action's header *values* are never served — only their names, plus
-    `headers_set` to say which ones hold something. A value the client itself
-    just sent comes back, since it is already the client's own.
+    A `rest` action's *stored* header values are never served — only their
+    names, plus `headers_set` to say which ones hold something. A value the
+    client itself just sent comes back untouched, since it is already the
+    client's own; redacting the merged dict blanked the draft too, so a header
+    typed just before a reshaping round trip came home empty and saved empty on
+    a new tool, or silently reverted to the stored value on an edit. This is
+    the same per-field rule `ws_store_schema` applies to `dsn` / `api_key`.
     """
-    from .config_flow import redact_tool_secrets, tool_form_defaults, tool_subentry_schema
+    from .config_flow import tool_form_defaults, tool_subentry_schema
 
     entry = _get_entry(hass, msg["entry_id"])
     if entry is None:
@@ -1767,7 +1771,14 @@ async def ws_tool_schema(
         raw = tool_form_defaults(subentry, redact=False)
 
     draft = dict(msg.get("data") or {})
-    defaults = redact_tool_secrets({**stored, **draft})
+    # `stored` already arrives redacted — `tool_form_defaults` redacts by
+    # default and only the save paths ask for `redact=False` — so the merge
+    # needs no second pass, and must not have one: redacting `{**stored,
+    # **draft}` blanked the client's own draft as well as storage. The rule is
+    # `ws_store_schema`'s, `name not in secrets or name in draft`, applied to
+    # the one field that holds a map: the draft's `headers` replaces the stored
+    # map wholesale, which is also what lets a header be deleted in the form.
+    defaults = {**stored, **draft}
     schema = tool_subentry_schema(hass, defaults)
 
     # Same trap as ws_agent_schema (see F1): only serve fields the schema still
@@ -1997,6 +2008,13 @@ async def ws_tool_list(
         {
             "tools": sorted(tools, key=lambda tool: tool["name"]),
             "shadowed_yaml": list(hass.data.get(DOMAIN, {}).get("tools_shadowed") or []),
+            # A tools.yaml that will not load no longer takes the subentry
+            # tools down with it, which means the list below looks perfectly
+            # healthy while the file's own tools are missing. Say so here: a
+            # standing line on the tab, not a toast tied to whichever action
+            # happened to trigger the rebuild. Already passed through
+            # `_safe_loader_error` in `_reload_registry`.
+            "yaml_error": hass.data.get(DOMAIN, {}).get("yaml_error"),
         },
     )
 

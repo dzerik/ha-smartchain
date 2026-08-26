@@ -1190,6 +1190,10 @@ TOOL_ERROR_TEXT: dict[str, str] = {
         "cannot replace a built-in"
     ),
     "name_taken": "another tool already uses this name",
+    "mcp_name_taken": (
+        "a connected MCP server already provides a tool with this name. Pick another "
+        "one, or give that server a prefix in tools.yaml"
+    ),
     "description_required": (
         "describe what the tool does. This is the only thing the model reads when "
         "deciding whether to call it"
@@ -1573,9 +1577,16 @@ def validate_tool_name(
     load time is refused *silently* — `load_tools_file` logs and skips. A
     reserved or duplicate name typed into a form must be refused at the point
     it is typed, where the user is still looking at it.
+
+    A live MCP tool's name is refused too. MCP tools are discovered, not
+    declared, so this cannot be a guarantee — a server can announce the name
+    tomorrow — but it catches the case that is visible today, and the case that
+    is invisible is handled where it has to be, in `_reload_registry`'s
+    ordering and in `_register_tools`'s own collision check.
     """
     import re
 
+    from .tools.model import MCPAction
     from .tools.subentry_source import tool_subentries
 
     if not re.match(TOOL_NAME_PATTERN, name):
@@ -1585,6 +1596,11 @@ def validate_tool_name(
     for _entry, subentry in tool_subentries(hass):
         if subentry.subentry_id != subentry_id and subentry.title == name:
             return "name", "name_taken"
+    registry = (hass.data.get(DOMAIN) or {}).get("tools")
+    if registry is not None:
+        existing = registry.get(name)
+        if existing is not None and isinstance(existing.action, MCPAction):
+            return "name", "mcp_name_taken"
     return None
 
 

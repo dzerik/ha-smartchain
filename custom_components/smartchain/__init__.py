@@ -27,12 +27,16 @@ from langchain_core.messages import HumanMessage
 from .client_util import get_client
 from .helpers import async_generate_structured  # re-exported for downstream integrations
 from .tools import ToolRegistry
-from .tools.loader import LoaderError, load_tools_file
+from .tools.loader import LoaderError, LoaderResult, load_tools_file
 from .tools.mcp import MCPManager
 from .tools.memory.entity_context import SkeletonCache
 from .tools.memory.registry import MemoryRegistry
 from .tools.memory.subentry_source import merge_store_sources, stores_from_subentries
-from .tools.subentry_source import merge_tool_sources, tools_from_subentries
+from .tools.subentry_source import (
+    merge_tool_sources,
+    subentry_tool_names,
+    tools_from_subentries,
+)
 
 __all__ = ["async_generate_structured"]
 from .const import (
@@ -517,22 +521,77 @@ async def _reload_registry(hass: HomeAssistant) -> int:
     subentries. Each pair is merged by its own `merge_*_sources`, which is also
     where a name defined in both is resolved — in favour of the subentry, the
     editable one — and logged.
+
+    **A tools.yaml failure is isolated to tools.yaml.** The load used to raise
+    straight out of this function, before either merge ran, so a mis-indented
+    line in the file took down every tool and every memory store configured
+    through the panel: config that never went near the file died with it. The
+    failure is now caught here, the rebuild continues, and the error is
+    re-raised at the *end*, once everything the subentries define is live.
+
+    What the rebuild continues *with* is the last `LoaderResult` the file
+    produced, not an empty one. A broken file is a file that no longer says
+    anything, not a file that says "nothing" — dropping to empty would let a
+    typo silently delete the YAML tools, stores and MCP servers that were
+    working a second ago, which is the failure this whole change is about.
+    Before the first successful load there is nothing to fall back on, so a
+    file broken at startup contributes nothing and only the subentries load.
+
+    How the failure surfaces, so that "keep the old config" never becomes
+    "pretend it worked": every existing channel still reports it, because the
+    re-raise happens before returning — `_handle_reload_tools` raises
+    `HomeAssistantError`, every websocket save path returns `reload_error`,
+    startup logs it. Added on top, because a toast is tied to whichever action
+    happened to trigger the rebuild and may never be seen:
+    `hass.data[DOMAIN]["yaml_error"]` holds a `_safe_loader_error` summary,
+    which `smartchain/tool/list` serves and the Tools tab shows as a standing
+    banner until the file loads again.
     """
     path = _tools_yaml_path(hass)
     # The config dir is what lets HA's YAML loader resolve `!secret` against
     # secrets.yaml — without it the whole file fails on the first such tag.
-    result = await hass.async_add_executor_job(load_tools_file, path, Path(hass.config.config_dir))
+    yaml_error: LoaderError | None = None
+    try:
+        result = await hass.async_add_executor_job(
+            load_tools_file, path, Path(hass.config.config_dir)
+        )
+    except LoaderError as err:
+        # The full text is safe *here* and nowhere else: a schema failure wraps
+        # a `vol.Invalid` whose message interpolates the offending value, and
+        # `!secret` is resolved before validation runs, so this log line can
+        # hold a credential. It is server-side, admin-only. What travels to a
+        # user surface is `_safe_loader_error`'s output.
+        LOGGER.error("SmartChain tools.yaml could not be loaded: %s", err)
+        yaml_error = err
+        result = hass.data[DOMAIN].get("yaml_result") or LoaderResult()
+    else:
+        hass.data[DOMAIN]["yaml_result"] = result
+
+    from .websocket_api import _safe_loader_error
+
+    hass.data[DOMAIN]["yaml_error"] = None if yaml_error is None else _safe_loader_error(yaml_error)
+
     registry: ToolRegistry = hass.data[DOMAIN]["tools"]
     merged_tools, tool_sources, tools_shadowed = merge_tool_sources(
-        result.yaml_tools, tools_from_subentries(hass)
+        result.yaml_tools, tools_from_subentries(hass), subentry_tool_names(hass)
     )
+
+    # Stop MCP *before* the registry is replaced, not after. `manager.stop()`
+    # deregisters by name from whatever the registry holds at that moment, so
+    # running it second made it delete freshly merged tools that happened to
+    # share a name with a tool the previous MCP session had registered — a tool
+    # subentry called `fs_read` vanished on the next rebuild. Stopping first
+    # means it only ever removes its own tools from its own generation of the
+    # registry; `replace_all` then installs the merged set untouched.
+    manager: MCPManager | None = hass.data[DOMAIN].get("mcp_manager")
+    if manager is not None:
+        await manager.stop()
+
     registry.replace_all(merged_tools)
     hass.data[DOMAIN]["tool_sources"] = tool_sources
     hass.data[DOMAIN]["tools_shadowed"] = tools_shadowed
 
-    manager: MCPManager | None = hass.data[DOMAIN].get("mcp_manager")
     if manager is not None:
-        await manager.stop()
         manager.configure(result.mcp_servers)
         await manager.start()
 
@@ -561,6 +620,12 @@ async def _reload_registry(hass: HomeAssistant) -> int:
     skeleton: SkeletonCache | None = hass.data[DOMAIN].get("entity_skeleton")
     if skeleton is not None:
         skeleton.invalidate()
+
+    # Everything the subentries define is now live. Only now does the file's
+    # failure propagate, so the caller still learns about it through the exact
+    # channel it always did.
+    if yaml_error is not None:
+        raise yaml_error
 
     # What this counts, precisely: the custom tools in the registry right now —
     # tools.yaml plus tool subentries, after the collision merge. MCP tools are

@@ -383,6 +383,10 @@ export class ScToolsTab extends HTMLElement {
 
     const tools = (this._list && this._list.tools) || [];
     const shadowed = (this._list && this._list.shadowed_yaml) || [];
+    // The list below is healthy-looking even when tools.yaml is broken — the
+    // file's tools are simply absent while everything built here still works.
+    // Say it in the tab, not only in a toast the user may never have seen.
+    const yamlError = (this._list && this._list.yaml_error) || null;
 
     root.innerHTML = `
       <section class="sc-entry">
@@ -391,6 +395,13 @@ export class ScToolsTab extends HTMLElement {
           <span class="sc-entry-engine">${tools.length} registered</span>
           ${this._addControlHtml()}
         </header>
+        ${
+          yamlError
+            ? `<p class="sc-tools-banner sc-tools-error">tools.yaml could not be loaded, so the tools
+                 below still reflect the last version that did. Everything built here is
+                 unaffected. ${escapeHtml(yamlError)}</p>`
+            : ""
+        }
         ${
           tools.length
             ? `<ul class="sc-embed-list">${tools.map((tool) => this._toolHtml(tool)).join("")}</ul>`

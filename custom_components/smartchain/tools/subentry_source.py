@@ -63,6 +63,29 @@ def tool_subentries(hass: HomeAssistant) -> list[tuple[Any, ConfigSubentry]]:
     ]
 
 
+def subentry_tool_names(hass: HomeAssistant) -> set[str]:
+    """Every name a `tool` subentry holds, **including the disabled ones**.
+
+    This is the *cross-source* claim, and it is deliberately not the same rule
+    as the one inside `tools_from_subentries`. Read both together:
+
+    - Within one source, a disabled entry must NOT reserve its name (see
+      `tools_from_subentries` and the matching comment in `loader.py`), so that
+      switching a tool off and adding its replacement under the same name keeps
+      the replacement instead of dropping it as a duplicate.
+    - Across sources, a disabled subentry MUST still reserve its name against
+      tools.yaml. Otherwise turning a subentry tool off un-shadows its YAML
+      twin and silently re-activates it — the switch the user just flipped to
+      "off" makes a tool of that name *start* working, and the panel goes on
+      showing the row as disabled. The Import button manufactures exactly these
+      twins, so the pair is common, not exotic.
+
+    Both rules are right in their own scope; neither should be "fixed" to match
+    the other.
+    """
+    return {subentry.title for _entry, subentry in tool_subentries(hass)}
+
+
 def tools_from_subentries(hass: HomeAssistant) -> list[CustomTool]:
     """Every enabled tool configured as a subentry, first claimant wins a clash.
 
@@ -70,7 +93,8 @@ def tools_from_subentries(hass: HomeAssistant) -> list[CustomTool]:
     `load_tools_file` does: a disabled tool does not exist for this run, so it
     must not reserve its name against an enabled one — otherwise switching a
     tool off and adding its replacement under the same name would silently drop
-    the replacement as a duplicate.
+    the replacement as a duplicate. That is a rule about *this* source only;
+    `subentry_tool_names` explains why the cross-source rule is the opposite.
 
     Two subentries can hold the same title; nothing in Home Assistant stops it
     and the panel shows every entry at once, so it is reachable. The registry
@@ -110,7 +134,9 @@ def tools_from_subentries(hass: HomeAssistant) -> list[CustomTool]:
 
 
 def merge_tool_sources(
-    yaml_tools: list[CustomTool], subentry_tools: list[CustomTool]
+    yaml_tools: list[CustomTool],
+    subentry_tools: list[CustomTool],
+    claimed_names: set[str] | None = None,
 ) -> tuple[list[CustomTool], dict[str, str], list[str]]:
     """Combine the two sources of tools. The subentry wins a name collision.
 
@@ -127,8 +153,16 @@ def merge_tool_sources(
     `merge_store_sources` makes for stores. Losing to a file the panel cannot
     safely rewrite would make the UI a read-only display of something it
     appears to control.
+
+    `claimed_names` is what the subentry source *reserves*, which is a wider
+    set than what it *contributes*: a disabled subentry contributes no tool but
+    still shadows its tools.yaml twin. Pass `subentry_tool_names(hass)`, which
+    documents why. It defaults to the contributed names so a caller that has
+    only two lists — every test that builds `CustomTool`s by hand — behaves as
+    before.
     """
-    subentry_names = {tool.name for tool in subentry_tools}
+    subentry_names = claimed_names if claimed_names is not None else set()
+    subentry_names = subentry_names | {tool.name for tool in subentry_tools}
     shadowed = [tool.name for tool in yaml_tools if tool.name in subentry_names]
     if shadowed:
         LOGGER.warning(

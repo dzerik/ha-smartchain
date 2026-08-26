@@ -339,6 +339,7 @@
         "invalid_name": "A tool name must be lowercase letters, digits and underscores, starting with a letter or underscore.",
         "reserved_name": "That name belongs to a built-in tool. A custom tool cannot replace a built-in — pick another name.",
         "name_taken": "Another tool already uses this name.",
+        "mcp_name_taken": "A connected MCP server already provides a tool with this name. Pick another name, or give that server a prefix in tools.yaml.",
         "description_required": "Describe what the tool does. This is the only thing the model reads when deciding whether to call it.",
         "invalid_parameters_json": "The arguments box does not contain valid JSON.",
         "invalid_parameters": "Arguments must be a JSON Schema object: an object with \"type\": \"object\" and a \"properties\" map.",
