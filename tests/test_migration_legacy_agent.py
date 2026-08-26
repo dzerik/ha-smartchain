@@ -133,8 +133,14 @@ async def test_the_ai_task_entity_moves_too(hass: HomeAssistant, mock_llm_client
 
 
 async def test_options_become_an_agent(hass: HomeAssistant, mock_llm_client) -> None:
-    """The agent carries the whole legacy config, connection switches included —
-    `_resolve_client_args` forwards those per agent."""
+    """The agent carries the legacy config, minus what belongs to the connection.
+
+    The connection switches used to be copied onto the agent as well, on the
+    grounds that `_resolve_client_args` forwarded them per agent. It no longer
+    does — `client_util.get_client` reads them off `entry.options` and nowhere
+    else — so a copy here would be dead weight the 3 -> 4 migration would only
+    have to delete again.
+    """
     entry = _legacy_entry(hass)
 
     assert await _setup(hass, entry, mock_llm_client)
@@ -145,7 +151,9 @@ async def test_options_become_an_agent(hass: HomeAssistant, mock_llm_client) -> 
     # had neither switch on, so it lists the sentinel and the four built-ins
     # that were never gated by one — exactly what it could call before.
     assert dict(agent.data) == {
-        **LEGACY_OPTIONS,
+        CONF_CHAT_MODEL: "GigaChat-3-Ultra",
+        CONF_PROMPT: "You are helpful.",
+        CONF_TEMPERATURE: 0.4,
         CONF_ALLOWED_TOOLS: [
             ALL_TOOLS_SENTINEL,
             DELEGATE_TOOL_NAME,
@@ -155,7 +163,7 @@ async def test_options_become_an_agent(hass: HomeAssistant, mock_llm_client) -> 
     }
     # The connection keeps only what belongs to the connection.
     assert dict(entry.options) == {CONF_VERIFY_SSL: False, CONF_PROFANITY: True}
-    assert entry.minor_version == 3
+    assert entry.minor_version == 4
 
 
 async def test_an_entry_with_both_is_left_alone(hass: HomeAssistant, mock_llm_client) -> None:
@@ -206,19 +214,102 @@ async def test_an_embeddings_subentry_does_not_count_as_an_agent(
 
 
 async def test_an_entry_with_neither_is_untouched(hass: HomeAssistant, mock_llm_client) -> None:
-    """A connection-only entry migrates to the current minor version and gains nothing."""
+    """A connection-only entry migrates to the current minor version and gains nothing.
+
+    "Neither" means neither agent-shaped options *nor* a legacy entity: no
+    registry row is seeded here, so there is nothing whose entity id has to be
+    preserved and no reason to invent an agent.
+    """
     entry = _legacy_entry(hass, options={})
 
     assert await _setup(hass, entry, mock_llm_client)
 
     assert _agents(entry) == []
     assert dict(entry.options) == {}
-    assert entry.minor_version == 3
+    assert entry.minor_version == 4
     assert [
         entity
         for entity in er.async_get(hass).entities.values()
         if entity.platform == DOMAIN and entity.domain == "conversation"
     ] == []
+
+
+@pytest.mark.parametrize(
+    ("options", "case"),
+    [
+        ({}, "a hub created in 5.0.x and never configured"),
+        ({CONF_TEMPERATURE: 0.9}, "a hub whose owner only moved the temperature slider"),
+    ],
+)
+async def test_options_that_are_not_agent_shaped_still_keep_their_entity(
+    hass: HomeAssistant, mock_llm_client, options: dict, case: str
+) -> None:
+    """What makes an entry legacy is the entity, not the shape of the options.
+
+    5.0.x built its single conversation entity from whatever `entry.options`
+    held, `{}` included. Testing the options alone therefore took the "nothing
+    to do" path for these entries, bumped `minor_version` past the refusal net
+    in conversation.py, and the entity vanished with nothing created to replace
+    it — reproduced against the state machine, not inferred. A registry row at
+    the legacy unique id is now enough on its own.
+    """
+    entry = _legacy_entry(hass, options=options)
+    _seed_entity(hass, "conversation", entry.entry_id, "gigachat")
+
+    assert await _setup(hass, entry, mock_llm_client)
+
+    agents = _agents(entry)
+    assert len(agents) == 1, case
+    # The entity is still there, still called what it was called, and it is a
+    # live entity rather than a registry row nobody backs.
+    moved = er.async_get(hass).async_get("conversation.gigachat")
+    assert moved is not None
+    assert moved.unique_id == f"{entry.entry_id}_{agents[0].subentry_id}"
+    assert hass.states.get("conversation.gigachat") is not None
+
+
+async def test_an_ai_task_row_alone_is_enough_to_migrate(
+    hass: HomeAssistant, mock_llm_client
+) -> None:
+    """A user who deleted the conversation entity but kept the AI Task one has
+    just as much to lose. Either legacy unique id counts."""
+    entry = _legacy_entry(hass, options={})
+    _seed_entity(hass, "ai_task", f"{entry.entry_id}_ai_task", "gigachat_ai_task")
+
+    assert await _setup(hass, entry, mock_llm_client)
+
+    agents = _agents(entry)
+    assert len(agents) == 1
+    moved = er.async_get(hass).async_get("ai_task.gigachat_ai_task")
+    assert moved.unique_id == f"{entry.entry_id}_{agents[0].subentry_id}_ai_task"
+
+
+async def test_a_stale_row_beside_real_agents_does_not_invent_another(
+    hass: HomeAssistant, mock_llm_client
+) -> None:
+    """An entry that grew a subentry leaves its legacy registry row behind as
+    an orphan. Widening the test to "a row exists" must not make that orphan a
+    reason to create a second agent."""
+    entry = _legacy_entry(
+        hass,
+        options={},
+        subentries_data=[
+            {
+                "data": {CONF_CHAT_MODEL: "GigaChat"},
+                "subentry_type": SUBENTRY_TYPE_CONVERSATION,
+                "title": "Existing",
+                "unique_id": None,
+            }
+        ],
+    )
+    _seed_entity(hass, "conversation", entry.entry_id, "orphan")
+
+    assert await _setup(hass, entry, mock_llm_client)
+
+    assert [agent.title for agent in _agents(entry)] == ["Existing"]
+    # And the misleading "carries legacy agent options alongside" line is not
+    # logged for options that carry nothing.
+    assert er.async_get(hass).async_get("conversation.orphan").unique_id == entry.entry_id
 
 
 async def test_a_second_setup_does_not_migrate_twice(hass: HomeAssistant, mock_llm_client) -> None:
@@ -268,8 +359,22 @@ async def test_a_refused_migration_leaves_the_entry_exactly_as_it_was(
     assert entry.minor_version == 1
     assert "refusing to migrate" in caplog.text
     # Refusing must degrade nothing: the entry keeps its legacy entity.
-    moved = er.async_get(hass).async_get("conversation.my_assistant")
+    #
+    # A registry row is not an entity. This assertion used to stop at the row,
+    # which meant the `minor_version < 2` net in conversation.py and ai_task.py
+    # — the only thing that actually builds the legacy entity — was never
+    # tested at all: mutating that comparison to `< 1` left every test passing
+    # while the user's assistant was gone. So the state machine is asked, for
+    # both platforms.
+    registry = er.async_get(hass)
+    moved = registry.async_get("conversation.my_assistant")
     assert moved.unique_id == entry.entry_id
+    assert hass.states.get("conversation.my_assistant") is not None
+
+    ai_task_id = registry.async_get_entity_id("ai_task", DOMAIN, f"{entry.entry_id}_ai_task")
+    assert ai_task_id is not None
+    assert hass.states.get(ai_task_id) is not None
+
     assert entry.runtime_data is mock_llm_client
 
 

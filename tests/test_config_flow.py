@@ -397,6 +397,13 @@ async def test_options_flow_offers_only_connection_settings(
     Checked against `subentry_schema` rather than a hand-written list of field
     names: a field added to the agent form later must not be able to leak back
     into the connection form without failing here.
+
+    The two schemas used to be allowed to *overlap* on exactly the two
+    connection switches, which is what let the bug live: `subentry_schema`
+    declared both with a voluptuous `default=`, so every agent save injected
+    them, and `client_util.get_client` then preferred the agent's copy over the
+    entry's. A setting with two owners has none. The assertion below is now
+    that the intersection is empty.
     """
     with patch(
         "custom_components.smartchain.get_client",
@@ -413,8 +420,7 @@ async def test_options_flow_offers_only_connection_settings(
     agent_fields = {
         str(key.schema) for key in subentry_schema(hass, "GigaChat", {}, models=["GigaChat"]).schema
     }
-    assert offered & agent_fields == {CONF_VERIFY_SSL, CONF_PROFANITY}
-    assert not (agent_fields - {CONF_VERIFY_SSL, CONF_PROFANITY}) & offered
+    assert offered & agent_fields == set()
 
 
 async def test_options_flow_saves_connection_settings(

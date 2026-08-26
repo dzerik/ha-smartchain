@@ -110,7 +110,6 @@ from .const import (
     TOOL_PARAMS_MODES,
     TOOL_SCRIPT_PATTERN,
     UNIQUE_ID,
-    UNIQUE_ID_GIGACHAT,
 )
 from .tools.inventory import materialise_allowed_tools
 
@@ -253,9 +252,11 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     # 1 -> 2 turns a legacy entry's agent-shaped `options` into a real
     # conversation subentry. 2 -> 3 folds `enable_history_tool` and
     # `enable_multi_agent_tools` into an explicit `allowed_tools` list, so that
-    # one control describes an agent's whole tool inventory. Both in
+    # one control describes an agent's whole tool inventory. 3 -> 4 moves
+    # `verify_ssl` and `profanity` off every agent and onto the entry, which is
+    # the only place they are read from now. All in
     # `__init__.async_migrate_entry`.
-    MINOR_VERSION = 3
+    MINOR_VERSION = 4
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Handle the initial step."""
@@ -598,23 +599,20 @@ def subentry_schema(
             ): bool,
         }
     )
-    if unique_id == UNIQUE_ID_GIGACHAT:
-        schema = schema.extend(
-            {
-                vol.Optional(
-                    CONF_PROFANITY,
-                    description={"suggested_value": options.get(CONF_PROFANITY, DEFAULT_PROFANITY)},
-                    default=DEFAULT_PROFANITY,
-                ): bool,
-                vol.Optional(
-                    CONF_VERIFY_SSL,
-                    description={
-                        "suggested_value": options.get(CONF_VERIFY_SSL, DEFAULT_VERIFY_SSL)
-                    },
-                    default=DEFAULT_VERIFY_SSL,
-                ): bool,
-            }
-        )
+    # `verify_ssl` and `profanity` are deliberately absent, though this schema
+    # declared both for GigaChat until v5.4.1. They are properties of the
+    # connection, not of an agent, and `connection_schema` renders them on the
+    # entry — but declaring them here too made that hub form a placebo. Both
+    # were `vol.Optional(..., default=...)`, so voluptuous injected them into
+    # *every* agent save whether or not the user had ever seen the field, and
+    # `client_util.get_client` preferred the agent's copy over `entry.options`.
+    # A hub set to `verify_ssl: False` therefore built its client with the
+    # agent's injected `True`. One setting, one place that owns it.
+    #
+    # An agent that already stored a value is handled by the 3 -> 4 migration
+    # in `__init__._migrate_connection_keys`, which lifts it onto the entry
+    # when the entry has none and then deletes the agent's copy.
+    #
     # An agent that predates v5.4.0 may carry no list at all while still having
     # a built-in switched on. Prefilling with the materialised equivalent rather
     # than the raw value means the form opens showing what the agent can

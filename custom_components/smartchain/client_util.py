@@ -176,13 +176,18 @@ async def get_client(
         if not common_args.get("model"):
             common_args.pop("model", None)
         common_args["credentials"] = entry.data[CONF_API_KEY]
-        # Prefer per-subentry value (passed via common_args); fall back to legacy entry.options.
-        verify_ssl = common_args.pop(
-            CONF_VERIFY_SSL, entry.options.get(CONF_VERIFY_SSL, DEFAULT_VERIFY_SSL)
-        )
-        profanity = common_args.pop(
-            CONF_PROFANITY, entry.options.get(CONF_PROFANITY, DEFAULT_PROFANITY)
-        )
+        # The connection owns these two, so `entry.options` is the only place
+        # they are read from. Until v5.4.1 a value in `common_args` — which
+        # `_resolve_client_args` copied out of the agent's data, and which
+        # `subentry_schema` injected into every agent save by way of a
+        # voluptuous `default=` — won instead, which made the hub's own
+        # connection form a placebo. The `pop` stays so that a stale key
+        # reaching this far is discarded rather than handed to GigaChat under
+        # a name it does not know.
+        common_args.pop(CONF_VERIFY_SSL, None)
+        common_args.pop(CONF_PROFANITY, None)
+        verify_ssl = entry.options.get(CONF_VERIFY_SSL, DEFAULT_VERIFY_SSL)
+        profanity = entry.options.get(CONF_PROFANITY, DEFAULT_PROFANITY)
         common_args["verify_ssl_certs"] = verify_ssl
         common_args["profanity_check"] = profanity
         # The field is `auto_upload_attachments`. It was `auto_upload_images`

@@ -43,10 +43,8 @@ from .const import (
     CONF_ENABLE_MULTI_AGENT_TOOLS,
     CONF_ENGINE,
     CONF_MAX_TOKENS,
-    CONF_PROFANITY,
     CONF_PROMPT,
     CONF_TEMPERATURE,
-    CONF_VERIFY_SSL,
     DEFAULT_TEMPERATURE,
     DOMAIN,
     EVENT_ENTITIES_REINDEXED,
@@ -108,7 +106,81 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         _migrate_agent_tool_lists(hass, entry)
         hass.config_entries.async_update_entry(entry, minor_version=3)
 
+    if entry.minor_version < 4:
+        options = _migrate_connection_keys(hass, entry)
+        hass.config_entries.async_update_entry(entry, options=options, minor_version=4)
+
     return True
+
+
+@callback
+def _migrate_connection_keys(hass: HomeAssistant, entry: ConfigEntry) -> dict[str, Any]:
+    """Move the connection switches off every agent and onto the entry.
+
+    Returns the options the entry should carry afterwards.
+
+    `verify_ssl` and `profanity` describe a connection to a provider, and
+    v5.1.0 moved them onto the entry for exactly that reason — but
+    `subentry_schema` went on declaring both for GigaChat with a voluptuous
+    `default=`, so every agent save injected them whether or not the user had
+    ever seen the field, and `client_util.get_client` preferred the agent's
+    copy. The hub form was a placebo. v5.4.1 removes the fields from the agent
+    form; this migration removes the values they left behind.
+
+    The one thing that must not happen is a working install changing
+    behaviour, and there is exactly one case where it could: an agent whose
+    stored value is what the client was actually being built with. So the
+    value is lifted onto the entry when the entry has none of its own, and
+    only then dropped. When the entry does carry the key the entry's value is
+    already the answer the user configured on the connection screen, and the
+    agent's copy is discarded — loudly, at INFO, if the two disagreed, because
+    that is the only case where someone's client changes.
+
+    Agents are visited in a fixed order, so two agents disagreeing over a key
+    the entry does not have resolves the same way on every run; the second
+    agent's value is then a disagreement with the freshly promoted one and is
+    logged as such.
+    """
+    from .config_flow import CONNECTION_KEYS
+
+    engine = entry.data.get(CONF_ENGINE) or ID_GIGACHAT
+    keys = CONNECTION_KEYS.get(engine, ())
+    options = dict(entry.options)
+    if not keys:
+        return options
+
+    for subentry in list((entry.subentries or {}).values()):
+        if subentry.subentry_type != SUBENTRY_TYPE_CONVERSATION:
+            continue
+        data = dict(subentry.data)
+        for key in keys:
+            if key not in data:
+                continue
+            stored = data.pop(key)
+            if key not in options:
+                options[key] = stored
+                LOGGER.info(
+                    "SmartChain entry %s: %r from agent %r now belongs to the connection",
+                    entry.title,
+                    key,
+                    subentry.title,
+                )
+            elif options[key] != stored:
+                LOGGER.info(
+                    "SmartChain entry %s: agent %r carried %s=%r; the connection's %r is "
+                    "what is used from now on. Change it on the connection's settings screen "
+                    "if that is not what you want",
+                    entry.title,
+                    subentry.title,
+                    key,
+                    stored,
+                    options[key],
+                )
+        if data == dict(subentry.data):
+            continue
+        hass.config_entries.async_update_subentry(entry, subentry, data=data)
+
+    return options
 
 
 @callback
@@ -152,6 +224,30 @@ def _migrate_agent_tool_lists(hass: HomeAssistant, entry: ConfigEntry) -> None:
 
 
 @callback
+def _legacy_unique_ids(entry: ConfigEntry) -> list[tuple[str, str, str]]:
+    """The unique ids a pre-agent entry's two entities were registered under.
+
+    ``(platform domain, legacy unique id, the suffix an agent's carries)``. One
+    list, so that "is this entry legacy" and "what has to be renamed" can never
+    answer for different sets of entities.
+    """
+    return [
+        ("conversation", entry.entry_id, ""),
+        ("ai_task", f"{entry.entry_id}_ai_task", "_ai_task"),
+    ]
+
+
+@callback
+def _has_legacy_entity(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Whether a registry row still sits at either legacy unique id."""
+    ent_reg = er.async_get(hass)
+    return any(
+        ent_reg.async_get_entity_id(domain, DOMAIN, old_unique_id) is not None
+        for domain, old_unique_id, _suffix in _legacy_unique_ids(entry)
+    )
+
+
+@callback
 def _migrate_legacy_agent(hass: HomeAssistant, entry: ConfigEntry) -> dict[str, Any] | None:
     """Turn a legacy entry's agent-shaped options into a real agent subentry.
 
@@ -167,12 +263,23 @@ def _migrate_legacy_agent(hass: HomeAssistant, entry: ConfigEntry) -> dict[str, 
     conversation entity and, when the AI Task platform is available, its
     counterpart. Moving one and orphaning the other is the same failure in a
     smaller costume.
+
+    What makes an entry legacy is the entity, not the options. The test used to
+    be "do the options look agent-shaped" alone, which lost the entity of every
+    entry whose options were not: a hub created in 5.0.x and never configured
+    has ``options == {}``, and one whose owner only ever moved the temperature
+    slider has ``{"temperature": 0.9}`` — yet both did get a working
+    ``conversation.*`` entity under 5.0.x, because that release built its
+    single entity from whatever `entry.options` held. Taking the "nothing to
+    do" path for those bumped `minor_version` past the refusal net in
+    `conversation.py` and `ai_task.py`, and the entity simply disappeared with
+    nothing created to replace it. So a registry row at either legacy unique id
+    is enough on its own to migrate, whatever shape the options are in.
     """
     options = dict(entry.options)
-    if not any(key in options for key in (CONF_CHAT_MODEL, CONF_CHAT_MODEL_USER, CONF_PROMPT)):
-        # Not agent-shaped: a connection-only entry, or one already migrated by
-        # hand. Nothing to do, and nothing to log about.
-        return options
+    agent_shaped = any(
+        key in options for key in (CONF_CHAT_MODEL, CONF_CHAT_MODEL_USER, CONF_PROMPT)
+    )
 
     agents = [
         sub
@@ -180,28 +287,40 @@ def _migrate_legacy_agent(hass: HomeAssistant, entry: ConfigEntry) -> dict[str, 
         if sub.subentry_type == SUBENTRY_TYPE_CONVERSATION
     ]
     if agents:
-        # Both options and agents. The options have been dead configuration
-        # since the first agent was created; clearing them would be tidier and
-        # is the one irreversible act available here, for data that costs
-        # nothing to leave alone. So: say so once, change nothing.
-        LOGGER.info(
-            "SmartChain entry %s carries legacy agent options alongside %d agent(s). "
-            "The options are no longer used or presented; they are left in storage untouched",
-            entry.title,
-            len(agents),
-        )
+        # An entry that already has agents never needs another, and the entity
+        # its agents own is the one the platforms create. A legacy registry row
+        # left over beside them is an orphan of an entry that grew a subentry,
+        # and renaming it onto an agent that already has an entity would
+        # collide; leave it.
+        if agent_shaped:
+            # Both options and agents. The options have been dead configuration
+            # since the first agent was created; clearing them would be tidier
+            # and is the one irreversible act available here, for data that
+            # costs nothing to leave alone. So: say so once, change nothing.
+            LOGGER.info(
+                "SmartChain entry %s carries legacy agent options alongside %d agent(s). "
+                "The options are no longer used or presented; they are left in storage untouched",
+                entry.title,
+                len(agents),
+            )
+        return options
+
+    if not agent_shaped and not _has_legacy_entity(hass, entry):
+        # Neither agent-shaped options nor an entity to preserve: a
+        # connection-only entry, or one already migrated by hand. Nothing to
+        # do, and nothing to log about.
         return options
 
     from .config_flow import CONNECTION_KEYS, agent_title
 
     engine = entry.data.get(CONF_ENGINE) or ID_GIGACHAT
-    # The agent gets everything, including the connection switches —
-    # `_resolve_client_args` forwards those per agent, and dropping them would
-    # quietly change an existing GigaChat user's behaviour.
-    agent_data = dict(options)
-    connection_only = {
-        key: options[key] for key in CONNECTION_KEYS.get(engine, ()) if key in options
-    }
+    # The connection switches stay with the connection and are not copied onto
+    # the agent: `client_util.get_client` reads them off `entry.options` and
+    # nowhere else, so a copy on the agent would be dead weight that the
+    # 3 -> 4 migration would only have to delete again.
+    connection_keys = CONNECTION_KEYS.get(engine, ())
+    agent_data = {key: value for key, value in options.items() if key not in connection_keys}
+    connection_only = {key: options[key] for key in connection_keys if key in options}
 
     subentry = ConfigSubentry(
         data=agent_data,
@@ -213,12 +332,8 @@ def _migrate_legacy_agent(hass: HomeAssistant, entry: ConfigEntry) -> dict[str, 
 
     ent_reg = er.async_get(hass)
     moves = [
-        ("conversation", entry.entry_id, f"{entry.entry_id}_{subentry.subentry_id}"),
-        (
-            "ai_task",
-            f"{entry.entry_id}_ai_task",
-            f"{entry.entry_id}_{subentry.subentry_id}_ai_task",
-        ),
+        (domain, old_unique_id, f"{entry.entry_id}_{subentry.subentry_id}{suffix}")
+        for domain, old_unique_id, suffix in _legacy_unique_ids(entry)
     ]
     done: list[tuple[str, str]] = []
     for domain, old_unique_id, new_unique_id in moves:
@@ -286,11 +401,13 @@ def _resolve_client_args(options: dict) -> dict:
         common_args["temperature"] = temperature
     if max_tokens is not None:
         common_args["max_tokens"] = max_tokens
-    # Pass through GigaChat-specific toggles so subentry values aren't silently lost.
-    if CONF_VERIFY_SSL in options:
-        common_args[CONF_VERIFY_SSL] = options[CONF_VERIFY_SSL]
-    if CONF_PROFANITY in options:
-        common_args[CONF_PROFANITY] = options[CONF_PROFANITY]
+    # `verify_ssl` and `profanity` used to be forwarded from here whenever the
+    # agent's data carried them. They are connection settings and the entry
+    # owns them, so nothing is forwarded any more and `client_util.get_client`
+    # reads `entry.options` alone. This is the second half of the fix: the
+    # 3 -> 4 migration deletes an agent's stored copy, and not forwarding means
+    # a copy that survives anyway — hand-edited storage, a restore of an old
+    # backup — is inert rather than quietly outranking the hub.
     return common_args
 
 
