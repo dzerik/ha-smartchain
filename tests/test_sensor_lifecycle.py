@@ -8,15 +8,17 @@ to register it is exactly the implementation detail under change.
 
 import ast
 import logging
+from datetime import timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
+import homeassistant.util.dt as dt_util
 import pytest
 from homeassistant.const import Platform
-from homeassistant.core import HomeAssistant
+from homeassistant.core import CoreState, HomeAssistant
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_send
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant_custom_component.common import MockConfigEntry, async_fire_time_changed
 
 from custom_components import smartchain
 from custom_components.smartchain import sensor as sensor_platform
@@ -426,6 +428,256 @@ async def test_a_rehome_that_quietly_fails_still_frees_the_slot(
     assert len(owned) == 1
     assert owned[0].config_entry_id == first.entry_id
     assert "does not generate unique IDs" not in caplog.text
+
+
+def _sensor_registry_entry(hass: HomeAssistant) -> er.RegistryEntry:
+    """The singleton's registry entry, found by unique id like the code does."""
+    ent_reg = er.async_get(hass)
+    entity_id = ent_reg.async_get_entity_id("sensor", DOMAIN, sensor_platform.SENSOR_UNIQUE_ID)
+    assert entity_id is not None, "the singleton was never registered"
+    entry = ent_reg.async_get(entity_id)
+    assert entry is not None
+    return entry
+
+
+def _sensor_complaints(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
+    """Records this integration wrote about the singleton at WARNING or worse."""
+    return [
+        record
+        for record in caplog.records
+        if record.name.startswith("custom_components")
+        and "Last Analysis sensor" in record.getMessage()
+        and record.levelno >= logging.WARNING
+    ]
+
+
+async def _disable_the_sensor(
+    hass: HomeAssistant, disabler: er.RegistryEntryDisabler
+) -> er.RegistryEntry:
+    """Turn the singleton off the way the registry does it, and let HA settle."""
+    entry = _sensor_registry_entry(hass)
+    er.async_get(hass).async_update_entity(entry.entity_id, disabled_by=disabler)
+    await hass.async_block_till_done()
+    assert hass.states.get(entry.entity_id) is None, "a disabled entity must have no state"
+    return entry
+
+
+async def test_a_user_disabled_sensor_is_not_a_failed_move(
+    hass: HomeAssistant, mock_llm_client, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A sensor the user switched off is not a sensor that failed to come up.
+
+    A disabled entity has no state by design — Home Assistant never adds it to
+    the state machine. Judging the move by `hass.states.get` alone therefore
+    reads every unload of the owner as a failure: an ERROR blaming a platform
+    error that never happened, and the claim thrown away. `async_reload` runs on
+    every options save and every agent edit, so this is not a corner case, it is
+    the normal weekly life of anyone who turned the sensor off.
+    """
+    first = await _setup_entry(hass, mock_llm_client, "GigaChat")
+    second = await _setup_entry(hass, mock_llm_client, "GigaChat-2")
+    _assert_sensor_alive(hass, "with two entries")
+    await _disable_the_sensor(hass, er.RegistryEntryDisabler.USER)
+
+    caplog.clear()
+    assert await hass.config_entries.async_unload(first.entry_id)
+    await hass.async_block_till_done()
+
+    assert not _sensor_complaints(caplog), (
+        f"the user's own choice was reported as a failure: "
+        f"{[r.getMessage() for r in _sensor_complaints(caplog)]}"
+    )
+    # The choice is left standing, and the registration follows the hub that is
+    # still up so re-enabling has somewhere live to land.
+    registry_entry = _sensor_registry_entry(hass)
+    assert registry_entry.disabled_by is er.RegistryEntryDisabler.USER
+    assert registry_entry.config_entry_id == second.entry_id
+    assert hass.data[DOMAIN].get(sensor_platform.SENSOR_OWNER_KEY) == second.entry_id
+
+
+async def test_a_user_disabled_sensor_can_still_be_switched_back_on(
+    hass: HomeAssistant, mock_llm_client
+) -> None:
+    """The slot must not be left in a state the user cannot get out of.
+
+    Re-enabling an entity makes Home Assistant reload the config entry the
+    registry says owns it. If the unload left that pointing at the hub that
+    went away, or left the claim held by a hub with no entity, switching the
+    sensor back on gets the user nothing.
+    """
+    first = await _setup_entry(hass, mock_llm_client, "GigaChat")
+    second = await _setup_entry(hass, mock_llm_client, "GigaChat-2")
+    disabled = await _disable_the_sensor(hass, er.RegistryEntryDisabler.USER)
+
+    assert await hass.config_entries.async_unload(first.entry_id)
+    await hass.async_block_till_done()
+
+    er.async_get(hass).async_update_entity(disabled.entity_id, disabled_by=None)
+    await hass.async_block_till_done()
+    with patch(
+        "custom_components.smartchain.get_client",
+        new_callable=AsyncMock,
+        return_value=mock_llm_client,
+    ):
+        async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=60))
+        await hass.async_block_till_done()
+
+    _assert_sensor_alive(hass, "after the user switched it back on")
+    assert _sensor_registry_entry(hass).config_entry_id == second.entry_id
+
+
+async def test_a_user_disabled_sensor_survives_another_hub_loading(
+    hass: HomeAssistant, mock_llm_client, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A hub coming up after the move must not fight over a disabled singleton.
+
+    Whatever the unload decided has to hold when the next hub loads: still one
+    registry entry, still the user's `disabled_by`, and no second entity offered
+    under the same unique id.
+    """
+    first = await _setup_entry(hass, mock_llm_client, "GigaChat")
+    second = await _setup_entry(hass, mock_llm_client, "GigaChat-2")
+    await _disable_the_sensor(hass, er.RegistryEntryDisabler.USER)
+
+    assert await hass.config_entries.async_unload(first.entry_id)
+    await hass.async_block_till_done()
+
+    caplog.clear()
+    with patch(
+        "custom_components.smartchain.get_client",
+        new_callable=AsyncMock,
+        return_value=mock_llm_client,
+    ):
+        await hass.config_entries.async_setup(first.entry_id)
+        await hass.async_block_till_done()
+
+    assert "does not generate unique IDs" not in caplog.text
+    assert not _sensor_complaints(caplog)
+    ent_reg = er.async_get(hass)
+    owned = [
+        ent
+        for ent in ent_reg.entities.values()
+        if ent.platform == DOMAIN and ent.domain == "sensor"
+    ]
+    assert len(owned) == 1
+    assert owned[0].disabled_by is er.RegistryEntryDisabler.USER
+    # The hub that already carries it keeps it; a loaded owner is what makes
+    # re-enabling work.
+    assert hass.data[DOMAIN].get(sensor_platform.SENSOR_OWNER_KEY) == second.entry_id
+
+
+async def test_an_integration_disabled_sensor_is_not_a_failed_move(
+    hass: HomeAssistant, mock_llm_client, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The registry disables entities for reasons other than the user, too.
+
+    `disabled_by: integration` looks identical from the state machine's side —
+    no state — and is just as much not a failed platform setup.
+    """
+    first = await _setup_entry(hass, mock_llm_client, "GigaChat")
+    second = await _setup_entry(hass, mock_llm_client, "GigaChat-2")
+    await _disable_the_sensor(hass, er.RegistryEntryDisabler.INTEGRATION)
+
+    caplog.clear()
+    assert await hass.config_entries.async_unload(first.entry_id)
+    await hass.async_block_till_done()
+
+    assert not _sensor_complaints(caplog)
+    assert _sensor_registry_entry(hass).disabled_by is er.RegistryEntryDisabler.INTEGRATION
+    assert hass.data[DOMAIN].get(sensor_platform.SENSOR_OWNER_KEY) == second.entry_id
+
+
+async def test_a_hidden_sensor_moves_like_any_other(
+    hass: HomeAssistant, mock_llm_client, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Hidden is not disabled — the entity is live, only kept out of the UI.
+
+    Pinned separately so the fix for disabled entities is never widened into
+    "anything the registry marks up counts as moved".
+    """
+    first = await _setup_entry(hass, mock_llm_client, "GigaChat")
+    second = await _setup_entry(hass, mock_llm_client, "GigaChat-2")
+    hidden = _sensor_registry_entry(hass)
+    er.async_get(hass).async_update_entity(hidden.entity_id, hidden_by=er.RegistryEntryHider.USER)
+    await hass.async_block_till_done()
+    _assert_sensor_alive(hass, "while hidden")
+
+    caplog.clear()
+    assert await hass.config_entries.async_unload(first.entry_id)
+    await hass.async_block_till_done()
+
+    _assert_sensor_alive(hass, "after the owner of a hidden sensor unloaded")
+    assert not _sensor_complaints(caplog)
+    assert _sensor_registry_entry(hass).hidden_by is er.RegistryEntryHider.USER
+    assert hass.data[DOMAIN].get(sensor_platform.SENSOR_OWNER_KEY) == second.entry_id
+
+
+async def test_a_disabled_sensor_that_really_did_not_move_is_still_reported(
+    hass: HomeAssistant, mock_llm_client, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Being disabled must not become a blanket excuse for a broken move.
+
+    A disabled entity has no state to look at, so the check falls back on the
+    registry — and the registry only says the move happened if the entity now
+    belongs to the hub that received it. Accepting "disabled, therefore fine"
+    without that would hand the disabled case a silent pass over exactly the
+    failure the check was added for: a claim standing for a hub whose platform
+    never set the entity up.
+    """
+    first = await _setup_entry(hass, mock_llm_client, "GigaChat")
+    await _setup_entry(hass, mock_llm_client, "GigaChat-2")
+    disabled = await _disable_the_sensor(hass, er.RegistryEntryDisabler.USER)
+    assert disabled.config_entry_id == first.entry_id
+
+    caplog.clear()
+    with patch.object(
+        sensor_platform,
+        "SmartChainLastAnalysisSensor",
+        side_effect=RuntimeError("the entity could not be built"),
+    ):
+        assert await hass.config_entries.async_unload(first.entry_id)
+        await hass.async_block_till_done()
+
+    # The registration never left the hub that went away — the move failed.
+    assert _sensor_registry_entry(hass).config_entry_id == first.entry_id
+    assert _sensor_complaints(caplog), "a genuinely failed move went unannounced"
+    assert sensor_platform.SENSOR_OWNER_KEY not in hass.data[DOMAIN], (
+        f"the slot is still held by {hass.data[DOMAIN].get(sensor_platform.SENSOR_OWNER_KEY)}"
+    )
+
+
+async def test_nothing_is_rehomed_while_home_assistant_is_stopping(
+    hass: HomeAssistant, mock_llm_client, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A shutdown is not a hub going away, and must not start a platform up.
+
+    Re-forwarding the sensor platform during shutdown builds an entity that has
+    seconds to live, on an entry Home Assistant is about to tear down anyway.
+    """
+    first = await _setup_entry(hass, mock_llm_client, "GigaChat")
+    second = await _setup_entry(hass, mock_llm_client, "GigaChat-2")
+    _assert_sensor_alive(hass, "with two entries")
+
+    forwards: list[tuple[str, tuple]] = []
+    real_forward = hass.config_entries.async_forward_entry_setups
+
+    async def _record(entry, platforms):
+        forwards.append((entry.entry_id, tuple(platforms)))
+        await real_forward(entry, platforms)
+
+    caplog.clear()
+    hass.set_state(CoreState.stopping)
+    try:
+        with patch.object(hass.config_entries, "async_forward_entry_setups", side_effect=_record):
+            assert await hass.config_entries.async_unload(first.entry_id)
+            await hass.async_block_till_done()
+    finally:
+        hass.set_state(CoreState.running)
+
+    assert forwards == [], f"a platform was started up during shutdown: {forwards}"
+    assert not _sensor_complaints(caplog)
+    assert hass.data[DOMAIN].get(sensor_platform.SENSOR_OWNER_KEY) is None
+    assert second.state is not None
 
 
 def test_sensor_platform_is_not_imported_at_module_scope() -> None:

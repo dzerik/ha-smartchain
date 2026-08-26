@@ -267,7 +267,10 @@ class SmartChainConversationEntity(ConversationEntity):
         return prompt
 
     async def _build_extra_system_prompt(
-        self, options: dict[str, Any], user_input: ConversationInput
+        self,
+        options: dict[str, Any],
+        user_input: ConversationInput,
+        sticky_user_prompt: str | None = None,
     ) -> str | None:
         """Compose `extra_system_prompt` for a turn that goes through Assist.
 
@@ -288,6 +291,24 @@ class SmartChainConversationEntity(ConversationEntity):
         none. So the block this returns is only half the story — the caller
         puts the field back to the user's own text afterwards, and the reason
         it has to is written out at that line.
+
+        Two different things share that one field, and telling them apart is
+        the whole job here. The user's instruction is *theirs* and is meant to
+        stand for the session; the retrieved block is *ours* and must die with
+        its turn. HA's own read is
+        ``user_extra_system_prompt or self.extra_system_prompt`` — an `or`, not
+        a merge — so a turn that hands over a block hands over something in
+        place of the kept instruction. That is why `sticky_user_prompt` is a
+        parameter: on the second and later turns the caller usually supplies no
+        `extra_system_prompt`, and the instruction the user set on turn 1 lives
+        only in the field the caller passes in here. Composing it back in is
+        what keeps a retrieving turn from quietly dropping a standing order —
+        the same silent-loss failure, one field over, that the turn-scope reset
+        was written to fix.
+
+        When there is no block, nothing of ours needs carrying and
+        `user_input.extra_system_prompt` is returned untouched, `None` and all,
+        so HA's own fallback does the remembering exactly as before.
 
         `build_retrieved_context` is documented to never raise — it returns
         "" on any internal failure — so this trusts that contract the same
@@ -314,7 +335,7 @@ class SmartChainConversationEntity(ConversationEntity):
         if not block:
             return user_input.extra_system_prompt
 
-        extra = user_input.extra_system_prompt or ""
+        extra = user_input.extra_system_prompt or sticky_user_prompt or ""
         return f"{extra}\n\n{block}" if extra else block
 
     async def _async_get_skills_prompt(self) -> str:
@@ -345,7 +366,9 @@ class SmartChainConversationEntity(ConversationEntity):
             # What Home Assistant is holding from earlier turns of this
             # session — after the restore below, only the user's own text.
             sticky_extra_system_prompt = chat_log.extra_system_prompt
-            extra_system_prompt = await self._build_extra_system_prompt(options, user_input)
+            extra_system_prompt = await self._build_extra_system_prompt(
+                options, user_input, sticky_extra_system_prompt
+            )
             try:
                 await chat_log.async_provide_llm_data(
                     user_input.as_llm_context(DOMAIN),
@@ -371,6 +394,12 @@ class SmartChainConversationEntity(ConversationEntity):
             # feature for their text and takes it away from ours. Clearing the
             # field outright would evict the block by throwing the user's
             # instruction out with it.
+            #
+            # The composer was handed that kept value and folds it into what it
+            # returns, so on a retrieving turn HA stores instruction *plus*
+            # block. This line is what keeps the two apart: the field goes back
+            # to the instruction alone, which is both what the next turn should
+            # inherit and what the next composer reads to carry it forward.
             chat_log.extra_system_prompt = user_input.extra_system_prompt or (
                 sticky_extra_system_prompt
             )

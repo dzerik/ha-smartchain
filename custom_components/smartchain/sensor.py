@@ -28,7 +28,7 @@ _MAX_FULL_RESPONSE_LEN = 4096
 SENSOR_OWNER_KEY = "last_analysis_sensor_owner"
 
 # The singleton's unique id. A module constant rather than a literal on the
-# entity class alone, because `_sensor_is_live` has to find the entity by it —
+# entity class alone, because `_sensor_moved_to` has to find the entity by it —
 # the entity_id is the user's to rename, the unique id is not.
 SENSOR_UNIQUE_ID = f"{DOMAIN}_last_analysis"
 
@@ -82,10 +82,19 @@ async def async_rehome_sensor(hass: HomeAssistant, leaving_entry_id: str) -> Non
     run, and not one word said about the singleton. The `except` branch below
     is kept because it costs nothing and a future Home Assistant may well let
     something through, but it is the check after it that covers what actually
-    happens today.
+    happens today. See `_sensor_moved_to` for the one entity that has no state
+    to judge and is not a failure either — the one the user switched off.
     """
     domain_data = hass.data.get(DOMAIN)
     if domain_data is None or domain_data.get(SENSOR_OWNER_KEY) is not None:
+        return
+
+    # A shutdown is not a hub going away. Every entry is on its way down, so
+    # starting a platform on one of them builds an entity with seconds to live
+    # and delays the stop for nothing — and Home Assistant's own retry paths
+    # take the same `is_stopping` exit. The slot has already been given up by
+    # the caller, so the next start claims it from scratch.
+    if hass.is_stopping:
         return
 
     for entry in hass.config_entries.async_entries(DOMAIN):
@@ -105,7 +114,7 @@ async def async_rehome_sensor(hass: HomeAssistant, leaving_entry_id: str) -> Non
             )
             async_release_sensor_owner(hass, entry.entry_id)
             return
-        if not _sensor_is_live(hass):
+        if not _sensor_moved_to(hass, entry.entry_id):
             LOGGER.error(
                 "The SmartChain Last Analysis sensor did not come back on %s after its "
                 "previous hub unloaded; releasing the claim so the next hub to load can "
@@ -116,20 +125,38 @@ async def async_rehome_sensor(hass: HomeAssistant, leaving_entry_id: str) -> Non
         return
 
 
-def _sensor_is_live(hass: HomeAssistant) -> bool:
-    """Whether the singleton is an entity in the state machine right now.
+def _sensor_moved_to(hass: HomeAssistant, entry_id: str) -> bool:
+    """Whether the singleton is now `entry_id`'s to keep.
 
     Found through the entity registry rather than by a hardcoded entity_id: the
     entity_id is the user's to rename and the unique id is not, so a renamed
     sensor must not read as a failed move.
 
-    A restored husk is not live. That is what the state looks like after the
-    owning platform went down and nothing brought the entity back, which is
-    precisely the case being tested for.
+    Ordinarily the answer is whether there is an entity in the state machine. A
+    restored husk is not one: that is exactly what the state looks like after
+    the owning platform went down and nothing brought the entity back.
+
+    A *disabled* entity has no state and never will — Home Assistant refuses to
+    add it, by the user's own instruction or the integration's. Reading that as
+    a failed move fought the user on every single unload, and `async_reload`
+    runs on every options save and every agent edit: an ERROR pointing at a
+    platform error that never happened, and the claim thrown away each time. So
+    disabled entities are judged on the one thing the move can still achieve
+    for them — being registered to the hub that received them, which is what
+    makes switching the sensor back on reach a hub that is actually loaded.
+
+    That ownership test is the whole of the concession, and it has to be: a
+    setup that fell over leaves the registration with the hub that left, so
+    "disabled, therefore fine" on its own would hand the disabled case a silent
+    pass over the very failure this check exists to catch.
     """
-    entity_id = er.async_get(hass).async_get_entity_id(Platform.SENSOR, DOMAIN, SENSOR_UNIQUE_ID)
+    registry = er.async_get(hass)
+    entity_id = registry.async_get_entity_id(Platform.SENSOR, DOMAIN, SENSOR_UNIQUE_ID)
     if entity_id is None:
         return False
+    registry_entry = registry.async_get(entity_id)
+    if registry_entry is not None and registry_entry.disabled:
+        return registry_entry.config_entry_id == entry_id
     state = hass.states.get(entity_id)
     return state is not None and not state.attributes.get("restored")
 

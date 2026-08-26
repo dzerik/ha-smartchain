@@ -190,6 +190,103 @@ async def test_the_users_own_extra_prompt_keeps_home_assistants_stickiness(
     assert log_two.extra_system_prompt == "Будь краток."
 
 
+async def test_a_retrieving_turn_two_keeps_the_instruction_from_turn_one(
+    hass: HomeAssistant,
+) -> None:
+    """The other half of the same field, and the one the first fix broke.
+
+    The test above only ever runs a turn 2 that retrieves *nothing*: the
+    composer returns `None`, HA reads `None` as "keep what you have", and the
+    instruction survives no matter what we do. The lossy path is the opposite
+    one — a turn that *does* retrieve passes a real string, and HA's
+    ``user_extra_system_prompt or self.extra_system_prompt`` then takes it
+    instead of the kept instruction, not on top of it. So whatever we hand
+    over on a retrieving turn has to carry the instruction itself.
+
+    Turn 2 supplies no `extra_system_prompt` of its own — as callers on the
+    second and later turns of a session normally do not — and retrieves. "Будь
+    краток." must still be in force.
+    """
+    ent = _entity(hass)
+    log_one = _fresh_log(hass)
+
+    with patch(_BUILD_RETRIEVED, new=AsyncMock(side_effect=[BLOCK_ONE, BLOCK_TWO])):
+        await _run(ent, log_one, "включи свет на кухне", extra="Будь краток.")
+        log_two = _next_turn(log_one)
+        await _run(ent, log_two, "что с телевизором")
+
+    prompt = log_two.content[0].content
+    assert "Будь краток." in prompt, (
+        "turn 2 retrieved, so the block replaced the session instruction instead"
+        f" of joining it:\n{prompt}"
+    )
+    assert log_two.extra_system_prompt == "Будь краток."
+
+
+async def test_a_retrieving_turn_two_does_not_carry_turn_ones_block(
+    hass: HomeAssistant,
+) -> None:
+    """Carrying the instruction forward must not carry the block with it.
+
+    The instruction is re-sent every retrieving turn, so the field it is read
+    back from has to hold the instruction *alone*. If the composed value were
+    stored instead, turn 2 would re-send turn 1's entity ids and their turn-1
+    states underneath its own — the exact staleness this module exists to stop,
+    only now hidden behind a turn that does produce a fresh block.
+    """
+    ent = _entity(hass)
+    log_one = _fresh_log(hass)
+
+    with patch(_BUILD_RETRIEVED, new=AsyncMock(side_effect=[BLOCK_ONE, BLOCK_TWO])):
+        await _run(ent, log_one, "включи свет на кухне", extra="Будь краток.")
+        log_two = _next_turn(log_one)
+        await _run(ent, log_two, "что с телевизором")
+
+    prompt = log_two.content[0].content
+    assert "light.kitchen" not in prompt, f"turn 1's block rode along:\n{prompt}"
+    assert prompt.count(_RETRIEVED_HEADING) == 1
+    assert _RETRIEVED_HEADING not in (log_two.extra_system_prompt or "")
+
+
+async def test_a_retrieving_turn_two_shows_its_own_block(hass: HomeAssistant) -> None:
+    """Carrying the instruction must not cost turn 2 its own retrieval."""
+    ent = _entity(hass)
+    log_one = _fresh_log(hass)
+
+    with patch(_BUILD_RETRIEVED, new=AsyncMock(side_effect=[BLOCK_ONE, BLOCK_TWO])):
+        await _run(ent, log_one, "включи свет на кухне", extra="Будь краток.")
+        log_two = _next_turn(log_one)
+        await _run(ent, log_two, "что с телевизором")
+
+    prompt = log_two.content[0].content
+    assert "media_player.tv" in prompt, f"turn 2 lost its own block:\n{prompt}"
+    assert prompt.index("Будь краток.") < prompt.index("media_player.tv")
+
+
+async def test_two_retrieving_turns_with_no_instruction_at_all(hass: HomeAssistant) -> None:
+    """The common case: nobody ever set an `extra_system_prompt`.
+
+    Nothing of the user's exists to carry, so the field must come back empty —
+    not holding the composed block, which is what would let turn 3 inherit
+    turn 2's entities.
+    """
+    ent = _entity(hass)
+    log_one = _fresh_log(hass)
+
+    with patch(_BUILD_RETRIEVED, new=AsyncMock(side_effect=[BLOCK_ONE, BLOCK_TWO])):
+        await _run(ent, log_one, "включи свет на кухне")
+        log_two = _next_turn(log_one)
+        await _run(ent, log_two, "что с телевизором")
+
+    prompt = log_two.content[0].content
+    assert "media_player.tv" in prompt
+    assert "light.kitchen" not in prompt, f"turn 1's block rode along:\n{prompt}"
+    assert log_two.extra_system_prompt is None, (
+        "nothing of the user's was ever set, so the field must be empty rather"
+        f" than holding ours: {log_two.extra_system_prompt!r}"
+    )
+
+
 async def test_a_new_extra_prompt_on_turn_two_replaces_the_old_one(
     hass: HomeAssistant,
 ) -> None:

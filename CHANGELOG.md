@@ -11,6 +11,27 @@ project follows [Semantic Versioning](https://semver.org/).
 > **Note:** the `5.4.0` section below is a roll-up: it covers `5.4.0` through
 > `5.4.7`, which were developed on one branch and are not separated here.
 
+## [5.4.16] - unreleased
+
+### Fixed
+- **A sticky instruction fell out of the prompt on the turns that retrieved.**
+  `5.4.15` stopped the retrieved entity block from outliving its turn by
+  restoring `chat_log.extra_system_prompt` from `user_input` — which on turn two
+  is usually `None`, so a session-long instruction from the caller quietly
+  stopped applying. Home Assistant reads that field as `user_extra or stored`,
+  an `or` rather than a merge, so a turn carrying our block was replacing the
+  instruction rather than adding to it. The composer now takes the stored
+  instruction as an argument and puts it in front of its block, and the field is
+  restored to the instruction alone — the one thing that is meant to be sticky.
+- **A sensor the user switched off looked like a failed handover.** A disabled
+  entity has no state by design, so the liveness check introduced in `5.4.15`
+  logged an error and released the slot on every unload of the owning entry —
+  which is every settings save. Such a sensor is now judged by the one thing a
+  handover can achieve for it, its registry `config_entry_id`; the forward still
+  happens, so switching it back on reloads the hub that is actually there. The
+  same applies to an integration-disabled entity, and nothing is rehomed at all
+  while Home Assistant is shutting down.
+
 ## [5.4.15] - unreleased
 
 ### Fixed
