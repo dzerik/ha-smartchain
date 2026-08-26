@@ -36,8 +36,11 @@ from .tools.subentry_source import merge_tool_sources, tools_from_subentries
 
 __all__ = ["async_generate_structured"]
 from .const import (
+    CONF_ALLOWED_TOOLS,
     CONF_CHAT_MODEL,
     CONF_CHAT_MODEL_USER,
+    CONF_ENABLE_HISTORY_TOOL,
+    CONF_ENABLE_MULTI_AGENT_TOOLS,
     CONF_ENGINE,
     CONF_MAX_TOKENS,
     CONF_PROFANITY,
@@ -90,18 +93,62 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     inside setup would re-enter setup. `async_migrate_entry` is Home Assistant's
     dedicated pre-setup hook and runs before that listener exists.
     """
-    if entry.minor_version >= 2:
-        return True
+    if entry.minor_version < 2:
+        options = _migrate_legacy_agent(hass, entry)
+        if options is None:
+            # The migration refused. Leave `minor_version` at 1 so the entry
+            # stays on the legacy path, and so the attempt is retried on the
+            # next start once whatever blocked it has been resolved. Minor
+            # version 3 is not attempted either: the entry has no agent
+            # subentry to write a tool list onto.
+            return True
+        hass.config_entries.async_update_entry(entry, options=options, minor_version=2)
 
-    options = _migrate_legacy_agent(hass, entry)
-    if options is None:
-        # The migration refused. Leave `minor_version` at 1 so the entry stays
-        # on the legacy path, and so the attempt is retried on the next start
-        # once whatever blocked it has been resolved.
-        return True
+    if entry.minor_version < 3:
+        _migrate_agent_tool_lists(hass, entry)
+        hass.config_entries.async_update_entry(entry, minor_version=3)
 
-    hass.config_entries.async_update_entry(entry, options=options, minor_version=2)
     return True
+
+
+@callback
+def _migrate_agent_tool_lists(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Write down each agent's built-in tools, then delete the switches.
+
+    Before v5.4.0 an agent's capabilities were split across three controls that
+    could not see each other: `allowed_tools` (custom tools only, and only
+    rendered when the tools registry was non-empty), `enable_history_tool` and
+    `enable_multi_agent_tools`. v5.4.0 makes `allowed_tools` the one control
+    and lists the built-ins in it, which leaves the two switches as a second
+    opinion on the same question — so they are folded in here and removed.
+
+    `materialise_allowed_tools` produces exactly the set the old three controls
+    produced between them, so no agent changes behaviour. What does change, and
+    is the point, is that the answer is now written down where the user can
+    read and edit it.
+
+    A consequence worth stating: every migrated agent now carries an explicit
+    list, so a built-in added in a *later* release is not granted to it
+    automatically. That is the same conservative rule `allowed_tools` has
+    always applied to custom tools, now applied to built-ins as well.
+    """
+    from .tools.inventory import materialise_allowed_tools
+
+    for subentry in list((entry.subentries or {}).values()):
+        if subentry.subentry_type != SUBENTRY_TYPE_CONVERSATION:
+            continue
+        data = dict(subentry.data)
+        data[CONF_ALLOWED_TOOLS] = materialise_allowed_tools(data)
+        data.pop(CONF_ENABLE_HISTORY_TOOL, None)
+        data.pop(CONF_ENABLE_MULTI_AGENT_TOOLS, None)
+        if data == dict(subentry.data):
+            continue
+        hass.config_entries.async_update_subentry(entry, subentry, data=data)
+        LOGGER.debug(
+            "SmartChain entry %s: agent %r now lists its tools explicitly",
+            entry.title,
+            subentry.title,
+        )
 
 
 @callback

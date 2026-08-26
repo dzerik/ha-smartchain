@@ -178,12 +178,10 @@
           "verify_ssl": "Verify SSL Certificates",
           "process_builtin_sentences": "Process HA Builtin Sentences",
           "chat_history": "Chat History",
-          "enable_history_tool": "State History Tool (LLM can query past device states)",
           "dynamic_entity_context": "Dynamic entity context (send a compact map of the home plus what the message is about, instead of every entity)",
           "dynamic_context_preset": "Which entities the map covers",
           "dynamic_context_on_assist": "Also add matched entities when the Assist API is enabled",
-          "allowed_tools": "Custom Tools (which YAML tools this agent may use)",
-          "enable_multi_agent_tools": "Multi-Agent Tools (agent can ask sibling agents and request a second opinion)"
+          "allowed_tools": "Tools (everything this agent may call, built-in and custom)"
         },
         "data_description": {
           "llm_hass_api": "Which Home Assistant Assist API(s) this agent can use to see and control your devices. Selecting one lets the agent call services like turning on lights; leaving it empty means the agent can only talk, not act.",
@@ -196,12 +194,10 @@
           "verify_ssl": "GigaChat-specific. When on, SmartChain verifies GigaChat's SSL certificate as usual. Turn it off only if you connect through a proxy with a self-signed certificate — doing so removes protection against a tampered connection.",
           "process_builtin_sentences": "When on and no Assist API is selected above, Home Assistant's own built-in sentence matching gets first try at your message (e.g. simple commands like \"turn off the kitchen light\"), and only messages it can't handle reach the LLM. Off sends every message straight to the model.",
           "chat_history": "When on, the agent remembers earlier messages in the same conversation, so follow-up questions work without repeating context. Off treats every message as a fresh conversation with no memory of what came before.",
-          "enable_history_tool": "Lets the agent look up how a device's state changed over the recent past (up to 24 hours) by calling a tool, instead of only seeing its current state. Useful for questions like \"was the door open earlier today\".",
           "dynamic_entity_context": "Controls how the agent learns about your entities. On (default), it gets a compact map of the whole home plus a handful of entities relevant to the current message — smaller, cheaper prompts, at the cost of occasionally missing an obscure entity the map or the match didn't surface. Off sends the full entity list on every turn, like before — larger, slower and pricier, but the agent always sees everything.",
           "dynamic_context_preset": "How much of the home the entity map and the per-message matches are allowed to cover, from minimal to paranoid — wider presets help the agent find more obscure entities but grow the prompt. Presence data (device trackers) is deliberately left out of every preset except maximal and paranoid, since it's the most sensitive data to hand to an outside model.",
           "dynamic_context_on_assist": "Adds the entities matched to your message onto Assist requests as well, not just plain conversation. Off by default because this block does not respect Home Assistant's own \"expose to Assist\" setting — turning it on can let the agent name entities you specifically withheld from Assist.",
-          "allowed_tools": "Restricts which custom tools from tools.yaml this agent may call. Select \"All tools\" to allow every tool — the same result as never touching this field. Select specific tools to allow only those. Select nothing to disable every custom tool for this agent.",
-          "enable_multi_agent_tools": "Lets this agent consult your other agents as sibling experts and ask one of them for a second opinion on its own answer. Only shown once you have two or more agents configured."
+          "allowed_tools": "The single list of everything this agent may call. It offers the six built-in tools alongside every custom tool you have written, so one place answers what this agent can do. \"All tools\" means every custom tool, including MCP tools by their prefixed name; a built-in is included only when its own name is selected. Select nothing to leave the agent with no tools at all. A tool added later is not granted to an agent that lists its tools explicitly."
         }
       }
     }
@@ -227,12 +223,10 @@
             "verify_ssl": "Verify SSL Certificates",
             "process_builtin_sentences": "Process HA Builtin Sentences",
             "chat_history": "Chat History",
-            "enable_history_tool": "State History Tool (LLM can query past device states)",
             "dynamic_entity_context": "Dynamic entity context (send a compact map of the home plus what the message is about, instead of every entity)",
             "dynamic_context_preset": "Which entities the map covers",
             "dynamic_context_on_assist": "Also add matched entities when the Assist API is enabled",
-            "allowed_tools": "Custom Tools (which YAML tools this agent may use)",
-            "enable_multi_agent_tools": "Multi-Agent Tools (agent can ask sibling agents and request a second opinion)"
+            "allowed_tools": "Tools (everything this agent may call, built-in and custom)"
           },
           "data_description": {
             "model": "The model to use, picked from the list SmartChain fetched from the provider. Leave the Custom Model Name field below empty to use this selection.",
@@ -245,12 +239,10 @@
             "verify_ssl": "GigaChat-specific. When on, SmartChain verifies GigaChat's SSL certificate as usual. Turn it off only if you connect through a proxy with a self-signed certificate — doing so removes protection against a tampered connection.",
             "process_builtin_sentences": "When on and no Assist API is selected above, Home Assistant's own built-in sentence matching gets first try at your message (e.g. simple commands like \"turn off the kitchen light\"), and only messages it can't handle reach the LLM. Off sends every message straight to the model.",
             "chat_history": "When on, the agent remembers earlier messages in the same conversation, so follow-up questions work without repeating context. Off treats every message as a fresh conversation with no memory of what came before.",
-            "enable_history_tool": "Lets the agent look up how a device's state changed over the recent past (up to 24 hours) by calling a tool, instead of only seeing its current state. Useful for questions like \"was the door open earlier today\".",
             "dynamic_entity_context": "Controls how the agent learns about your entities. On (default), it gets a compact map of the whole home plus a handful of entities relevant to the current message — smaller, cheaper prompts, at the cost of occasionally missing an obscure entity the map or the match didn't surface. Off sends the full entity list on every turn, like before — larger, slower and pricier, but the agent always sees everything.",
             "dynamic_context_preset": "How much of the home the entity map and the per-message matches are allowed to cover, from minimal to paranoid — wider presets help the agent find more obscure entities but grow the prompt. Presence data (device trackers) is deliberately left out of every preset except maximal and paranoid, since it's the most sensitive data to hand to an outside model.",
             "dynamic_context_on_assist": "Adds the entities matched to your message onto Assist requests as well, not just plain conversation. Off by default because this block does not respect Home Assistant's own \"expose to Assist\" setting — turning it on can let the agent name entities you specifically withheld from Assist.",
-            "allowed_tools": "Restricts which custom tools from tools.yaml this agent may call. Select \"All tools\" to allow every tool — the same result as never touching this field. Select specific tools to allow only those. Select nothing to disable every custom tool for this agent.",
-            "enable_multi_agent_tools": "Lets this agent consult your other agents as sibling experts and ask one of them for a second opinion on its own answer. Only shown once you have two or more agents configured."
+            "allowed_tools": "The single list of everything this agent may call. It offers the six built-in tools alongside every custom tool you have written, so one place answers what this agent can do. \"All tools\" means every custom tool, including MCP tools by their prefixed name; a built-in is included only when its own name is selected. Select nothing to leave the agent with no tools at all. A tool added later is not granted to an agent that lists its tools explicitly."
           }
         },
         "reconfigure": {
@@ -266,12 +258,10 @@
             "verify_ssl": "Verify SSL Certificates",
             "process_builtin_sentences": "Process HA Builtin Sentences",
             "chat_history": "Chat History",
-            "enable_history_tool": "State History Tool (LLM can query past device states)",
             "dynamic_entity_context": "Dynamic entity context (send a compact map of the home plus what the message is about, instead of every entity)",
             "dynamic_context_preset": "Which entities the map covers",
             "dynamic_context_on_assist": "Also add matched entities when the Assist API is enabled",
-            "allowed_tools": "Custom Tools (which YAML tools this agent may use)",
-            "enable_multi_agent_tools": "Multi-Agent Tools (agent can ask sibling agents and request a second opinion)"
+            "allowed_tools": "Tools (everything this agent may call, built-in and custom)"
           },
           "data_description": {
             "model": "The model to use, picked from the list SmartChain fetched from the provider. Leave the Custom Model Name field below empty to use this selection.",
@@ -284,12 +274,10 @@
             "verify_ssl": "GigaChat-specific. When on, SmartChain verifies GigaChat's SSL certificate as usual. Turn it off only if you connect through a proxy with a self-signed certificate — doing so removes protection against a tampered connection.",
             "process_builtin_sentences": "When on and no Assist API is selected above, Home Assistant's own built-in sentence matching gets first try at your message (e.g. simple commands like \"turn off the kitchen light\"), and only messages it can't handle reach the LLM. Off sends every message straight to the model.",
             "chat_history": "When on, the agent remembers earlier messages in the same conversation, so follow-up questions work without repeating context. Off treats every message as a fresh conversation with no memory of what came before.",
-            "enable_history_tool": "Lets the agent look up how a device's state changed over the recent past (up to 24 hours) by calling a tool, instead of only seeing its current state. Useful for questions like \"was the door open earlier today\".",
             "dynamic_entity_context": "Controls how the agent learns about your entities. On (default), it gets a compact map of the whole home plus a handful of entities relevant to the current message — smaller, cheaper prompts, at the cost of occasionally missing an obscure entity the map or the match didn't surface. Off sends the full entity list on every turn, like before — larger, slower and pricier, but the agent always sees everything.",
             "dynamic_context_preset": "How much of the home the entity map and the per-message matches are allowed to cover, from minimal to paranoid — wider presets help the agent find more obscure entities but grow the prompt. Presence data (device trackers) is deliberately left out of every preset except maximal and paranoid, since it's the most sensitive data to hand to an outside model.",
             "dynamic_context_on_assist": "Adds the entities matched to your message onto Assist requests as well, not just plain conversation. Off by default because this block does not respect Home Assistant's own \"expose to Assist\" setting — turning it on can let the agent name entities you specifically withheld from Assist.",
-            "allowed_tools": "Restricts which custom tools from tools.yaml this agent may call. Select \"All tools\" to allow every tool — the same result as never touching this field. Select specific tools to allow only those. Select nothing to disable every custom tool for this agent.",
-            "enable_multi_agent_tools": "Lets this agent consult your other agents as sibling experts and ask one of them for a second opinion on its own answer. Only shown once you have two or more agents configured."
+            "allowed_tools": "The single list of everything this agent may call. It offers the six built-in tools alongside every custom tool you have written, so one place answers what this agent can do. \"All tools\" means every custom tool, including MCP tools by their prefixed name; a built-in is included only when its own name is selected. Select nothing to leave the agent with no tools at all. A tool added later is not granted to an agent that lists its tools explicitly."
           }
         }
       },

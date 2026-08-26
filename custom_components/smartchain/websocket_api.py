@@ -25,10 +25,8 @@ from homeassistant.helpers import translation
 
 from .client_util import async_fetch_models, supports
 from .const import (
-    ALL_TOOLS_SENTINEL,
     CAPABILITY_CHAT,
     CAPABILITY_EMBEDDINGS,
-    CONF_ALLOWED_TOOLS,
     CONF_CHAT_MODEL,
     CONF_CHAT_MODEL_USER,
     CONF_ENGINE,
@@ -60,6 +58,7 @@ def async_register(hass: HomeAssistant) -> None:
     """Register every panel command."""
     websocket_api.async_register_command(hass, ws_agent_schema)
     websocket_api.async_register_command(hass, ws_agent_save)
+    websocket_api.async_register_command(hass, ws_agent_tools)
     websocket_api.async_register_command(hass, ws_settings_get)
     websocket_api.async_register_command(hass, ws_settings_save)
     websocket_api.async_register_command(hass, ws_agent_duplicate)
@@ -244,6 +243,45 @@ async def ws_agent_schema(
     )
 
 
+@websocket_api.require_admin
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "smartchain/agent/tools",
+        vol.Required("entry_id"): str,
+        vol.Required("subentry_id"): str,
+    }
+)
+@websocket_api.async_response
+async def ws_agent_tools(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Everything this agent can do, and what is stopping the rest.
+
+    The one screen that answers the question. Carries no configuration values —
+    only tool names, where each comes from, and whether it is on — so nothing
+    from `subentry.data` (which may hold a provider key on a legacy entry)
+    reaches the wire through here.
+    """
+    from .tools.inventory import describe_agent_tools
+
+    entry = _get_entry(hass, msg["entry_id"])
+    if entry is None:
+        connection.send_error(msg["id"], "not_found", "Unknown config entry")
+        return
+
+    subentry = entry.subentries.get(msg["subentry_id"])
+    if subentry is None or subentry.subentry_type != SUBENTRY_TYPE_CONVERSATION:
+        connection.send_error(msg["id"], "not_found", "Unknown agent")
+        return
+
+    connection.send_result(
+        msg["id"],
+        {"tools": describe_agent_tools(hass, entry, subentry.subentry_id, subentry.data)},
+    )
+
+
 def _describe_invalid(err: vol.Invalid) -> str:
     """A validation message that names the offending field.
 
@@ -306,6 +344,20 @@ async def ws_agent_save(
     if error:
         connection.send_error(msg["id"], "invalid_data", error)
         return
+
+    # Keep what this schema does not declare. `ws_agent_schema` strips undeclared
+    # keys before serving them (see F1 there), so a conditional field that is out
+    # of schema right now comes back absent — and replacing `subentry.data`
+    # wholesale would then delete the stored value. Merging is the actual fix;
+    # the field being conditional is only the trigger, and the next conditional
+    # field would reintroduce it.
+    declared = {str(key.schema) for key in schema.schema}
+    preserved = (
+        {name: value for name, value in subentry.data.items() if name not in declared}
+        if subentry is not None
+        else {}
+    )
+    data = {**preserved, **data}
 
     title = agent_title(data)
     if subentry is None:
@@ -545,7 +597,7 @@ def _describe_entry(hass: HomeAssistant, entry: ConfigEntry) -> dict[str, Any]:
         "engine_label": UNIQUE_ID.get(engine, engine),
         "supports_embeddings": supports(engine, CAPABILITY_EMBEDDINGS),
         "agents": [
-            _describe_agent(subentry)
+            _describe_agent(hass, entry, subentry)
             for subentry in entry.subentries.values()
             if subentry.subentry_type == SUBENTRY_TYPE_CONVERSATION
         ],
@@ -570,19 +622,26 @@ def _describe_entry(hass: HomeAssistant, entry: ConfigEntry) -> dict[str, Any]:
     }
 
 
-def _describe_agent(subentry: Any) -> dict[str, Any]:
+def _describe_agent(hass: HomeAssistant, entry: ConfigEntry, subentry: Any) -> dict[str, Any]:
+    """Public description of one agent, including how many tools it really has.
+
+    `tool_count` used to be `len(allowed_tools)`, or `None` for "all tools" —
+    a count of one *setting*, which never mentioned a built-in and so
+    understated every agent that had one. It is now the number of tools the
+    agent would actually be bound with, taken from the same inventory
+    `_async_handle_message` binds from.
+    """
+    from .tools.inventory import describe_agent_tools
+
     data = subentry.data
     model = (data.get(CONF_CHAT_MODEL_USER) or "").strip() or data.get(CONF_CHAT_MODEL, "")
-    allowed = data.get(CONF_ALLOWED_TOOLS)
-    # None (never touched) and the sentinel (explicitly "all tools") both mean
-    # every tool; the panel shows "all tools" rather than a count it cannot
-    # know without building the registry.
-    all_tools = allowed is None or ALL_TOOLS_SENTINEL in allowed
+    inventory = describe_agent_tools(hass, entry, subentry.subentry_id, data)
     return {
         "subentry_id": subentry.subentry_id,
         "title": subentry.title,
         "model": model,
-        "tool_count": None if all_tools else len(allowed),
+        "tool_count": sum(1 for row in inventory if row["enabled"]),
+        "tool_total": len(inventory),
     }
 
 

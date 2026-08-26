@@ -18,6 +18,8 @@ from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.smartchain.const import (
+    ALL_TOOLS_SENTINEL,
+    CONF_ALLOWED_TOOLS,
     CONF_API_KEY,
     CONF_CHAT_MODEL,
     CONF_ENGINE,
@@ -25,8 +27,11 @@ from custom_components.smartchain.const import (
     CONF_PROMPT,
     CONF_TEMPERATURE,
     CONF_VERIFY_SSL,
+    DELEGATE_TOOL_NAME,
     DOMAIN,
+    ENTITY_TOOL_NAME,
     ID_GIGACHAT,
+    MEMORY_TOOL_NAME,
     SUBENTRY_TYPE_CONVERSATION,
     SUBENTRY_TYPE_EMBEDDINGS,
 )
@@ -136,10 +141,21 @@ async def test_options_become_an_agent(hass: HomeAssistant, mock_llm_client) -> 
 
     agent = _agents(entry)[0]
     assert agent.title == "GigaChat-3-Ultra"
-    assert dict(agent.data) == LEGACY_OPTIONS
+    # ... plus the explicit tool list minor version 3 writes. The legacy agent
+    # had neither switch on, so it lists the sentinel and the four built-ins
+    # that were never gated by one — exactly what it could call before.
+    assert dict(agent.data) == {
+        **LEGACY_OPTIONS,
+        CONF_ALLOWED_TOOLS: [
+            ALL_TOOLS_SENTINEL,
+            DELEGATE_TOOL_NAME,
+            MEMORY_TOOL_NAME,
+            ENTITY_TOOL_NAME,
+        ],
+    }
     # The connection keeps only what belongs to the connection.
     assert dict(entry.options) == {CONF_VERIFY_SSL: False, CONF_PROFANITY: True}
-    assert entry.minor_version == 2
+    assert entry.minor_version == 3
 
 
 async def test_an_entry_with_both_is_left_alone(hass: HomeAssistant, mock_llm_client) -> None:
@@ -190,14 +206,14 @@ async def test_an_embeddings_subentry_does_not_count_as_an_agent(
 
 
 async def test_an_entry_with_neither_is_untouched(hass: HomeAssistant, mock_llm_client) -> None:
-    """A connection-only entry migrates to minor version 2 and gains nothing."""
+    """A connection-only entry migrates to the current minor version and gains nothing."""
     entry = _legacy_entry(hass, options={})
 
     assert await _setup(hass, entry, mock_llm_client)
 
     assert _agents(entry) == []
     assert dict(entry.options) == {}
-    assert entry.minor_version == 2
+    assert entry.minor_version == 3
     assert [
         entity
         for entity in er.async_get(hass).entities.values()

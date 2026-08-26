@@ -518,8 +518,8 @@ ENTITY_MEANINGFUL_DEVICE_CLASSES = [
     "problem",
 ]
 
-# RESERVED_TOOL_NAMES lives here, after ENTITY_TOOL_NAME, because it
-# references that name — defining it up near the other tool-name constants
+# The built-in tool names live here, after ENTITY_TOOL_NAME, because they
+# reference it — defining them up near the other tool-name constants
 # would forward-reference a name that doesn't exist yet at that point in the
 # module and raise NameError on import.
 #
@@ -530,16 +530,27 @@ ENTITY_MEANINGFUL_DEVICE_CLASSES = [
 # appended last, so it won the dispatch lookup while the built-in's description
 # was the one the model read. Reserving the full set makes the collision a
 # refusal at the point it is written instead.
-RESERVED_TOOL_NAMES = frozenset(
-    {
-        HISTORY_TOOL_NAME,
-        DELEGATE_TOOL_NAME,
-        ENTITY_TOOL_NAME,
-        MEMORY_TOOL_NAME,
-        DELEGATE_MANY_TOOL_NAME,
-        CRITIQUE_TOOL_NAME,
-    }
+#
+# The tuple is the ordered form: `allowed_tools` renders the built-ins in this
+# order and the agent inventory reports them in it, so the list a user reads is
+# stable between releases rather than following set iteration order.
+BUILTIN_TOOL_NAMES = (
+    HISTORY_TOOL_NAME,
+    DELEGATE_TOOL_NAME,
+    DELEGATE_MANY_TOOL_NAME,
+    CRITIQUE_TOOL_NAME,
+    MEMORY_TOOL_NAME,
+    ENTITY_TOOL_NAME,
 )
+
+RESERVED_TOOL_NAMES = frozenset(BUILTIN_TOOL_NAMES)
+
+# Suffix appended to a built-in's name in the `allowed_tools` picker, so a
+# built-in is distinguishable from a custom tool at a glance. `SelectOptionDict`
+# labels are plain strings that Home Assistant renders verbatim — they are not
+# looked up in `translations/`, which is why the two locales live here beside
+# `ALL_TOOLS_LABELS` rather than in the translation files.
+BUILTIN_TOOL_LABELS = {"en": "built-in", "ru": "встроенный"}
 
 # Dynamic entity context (v5.0.0, roadmap subsystem C)
 CONF_DYNAMIC_ENTITY_CONTEXT = "dynamic_entity_context"

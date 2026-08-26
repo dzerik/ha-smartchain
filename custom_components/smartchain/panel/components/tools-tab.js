@@ -183,13 +183,15 @@ memory:        # long-term memory and/or entity indexing</code></pre>
       <section>
         <h4>Restricting tools per agent</h4>
         <p>Each agent has its own "Allowed tools" setting (in that agent's options,
-        not in this file). Leave it unset to allow every registered tool, including
-        MCP tools by their prefixed name; set it to restrict the agent to just the
-        names listed. Note that it filters <em>custom</em> tools only — the built-in
-        tools an agent has switched on (<code>get_state_history</code>,
-        <code>ask_agent</code>, <code>ask_agents</code>, <code>critique_response</code>,
-        <code>search_memory</code>, <code>search_entities</code>) are added regardless
-        of what is listed there.</p>
+        not in this file), and since v5.4.0 it is the single control over
+        everything that agent can call. It lists the six built-in tools
+        (<code>get_state_history</code>, <code>ask_agent</code>, <code>ask_agents</code>,
+        <code>critique_response</code>, <code>search_memory</code>,
+        <code>search_entities</code>) alongside your own, so what an agent can do is
+        readable in one place — expand the tools cell in the Agents tab to see it.</p>
+        <p>"All tools" means every <em>custom</em> tool, including MCP tools by their
+        prefixed name; a built-in is included only when its own name is ticked.
+        Selecting nothing leaves the agent with no tools at all.</p>
       </section>
 
     </div>

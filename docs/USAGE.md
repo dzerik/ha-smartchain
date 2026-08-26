@@ -92,12 +92,10 @@ These options live on **each sub-entry**:
 | `llm_hass_api` | unset | Enable HA Assist API (device control via tool calling) |
 | `process_builtin_sentences` | true | Try HA's built-in intent parser first; fall back to LLM if no intent matched |
 | `chat_history` | true | Send multi-turn history (vs. just current message) |
-| `enable_history_tool` | false | Expose `get_state_history` LLM tool |
 | `dynamic_entity_context` *(v5.0.0+)* | **true** | Send a compact map of the home plus the entities the message is about, instead of every entity — see §9.11 |
 | `dynamic_context_preset` *(v5.0.0+)* | `optimal` | Which entities that map covers — see §9.11 |
 | `dynamic_context_on_assist` *(v5.0.0+)* | false | Also add the matched entities when the Assist API is on — see §9.11 |
-| `allowed_tools` *(v4.1.0+)* | all | Restrict which custom YAML / MCP tools this agent sees |
-| `enable_multi_agent_tools` *(v4.4.0+)* | false | Expose `ask_agents` + `critique_response` tools (only when ≥2 sub-entries exist) |
+| `allowed_tools` *(v4.1.0+, reshaped in v5.4.0)* | all | The one list of everything this agent may call — built-in tools and your own — see §7.5 |
 | `verify_ssl` (GigaChat only) | false | TLS verify toggle for self-signed Sber certs |
 | `profanity` (GigaChat only) | false | Enable GigaChat's profanity filter |
 
@@ -214,19 +212,22 @@ Fires `smartchain_entities_reindexed` with `{"stores": [<names>], "new": <int>, 
 
 ## 6. Built-in conversation tools
 
-Every conversation turn that involves the LLM may call these tools. Each is gated by an option or by repository state.
+Every conversation turn that involves the LLM may call these tools. Since v5.4.0 each is
+gated by **one** thing — the agent's `allowed_tools` list — plus, for some, a structural
+precondition it cannot work without. Expand an agent's tools cell in the panel's **Agents**
+tab to see the whole list, including what is off and why.
 
 | Tool | Enabled when | What it does |
 |---|---|---|
 | HA Assist API tools (lights, switches, climate…) | `llm_hass_api` set on subentry | Control devices via tool calls |
-| `get_state_history` | `enable_history_tool: true` | Read past device states from the recorder |
-| `ask_agent` | ≥ 2 sub-entries | Delegate the question to a specific sibling |
-| `ask_agents` *(v4.4.0+)* | `enable_multi_agent_tools: true` + ≥ 2 sub-entries | Parallel fan-out to several siblings (see §10) |
+| `get_state_history` | listed in `allowed_tools` | Read past device states from the recorder |
+| `ask_agent` | listed, **and** ≥ 2 conversation sub-entries on this entry | Delegate the question to a specific sibling |
+| `ask_agents` *(v4.4.0+)* | same | Parallel fan-out to several siblings (see §10) |
 | `critique_response` *(v4.4.0+)* | same | Ask a sibling to review a draft answer (see §10) |
-| `search_memory` *(v4.3.0+)* | at least one store in the `memory:` block | Semantic search over conversation + logbook embeddings (see §9) |
-| `search_entities` *(v5.0.0+)* | at least one store with a `source:` block | Find an entity by describing it, when the `entity_id` is unknown (see §9.10) |
-| Custom YAML tools | `tools:` block in YAML | User-declared tools (see §7) |
-| MCP tools | `mcp_servers:` block in YAML | Discovered automatically per server (see §8) |
+| `search_memory` *(v4.3.0+)* | listed, **and** at least one store configured | Semantic search over conversation + logbook embeddings (see §9) |
+| `search_entities` *(v5.0.0+)* | listed, **and** at least one store with a `source:` block | Find an entity by describing it, when the `entity_id` is unknown (see §9.10) |
+| Custom tools | listed, or covered by `"*"` | Your own tools, from the Tools tab or `tools.yaml` (see §7) |
+| MCP tools | listed, or covered by `"*"` | Discovered automatically per server (see §8) |
 
 The LLM decides on its own when to call each tool — you don't dispatch them directly. The tool result is returned to the model, which may produce a follow-up tool call or a final text answer.
 
@@ -369,16 +370,28 @@ Non-2xx responses become `"Error: HTTP <status>"`. Network failures and timeouts
 
 ### 7.5. Per-agent visibility
 
-By default every sub-entry sees every YAML tool. To restrict, set `allowed_tools` on a sub-entry:
+`allowed_tools` is the single control over what one agent may call. It offers the six
+built-in tools (labelled as built-in) alongside every custom and MCP tool, and it renders
+whether or not you have any custom tools:
 
 ```yaml
 # In the SmartChain sub-entry options UI:
 allowed_tools:
-  - turn_on_light
-  - list_recent_motion
+  - "*"                # every custom tool
+  - search_memory      # a built-in needs its own name
+  - get_state_history
 ```
 
-Semantics: missing/`None` = all tools available; empty list `[]` = no custom tools; explicit list = only those names.
+Semantics: missing/`None` = no restriction; `"*"` = every *custom* tool (not built-ins);
+an explicit name = that tool, built-in or custom; empty list `[]` = nothing.
+
+A tool added *after* an agent was given an explicit list is not granted to it — that is
+deliberate, and since v5.4.0 it applies to built-ins as well.
+
+> **Upgrading from 5.3 or earlier:** `enable_history_tool` and `enable_multi_agent_tools`
+> were separate switches, and `allowed_tools` filtered custom tools only. Config entries
+> migrate automatically: each agent's built-ins are written into its list and the switches
+> are removed, so no agent gains or loses a tool.
 
 ### 7.6. Reserved names
 

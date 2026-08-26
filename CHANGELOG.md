@@ -8,6 +8,72 @@ project follows [Semantic Versioning](https://semver.org/).
 > **Note:** `5.0.1`–`5.0.7` were released without changelog entries and are not
 > reconstructed here.
 
+## [5.4.0] - unreleased
+
+### Added
+- **One place that says what an agent can do.** The **Agents** tab's tools cell
+  expands into the agent's whole inventory — the six built-in tools and every
+  custom tool together, the ones that are *off* included, each with where it
+  comes from and, when it is off, why. Backed by a new admin-only
+  `smartchain/agent/tools` command.
+- **`tools/inventory.py`** is the single assembly. `_async_handle_message` binds
+  the tools this module returns, and the panel reports the same call, so the
+  report and the runtime cannot drift. A test drives a real message, captures
+  the `bind_tools` argument and asserts the two sets are equal.
+- `smartchain/overview` now serves `tool_count` (tools the agent really has) and
+  `tool_total` (tools it could have) per agent, so the tab can say "2 of 8".
+
+### Changed
+- **"Allowed tools" is now the one control over an agent's tools, and it always
+  renders.** It previously appeared only when the tools registry was non-empty,
+  so a user who had never written a `tools.yaml` had never seen it. It now lists
+  the six built-ins alongside your own tools, labelled as built-in.
+- **`enable_history_tool` and `enable_multi_agent_tools` are gone from the agent
+  form.** They were a second opinion on a question the list now answers, and two
+  controls that can disagree are worse than either alone. Config entries migrate
+  to minor version 3, which writes each agent's built-ins into its
+  `allowed_tools` list and deletes the switches — every agent keeps exactly the
+  tools it had. The two keys are still honoured for an agent that carries no
+  list at all, so a subentry built by a downstream integration still works.
+- **`ask_agents` and `critique_response` are separable.** One switch used to
+  hold both; they hold one list entry each, so an agent may fan out to its
+  siblings without also being allowed to ask one for a review.
+
+### Fixed
+- **`allowed_tools` did not do what it said.** Every built-in was appended
+  unconditionally and only custom tools were filtered, so an agent "restricted
+  to one custom tool" still received `search_memory`, `search_entities`,
+  `ask_agent` and the history tool. The list now filters built-ins too. Note
+  what this means for an agent that *already* had a restricted list: the
+  built-ins it never named are dropped from it — which is what the panel had
+  been telling users all along, and what minor version 3 writes down explicitly
+  so nobody's agent changes silently.
+- **`tool_count` in the Agents tab counted a setting, not a capability.** It was
+  `len(allowed_tools)`, or "all tools" when unset, and so never mentioned a
+  single built-in.
+- **`enable_multi_agent_tools` was gated on the wrong condition** — whether *any*
+  entry had *any* two subentries, so an embeddings binding made it appear where
+  it could not work, and it was hidden while creating the second agent, which is
+  when it is first wanted. The field is gone; the inventory answers the real
+  question (a second *conversation* agent on *this* entry) and says
+  `no_siblings` when the answer is no.
+- **Saving an agent could destroy a stored value.** `smartchain/agent/schema`
+  strips keys the current schema does not declare, and both save paths then
+  replaced `subentry.data` wholesale — so opening and saving an agent deleted
+  anything that happened to be out of schema. Both the websocket command and the
+  Devices & Services dialog now merge.
+- The Tools tab's note on "Allowed tools" is rewritten again: as of this release
+  it really does govern built-ins, which 5.3.0 corrected it to deny.
+
+### Notes
+- **`ALL_TOOLS_SENTINEL` (`*`) still means every *custom* tool**, not every
+  tool: a built-in needs its own name in the list. Widening it would make "all
+  my tools, but not `search_memory`" inexpressible. Absent still means no
+  restriction, and an empty list still means nothing — the ordering that keeps a
+  newly added tool from being granted to an agent that already has restrictions.
+  That rule now covers built-ins too, so a built-in added in a future release
+  will not appear in a migrated agent's list on its own.
+
 ## [5.3.0] - unreleased
 
 ### Added

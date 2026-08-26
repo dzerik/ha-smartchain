@@ -187,6 +187,19 @@ export const SC_STYLES = `
   .sc-agent-model, .sc-agent-tools {
     color: var(--secondary-text-color); font-size: 13px;
   }
+  .sc-agent-tools summary { cursor: pointer; }
+  .sc-tool-inventory-list { list-style: none; margin: 6px 0 0; padding: 0; }
+  .sc-tool-inventory-list li {
+    display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; padding: 2px 0;
+  }
+  .sc-tool-inventory-list code { font-size: 12px; color: var(--primary-text-color); }
+  /* A tool that is off must read as off at a glance, not only by its reason. */
+  .sc-tool-off code { text-decoration: line-through; color: var(--secondary-text-color); }
+  .sc-tool-source {
+    font-size: 11px; padding: 1px 6px; border-radius: 10px;
+    border: 1px solid var(--divider-color, #e0e0e0);
+  }
+  .sc-tool-reason { font-size: 11px; font-style: italic; }
   .sc-agent-actions { display: flex; gap: 8px; }
   .sc-agent-actions button, .sc-add {
     appearance: none; border: 1px solid var(--divider-color, #e0e0e0);

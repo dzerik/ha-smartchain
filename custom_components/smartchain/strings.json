@@ -81,12 +81,10 @@
           "verify_ssl": "Verify SSL Certificates",
           "process_builtin_sentences": "Process HA Builtin Sentences",
           "chat_history": "Chat History",
-          "enable_history_tool": "State History Tool (LLM can query past device states)",
           "dynamic_entity_context": "Dynamic entity context (send a compact map of the home plus what the message is about, instead of every entity)",
           "dynamic_context_preset": "Which entities the map covers",
           "dynamic_context_on_assist": "Also add matched entities when the Assist API is enabled",
-          "allowed_tools": "Custom Tools (which YAML tools this agent may use)",
-          "enable_multi_agent_tools": "Multi-Agent Tools (agent can ask sibling agents and request a second opinion)"
+          "allowed_tools": "Tools (everything this agent may call, built-in and custom)"
         }
       }
     }
@@ -112,12 +110,10 @@
             "verify_ssl": "Verify SSL Certificates",
             "process_builtin_sentences": "Process HA Builtin Sentences",
             "chat_history": "Chat History",
-            "enable_history_tool": "State History Tool (LLM can query past device states)",
             "dynamic_entity_context": "Dynamic entity context (send a compact map of the home plus what the message is about, instead of every entity)",
             "dynamic_context_preset": "Which entities the map covers",
             "dynamic_context_on_assist": "Also add matched entities when the Assist API is enabled",
-            "allowed_tools": "Custom Tools (which YAML tools this agent may use)",
-            "enable_multi_agent_tools": "Multi-Agent Tools (agent can ask sibling agents and request a second opinion)"
+            "allowed_tools": "Tools (everything this agent may call, built-in and custom)"
           }
         },
         "reconfigure": {
@@ -133,12 +129,10 @@
             "verify_ssl": "Verify SSL Certificates",
             "process_builtin_sentences": "Process HA Builtin Sentences",
             "chat_history": "Chat History",
-            "enable_history_tool": "State History Tool (LLM can query past device states)",
             "dynamic_entity_context": "Dynamic entity context (send a compact map of the home plus what the message is about, instead of every entity)",
             "dynamic_context_preset": "Which entities the map covers",
             "dynamic_context_on_assist": "Also add matched entities when the Assist API is enabled",
-            "allowed_tools": "Custom Tools (which YAML tools this agent may use)",
-            "enable_multi_agent_tools": "Multi-Agent Tools (agent can ask sibling agents and request a second opinion)"
+            "allowed_tools": "Tools (everything this agent may call, built-in and custom)"
           }
         }
       },

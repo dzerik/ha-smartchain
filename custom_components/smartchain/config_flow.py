@@ -30,6 +30,8 @@ from .client_util import async_fetch_models, supports, validate_client
 from .const import (
     ALL_TOOLS_LABELS,
     ALL_TOOLS_SENTINEL,
+    BUILTIN_TOOL_LABELS,
+    BUILTIN_TOOL_NAMES,
     CAPABILITY_EMBEDDINGS,
     CONF_ALLOWED_TOOLS,
     CONF_API_KEY,
@@ -40,8 +42,6 @@ from .const import (
     CONF_DYNAMIC_CONTEXT_ON_ASSIST,
     CONF_DYNAMIC_CONTEXT_PRESET,
     CONF_DYNAMIC_ENTITY_CONTEXT,
-    CONF_ENABLE_HISTORY_TOOL,
-    CONF_ENABLE_MULTI_AGENT_TOOLS,
     CONF_ENGINE,
     CONF_ENGINE_OPTIONS,
     CONF_FOLDER_ID,
@@ -57,8 +57,6 @@ from .const import (
     DEFAULT_CHAT_MODEL,
     DEFAULT_DYNAMIC_CONTEXT_ON_ASSIST,
     DEFAULT_DYNAMIC_ENTITY_CONTEXT,
-    DEFAULT_ENABLE_HISTORY_TOOL,
-    DEFAULT_ENABLE_MULTI_AGENT_TOOLS,
     DEFAULT_OLLAMA_BASE_URL,
     DEFAULT_PROCESS_BUILTIN_SENTENCES,
     DEFAULT_PROFANITY,
@@ -114,6 +112,7 @@ from .const import (
     UNIQUE_ID,
     UNIQUE_ID_GIGACHAT,
 )
+from .tools.inventory import materialise_allowed_tools
 
 LOGGER = logging.getLogger(__name__)
 
@@ -252,8 +251,11 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     VERSION = 1
     # 1 -> 2 turns a legacy entry's agent-shaped `options` into a real
-    # conversation subentry; see `__init__.async_migrate_entry`.
-    MINOR_VERSION = 2
+    # conversation subentry. 2 -> 3 folds `enable_history_tool` and
+    # `enable_multi_agent_tools` into an explicit `allowed_tools` list, so that
+    # one control describes an agent's whole tool inventory. Both in
+    # `__init__.async_migrate_entry`.
+    MINOR_VERSION = 3
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Handle the initial step."""
@@ -436,12 +438,18 @@ class ConversationSubentryFlow(ConfigSubentryFlow):
                 step_id="reconfigure", data_schema=schema, errors={"base": error}
             )
 
+        # Same merge, and the same reason, as `websocket_api.ws_agent_save`:
+        # a key this schema does not declare is absent from `user_input`, and
+        # writing `user_input` as the whole of `data` would delete it.
+        declared = {str(key.schema) for key in schema.schema}
+        preserved = {name: value for name, value in subentry.data.items() if name not in declared}
+
         title = agent_title(user_input)
         return self.async_update_and_abort(
             entry,
             subentry,
             title=title,
-            data=user_input,
+            data={**preserved, **user_input},
         )
 
 
@@ -558,15 +566,6 @@ def subentry_schema(
                 default=DEFAULT_CHAT_HISTORY,
             ): bool,
             vol.Optional(
-                CONF_ENABLE_HISTORY_TOOL,
-                description={
-                    "suggested_value": options.get(
-                        CONF_ENABLE_HISTORY_TOOL, DEFAULT_ENABLE_HISTORY_TOOL
-                    )
-                },
-                default=DEFAULT_ENABLE_HISTORY_TOOL,
-            ): bool,
-            vol.Optional(
                 CONF_DYNAMIC_ENTITY_CONTEXT,
                 description={
                     "suggested_value": options.get(
@@ -616,48 +615,54 @@ def subentry_schema(
                 ): bool,
             }
         )
+    # An agent that predates v5.4.0 may carry no list at all while still having
+    # a built-in switched on. Prefilling with the materialised equivalent rather
+    # than the raw value means the form opens showing what the agent can
+    # actually do, and saving it writes that down — which is how the last
+    # agents leave the legacy branch in `tools.inventory.builtin_admitted`.
+    return schema.extend(
+        {
+            vol.Optional(
+                CONF_ALLOWED_TOOLS,
+                description={"suggested_value": materialise_allowed_tools(options)},
+            ): allowed_tools_selector(hass),
+        }
+    )
+
+
+def allowed_tools_selector(hass) -> selector.SelectSelector:
+    """The one place an agent's whole tool inventory is offered.
+
+    Rendered unconditionally. Until v5.4.0 it appeared only when the tools
+    registry was non-empty, so a user who had never written a `tools.yaml` had
+    never seen it — and the six built-ins were governed elsewhere or nowhere,
+    which left no screen anywhere that answered "what can this agent do".
+
+    Built-ins are labelled as such, listed first and in a fixed order, so that
+    a name in this list is never ambiguous about where it comes from.
+    """
+    builtin_label = BUILTIN_TOOL_LABELS.get(hass.config.language, BUILTIN_TOOL_LABELS["en"])
     registry = hass.data.get(DOMAIN, {}).get("tools")
-    if registry is not None and len(registry) > 0:
-        tool_options: list[selector.SelectOptionDict] = [
-            selector.SelectOptionDict(
-                value=ALL_TOOLS_SENTINEL,
-                label=ALL_TOOLS_LABELS.get(hass.config.language, ALL_TOOLS_LABELS["en"]),
-            ),
-            *(selector.SelectOptionDict(value=name, label=name) for name in registry.names()),
-        ]
-        schema = schema.extend(
-            {
-                vol.Optional(
-                    CONF_ALLOWED_TOOLS,
-                    description={"suggested_value": options.get(CONF_ALLOWED_TOOLS)},
-                ): selector.SelectSelector(
-                    selector.SelectSelectorConfig(
-                        options=tool_options,
-                        multiple=True,
-                        mode=SelectSelectorMode("list"),
-                    ),
+    return selector.SelectSelector(
+        selector.SelectSelectorConfig(
+            options=[
+                selector.SelectOptionDict(
+                    value=ALL_TOOLS_SENTINEL,
+                    label=ALL_TOOLS_LABELS.get(hass.config.language, ALL_TOOLS_LABELS["en"]),
                 ),
-            }
-        )
-    # Multi-agent tools are only meaningful when the user has 2+ subentries.
-    entries = hass.config_entries.async_entries(DOMAIN) if hass else []
-    has_multiple_subentries = any(len(e.subentries or {}) > 1 for e in entries)
-    if has_multiple_subentries:
-        schema = schema.extend(
-            {
-                vol.Optional(
-                    CONF_ENABLE_MULTI_AGENT_TOOLS,
-                    description={
-                        "suggested_value": options.get(
-                            CONF_ENABLE_MULTI_AGENT_TOOLS,
-                            DEFAULT_ENABLE_MULTI_AGENT_TOOLS,
-                        )
-                    },
-                    default=DEFAULT_ENABLE_MULTI_AGENT_TOOLS,
-                ): bool,
-            }
-        )
-    return schema
+                *(
+                    selector.SelectOptionDict(value=name, label=f"{name} ({builtin_label})")
+                    for name in BUILTIN_TOOL_NAMES
+                ),
+                *(
+                    selector.SelectOptionDict(value=name, label=name)
+                    for name in (registry.names() if registry is not None else [])
+                ),
+            ],
+            multiple=True,
+            mode=SelectSelectorMode("list"),
+        ),
+    )
 
 
 def embeddings_subentry_schema(
