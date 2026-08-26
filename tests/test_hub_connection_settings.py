@@ -215,3 +215,85 @@ async def test_a_provider_with_no_connection_settings_is_untouched(hass: HomeAss
     assert dict(entry.options) == {}
     assert _agent(entry) == {CONF_CHAT_MODEL: "gpt-4o", CONF_VERIFY_SSL: True}
     assert entry.minor_version == 4
+
+
+async def test_toggling_verify_ssl_refetches_the_model_list(hass: HomeAssistant):
+    """A hub switch that feeds the fetch must invalidate what the fetch cached.
+
+    Verify SSL began reaching the GigaChat model listing in v5.4.11. That made
+    the panel's per-entry model cache newly wrong rather than merely stale:
+    nothing invalidated it but an explicit Refresh models, so someone whose
+    network requires certificate checking would turn the switch on, reopen the
+    panel and be served the list cached from the connection that was failing —
+    the switch looking broken rather than applied.
+    """
+    from custom_components.smartchain.websocket_api import _models_for
+
+    entry = _entry(hass, options={CONF_VERIFY_SSL: False}, agent_data={})
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    fetched: list[bool] = []
+
+    async def fake_fetch(hass_, engine, data, **kwargs):
+        fetched.append(data.get(CONF_VERIFY_SSL))
+        return ["", "GigaChat-2-Max"]
+
+    with patch(
+        "custom_components.smartchain.websocket_api.async_fetch_models",
+        side_effect=fake_fetch,
+    ):
+        await _models_for(hass, entry, refresh=False)
+        # Warm: a second read must not refetch, or this test could not tell
+        # invalidation from an absent cache.
+        await _models_for(hass, entry, refresh=False)
+        assert fetched == [False]
+
+        hass.config_entries.async_update_entry(entry, options={CONF_VERIFY_SSL: True})
+        await hass.async_block_till_done()
+
+        await _models_for(hass, entry, refresh=False)
+
+    assert fetched == [False, True], (
+        "the model list was still served from the cache built over the old connection"
+    )
+
+
+async def test_an_agent_save_does_not_throw_the_model_cache_away(hass: HomeAssistant):
+    """The other half of the same rule.
+
+    `update_listener` fires for every write to the entry, agent subentries
+    included, and an agent's prompt has nothing to do with which models the
+    provider serves. Invalidating on all of them would leave the cache barely
+    worth having — the panel would pay a network round trip on every click
+    between agents, which is the cost the cache exists to avoid.
+    """
+    from custom_components.smartchain.websocket_api import _models_for
+
+    entry = _entry(hass, options={CONF_VERIFY_SSL: True}, agent_data={})
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    calls = 0
+
+    async def fake_fetch(hass_, engine, data, **kwargs):
+        nonlocal calls
+        calls += 1
+        return ["", "GigaChat-2-Max"]
+
+    with patch(
+        "custom_components.smartchain.websocket_api.async_fetch_models",
+        side_effect=fake_fetch,
+    ):
+        await _models_for(hass, entry, refresh=False)
+        assert calls == 1
+
+        subentry = next(iter(entry.subentries.values()))
+        hass.config_entries.async_update_subentry(
+            entry, subentry, data={CONF_CHAT_MODEL: "GigaChat-2-Max", "prompt": "new prompt"}
+        )
+        await hass.async_block_till_done()
+
+        await _models_for(hass, entry, refresh=False)
+
+    assert calls == 1, "an agent edit refetched the model list"

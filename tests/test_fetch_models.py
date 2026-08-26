@@ -1,6 +1,6 @@
 """Tests for dynamic model fetching."""
 
-import asyncio
+import threading
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -9,9 +9,11 @@ from homeassistant.core import HomeAssistant
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.smartchain.client_util import (
+    MODEL_FETCH_TIMEOUT,
     ModelFetchError,
     async_fetch_models,
     connection_data,
+    is_embedding_model,
     static_models,
 )
 from custom_components.smartchain.const import (
@@ -20,6 +22,7 @@ from custom_components.smartchain.const import (
     CONF_ENGINE,
     CONF_VERIFY_SSL,
     DOMAIN,
+    EMBEDDING_MODELS_GIGACHAT,
     ENGINE_MODELS,
     ID_ANTHROPIC,
     ID_DEEPSEEK,
@@ -27,6 +30,7 @@ from custom_components.smartchain.const import (
     ID_OLLAMA,
     ID_OPENAI,
     ID_YANDEX_GPT,
+    MODELS_GIGACHAT,
     UNIQUE_ID_GIGACHAT,
     UNIQUE_ID_YANDEX_GPT,
 )
@@ -216,38 +220,96 @@ async def test_gigachat_fetch_honours_verify_ssl(hass: HomeAssistant, verify_ssl
     assert giga_cls.call_args.kwargs["verify_ssl_certs"] is verify_ssl
 
 
-async def test_gigachat_fetch_is_bounded_by_a_timeout(hass: HomeAssistant):
+async def test_gigachat_fetch_caller_is_bounded_by_a_timeout(hass: HomeAssistant):
     """A provider that accepts the connection and never answers must not hang.
 
-    `get_models` is a blocking SDK call on an executor thread and the only
-    provider fetch with no timeout of its own, so without this the Agents tab
-    waited on it for as long as the provider felt like. The executor hop is
-    stood in for here — what is under test is the bound around it, and a real
-    blocked worker thread would outlive the test that started it.
-    """
-    hung = asyncio.Event()
+    This used to stand the executor hop in with `await asyncio.sleep(30)`,
+    which made the test prove nothing about the code it names. An
+    `asyncio.sleep` is cancellable; the `run_in_executor` future it replaced is
+    not, and the whole question here is what `asyncio.timeout` can do to a
+    thread that has already started. The substitution answered "yes" to a
+    question the real path answers differently, so the test would have stayed
+    green through any regression in either direction.
 
-    async def never_answers(*args):
-        hung.set()
-        await asyncio.sleep(30)
+    So the hop is real: `hass.async_add_executor_job` runs a genuinely blocking
+    wait on a genuinely separate thread, exactly as `get_models` does. The
+    thread is released at the end rather than left to expire on its own — a
+    `time.sleep` long enough to be meaningful is a worker thread this test
+    leaks into the rest of the run.
+    """
+    entered = threading.Event()
+    release = threading.Event()
+
+    def blocks_a_worker_thread():
+        entered.set()
+        # Uncancellable from the event loop, like any blocking SDK call.
+        assert release.wait(timeout=30), "test never released the worker thread"
         raise AssertionError("should have been abandoned long before this")
 
-    started = time.monotonic()
-    with (
-        patch("custom_components.smartchain.client_util.GigaChat"),
-        patch("custom_components.smartchain.client_util.MODEL_FETCH_TIMEOUT", 0.05),
-        patch.object(hass, "async_add_executor_job", never_answers),
-        pytest.raises(ModelFetchError),
-    ):
-        await async_fetch_models(hass, ID_GIGACHAT, {CONF_API_KEY: "creds"}, strict=True)
-    waited = time.monotonic() - started
+    client = MagicMock()
+    client.get_models = blocks_a_worker_thread
 
-    assert hung.is_set()
+    started = time.monotonic()
+    try:
+        with (
+            patch("custom_components.smartchain.client_util.GigaChat", return_value=client),
+            patch("custom_components.smartchain.client_util.MODEL_FETCH_TIMEOUT", 0.05),
+            pytest.raises(ModelFetchError),
+        ):
+            await async_fetch_models(hass, ID_GIGACHAT, {CONF_API_KEY: "creds"}, strict=True)
+        waited = time.monotonic() - started
+    finally:
+        release.set()
+
+    assert entered.is_set(), "the blocking call never ran — nothing was bounded"
     # The elapsed time is the assertion that matters. Every way this call can
     # end raises something `async_fetch_models` turns into a ModelFetchError,
     # so `pytest.raises` alone would pass just as happily on a bound of an
     # hour as on one of 50ms.
     assert waited < 5, f"waited {waited:.1f}s — the fetch is not bounded"
+
+
+async def test_gigachat_fetch_bounds_the_worker_thread_too(hass: HomeAssistant):
+    """The bound the caller cannot provide for itself.
+
+    `asyncio.timeout` returns the *caller* on schedule and stops there: the
+    executor thread runs `get_models` to completion regardless, because an
+    asyncio cancellation cannot reach a `concurrent.futures` future that is
+    already running. Measured before the fix, a 10 s bound reported failure at
+    10.0 s and the thread stayed blocked for the provider's full 40 s.
+
+    The only thing that ends the call itself is the SDK's own request timeout,
+    so that is asserted here directly — on the constructor arguments, because
+    the alternative is a test that has to wait out a real socket to observe it.
+    langchain-gigachat threads `timeout` into `Settings.timeout` and on into
+    `httpx.Timeout`; `test_gigachat_timeout_reaches_the_http_layer` pins that
+    end of the contract so this one can stay cheap.
+    """
+    giga = MagicMock()
+    giga.return_value.get_models.return_value = MagicMock(data=[])
+    with (
+        patch("custom_components.smartchain.client_util.GigaChat", giga),
+        patch("custom_components.smartchain.client_util.MODEL_FETCH_TIMEOUT", 7),
+    ):
+        await async_fetch_models(hass, ID_GIGACHAT, {CONF_API_KEY: "creds"})
+
+    assert giga.call_args.kwargs["timeout"] == 7, (
+        "the SDK call is unbounded — the worker thread outlives the caller's timeout"
+    )
+
+
+def test_gigachat_timeout_reaches_the_http_layer():
+    """`timeout=` is only worth passing if the SDK honours it.
+
+    Guards the assumption the test above rests on, against the installed
+    langchain-gigachat rather than against a mock: the value must survive the
+    hop into the vendored SDK's settings, which is where it becomes the
+    request timeout that actually unblocks the thread.
+    """
+    from langchain_gigachat.chat_models.gigachat import GigaChat as RealGigaChat
+
+    client = RealGigaChat(credentials="creds", timeout=MODEL_FETCH_TIMEOUT)
+    assert client._client._settings.timeout == MODEL_FETCH_TIMEOUT
 
 
 async def test_connection_data_carries_the_hub_switches(hass: HomeAssistant):
@@ -265,3 +327,51 @@ async def test_connection_data_carries_the_hub_switches(hass: HomeAssistant):
     assert merged[CONF_API_KEY] == "creds"
     assert merged[CONF_VERIFY_SSL] is True
     assert "prompt" not in merged
+
+
+def test_gigachat_default_endpoint_serves_the_current_models():
+    """The reachability claim behind `MODELS_GIGACHAT[1]`, pinned.
+
+    `GigaChat-3-Ultra` sits at the head of the model dropdown and the GigaChat
+    connection form offers no base-URL field, so the model is reachable only
+    because the vendored SDK's default endpoint happens to be the one Sber
+    serves it from. That is a dependency default, and dependency defaults move:
+    gigachat 0.2.0 and 0.2.1 default to the legacy
+    `gigachat.devices.sberbank.ru` address, on which the first entry in our own
+    list would fail every message.
+
+    So the floor in `manifest.json` is load-bearing, and this asserts what the
+    floor was chosen to guarantee — against the resolved install rather than
+    against the version string, because a range is not a promise until
+    something checks what it resolved to.
+    """
+    from langchain_gigachat.chat_models.gigachat import GigaChat as RealGigaChat
+
+    base_url = RealGigaChat(credentials="creds")._client._settings.base_url
+    assert base_url.startswith("https://api.giga.chat"), (
+        f"GigaChat SDK defaults to {base_url!r}; the models at the top of "
+        "MODELS_GIGACHAT are not served there"
+    )
+    # The head of the list is the one a user lands on by accident, so it is the
+    # one whose reachability has to be true rather than assumed.
+    assert MODELS_GIGACHAT[1] == "GigaChat-3-Ultra"
+
+
+def test_gigachat_embedding_list_matches_sbers_catalogue():
+    """The static list is what a user picks from whenever the provider cannot
+    be reached, and it had fallen behind Sber's catalogue — which is how a
+    Custom Model name became the ordinary way to configure embeddings, and so
+    how the missing union in `embeddings_subentry_schema` became reachable.
+
+    Only the names Sber currently documents are asserted as required.
+    `GigaEmbedding` is deliberately still offered and deliberately not asserted
+    here: these lists never drop a name somebody may have stored.
+    """
+    for name in ("Embeddings", "EmbeddingsGigaR", "Embeddings-2", "Embeddings-3B-2025-09"):
+        assert name in EMBEDDING_MODELS_GIGACHAT, f"{name} is documented by Sber and not offered"
+
+    # Every offered name must also survive the chat/embeddings split, or it is
+    # in the list and still unreachable from the embeddings form.
+    for name in EMBEDDING_MODELS_GIGACHAT:
+        if name:
+            assert is_embedding_model(ID_GIGACHAT, name), f"{name} is filtered out as a chat model"

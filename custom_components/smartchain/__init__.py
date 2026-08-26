@@ -133,6 +133,19 @@ async def update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
     be discarded by it — after which the gated call below is a no-op, because
     that rebuild recorded the current fingerprint.
     """
+    # Imported here rather than at module scope: `websocket_api` imports from
+    # this module, and the panel registration at the bottom of `async_setup`
+    # defers for the same reason.
+    from .websocket_api import async_invalidate_stale_model_cache
+
+    # Before either branch, and unconditionally: the panel's model cache is
+    # keyed by entry and invalidated by nothing but an explicit Refresh models,
+    # so a connection edited here would otherwise keep serving the list fetched
+    # over the *old* connection until a restart. The call decides for itself
+    # whether this write touched the connection at all, so an agent save does
+    # not throw the cache away.
+    async_invalidate_stale_model_cache(hass, entry)
+
     if _entry_fingerprint(entry) != _entry_fingerprints(hass).get(entry.entry_id):
         await hass.config_entries.async_reload(entry.entry_id)
 
@@ -1153,6 +1166,10 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Initialize SmartChain."""
+    # Deferred for the same reason as in `update_listener`: `websocket_api`
+    # imports from this module.
+    from .websocket_api import async_invalidate_stale_model_cache
+
     engine = entry.data.get(CONF_ENGINE) or ID_GIGACHAT
 
     entry.async_on_unload(entry.add_update_listener(update_listener))
@@ -1165,6 +1182,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # final here, and an early `return False` further down must not leave the
     # listener reloading forever on a fingerprint that was never written.
     _entry_fingerprints(hass)[entry.entry_id] = _entry_fingerprint(entry)
+
+    # Same idea, different question, so it is seeded in the same place: record
+    # the connection as it stands now, so the first write to reach
+    # `update_listener` is compared against something. Unseeded, "no digest
+    # yet" is indistinguishable from "the connection changed", and the first
+    # agent save of a session would throw the model cache away for nothing.
+    async_invalidate_stale_model_cache(hass, entry)
 
     # `async_setup` runs once per HA run, so if a previous unload tore the shared
     # subsystems down (last entry removed, or the user hitting "Reload" on their
@@ -1244,6 +1268,14 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # `update_listener` at all. Setup writes a fresh digest on the way back
         # in regardless.
         domain_data.get("entry_fingerprints", {}).pop(entry.entry_id, None)
+        # The panel's model cache is deliberately *not* dropped here, though it
+        # is keyed by `entry_id` and accumulates the same way. Unload is not
+        # removal: an agent save reloads the entry, so clearing the cache on
+        # unload would refetch the model list on the next panel open after
+        # every single agent edit — defeating the cache for the sake of one
+        # dead list per hub a user removes. `async_invalidate_stale_model_cache`
+        # already drops the lists that are *wrong*, which is the half that
+        # matters.
     if not remaining and domain_data is not None:
         # Under the rebuild lock: this stops the very MCP manager, memory
         # registry and skeleton cache a `_reload_registry` in flight is

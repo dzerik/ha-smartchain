@@ -752,6 +752,24 @@ def embeddings_subentry_schema(
     exists purely to bind provider credentials to one embedding model.
     """
     current = defaults or {}
+
+    # The same union `subentry_schema` does, and for the same reason — it was
+    # applied there and not carried across, which left this form strictly
+    # worse off than the agent one it mirrors.
+    #
+    # It bites harder here. `_resolve_embeddings_model` collapses a Custom
+    # Model name into `model`, so the moment someone types a name the shipped
+    # list has not caught up with — which the docs actively tell them to do —
+    # the stored value is one this dropdown will not accept. No unreachable
+    # provider and no failed fetch is needed: the very next save is refused,
+    # including a save that only renames the binding and never touches the
+    # model at all. `EMBEDDING_MODELS_GIGACHAT` having gone stale is what made
+    # that the ordinary case rather than the exotic one.
+    models = list(models)
+    stored_model = current.get("model")
+    if stored_model and stored_model not in models:
+        models.append(stored_model)
+
     return vol.Schema(
         {
             vol.Required(

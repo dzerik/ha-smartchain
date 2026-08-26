@@ -12,7 +12,7 @@
   "issue_tracker": "https://github.com/dzerik/ha-smartchain/issues",
   "requirements": [
     "home-assistant-intents",
-    "gigachat>=0.2.0",
+    "gigachat>=0.2.3,<0.3",
     "jsonschema>=4.0",
     "langchain-anthropic>=0.3.0,<2",
     "langchain-community>=0.3.0,<0.5",
@@ -22,5 +22,5 @@
     "mcp>=1.0,<2",
     "yandexcloud>=0.295.0"
   ],
-  "version": "5.4.10"
+  "version": "5.4.11"
 }

@@ -416,17 +416,38 @@ async def _fetch_anthropic_models(hass: HomeAssistant, data: dict) -> list[str]:
 async def _fetch_gigachat_models(hass: HomeAssistant, data: dict) -> list[str]:
     """Fetch models from GigaChat API via SDK.
 
-    Two things every other provider's fetch already had. `verify_ssl_certs`
-    comes from the hub's own Verify SSL switch rather than being pinned to
-    `False` — v5.4.7 routed the chat client through that switch and left this
-    one behind, so the setting was a placebo for anyone whose network requires
-    certificate checking. And the call is bounded: `get_models` is a blocking
-    SDK call on an executor thread, so a provider that accepts the connection
-    and then never answers used to hang the Agents tab for as long as it felt
-    like, with no timeout anywhere in the path.
+    `verify_ssl_certs` comes from the hub's own Verify SSL switch rather than
+    being pinned to `False` — v5.4.7 routed the chat client through that switch
+    and left this one behind, so the setting was a placebo for anyone whose
+    network requires certificate checking.
+
+    The call is bounded twice, because one bound is not enough and the two stop
+    different things.
+
+    `asyncio.timeout` bounds *the caller*. It does work — the awaiting
+    coroutine is cancelled on schedule and `agent/schema` answers within
+    `MODEL_FETCH_TIMEOUT` — but that is all it does. `async_add_executor_job` is
+    `loop.run_in_executor`, and cancelling the asyncio future cannot cancel a
+    `concurrent.futures` future whose thread has already started. So until
+    v5.4.11 a provider that accepted the connection and never answered left a
+    Home Assistant worker thread blocked in `get_models` for as long as it
+    liked, long after the panel had been told the fetch failed. That pool is
+    shared and finite; enough abandoned fetches starve it, and the symptom then
+    is nothing to do with model lists.
+
+    `timeout=` is what actually stops that. langchain-gigachat threads it into
+    the SDK's `Settings.timeout`, which becomes the `httpx.Timeout` on the
+    request, so the blocking call returns on its own and the thread is
+    reclaimed. It is the inner bound of the two — a shade under the outer one
+    would be indistinguishable in practice, so they are simply the same number
+    and whichever fires first is correct.
     """
     verify_ssl = data.get(CONF_VERIFY_SSL, DEFAULT_VERIFY_SSL)
-    client = GigaChat(credentials=data[CONF_API_KEY], verify_ssl_certs=verify_ssl)
+    client = GigaChat(
+        credentials=data[CONF_API_KEY],
+        verify_ssl_certs=verify_ssl,
+        timeout=MODEL_FETCH_TIMEOUT,
+    )
     async with asyncio.timeout(MODEL_FETCH_TIMEOUT):
         result = await hass.async_add_executor_job(client.get_models)
     return sorted(m.id_ for m in result.data)

@@ -104,6 +104,32 @@ CONF_ENGINE_OPTIONS = [
 # equivalents) and because dropping a name that somebody has stored is exactly
 # the failure this list caused. `GigaChat:latest` is the old version-pinned
 # spelling, kept for the same reason.
+#
+# `GigaChat-3-Ultra` heads the list and is reachable with no base-URL field,
+# which is worth writing down because the opposite is easy to assume. Sber
+# serves it from https://api.giga.chat/ — the address that replaced
+# gigachat.devices.sberbank.ru on 2026-07-17 — and the vendored SDK's
+# `Settings.base_url` already defaults to `https://api.giga.chat/v1`, so
+# `get_client` building against the default endpoint builds against the right
+# one. Verified against the installed stack, not inferred:
+# `GigaChat(credentials=...)._client._settings.base_url` is that URL.
+#
+# That default is a *dependency* fact, so it is pinned as one: the manifest
+# floor was `gigachat>=0.2.0` and is now `gigachat>=0.2.3,<0.3`. 0.2.0 and
+# 0.2.1 default to the legacy address, on which this model does not exist, so
+# the old floor permitted an install where the first entry in this list failed
+# every message. Constraining the SDK is enough on its own and is the right
+# lever — it is the package whose default decides the endpoint — and it drags
+# langchain-gigachat along for free, since the releases that cap the SDK below
+# 0.2.3 (0.3.0 requires `gigachat<0.2.0`) are then unsatisfiable. Adding a
+# floor to langchain-gigachat as well only forces `langchain-core>=1` onto
+# every resolution split and makes the lock unsolvable.
+#
+# The alternative — a GigaChat base-URL field — would be a question every user
+# has to answer correctly to reach a model Sber documents as current, which is
+# a worse trade than a version floor.
+# `test_gigachat_default_endpoint_serves_the_current_models` fails if a future
+# resolution reintroduces the old default.
 MODELS_GIGACHAT = [
     "",
     "GigaChat-3-Ultra",
@@ -439,7 +465,26 @@ SUBENTRY_TYPE_EMBEDDINGS = "embeddings"
 
 # Static fallback embedding-model lists, used when a provider's API is
 # unreachable or has no list endpoint (YandexGPT).
-EMBEDDING_MODELS_GIGACHAT = ["", "Embeddings", "EmbeddingsGigaR", "GigaEmbedding"]
+#
+# GigaChat's list carries the same obligation as MODELS_GIGACHAT above, and
+# had gone stale in the same way: `Embeddings-2` and `Embeddings-3B-2025-09`
+# are both in Sber's model catalogue and neither was here. That gap was not
+# cosmetic either — it was what pushed people into the Custom Model field, and
+# a custom name is exactly what `embeddings_subentry_schema` used to refuse on
+# the *next* save, rename included.
+#
+# `GigaEmbedding` stays although Sber's catalogue page no longer lists it: the
+# rule for these lists is that a name somebody may already have stored is never
+# dropped, because dropping one is the failure the union in
+# `embeddings_subentry_schema` exists to catch.
+EMBEDDING_MODELS_GIGACHAT = [
+    "",
+    "Embeddings-3B-2025-09",
+    "Embeddings-2",
+    "EmbeddingsGigaR",
+    "Embeddings",
+    "GigaEmbedding",
+]
 EMBEDDING_MODELS_YANDEX_GPT = ["", "text-search-doc", "text-search-query"]
 EMBEDDING_MODELS_OPENAI = ["", "text-embedding-3-small", "text-embedding-3-large"]
 EMBEDDING_MODELS_OLLAMA = ["", "nomic-embed-text", "mxbai-embed-large", "bge-m3"]

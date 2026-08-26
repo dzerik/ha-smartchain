@@ -7,6 +7,7 @@ config flow builds, so the field list has one definition rather than two.
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 import shutil
@@ -59,6 +60,9 @@ from .tools.subentry_source import SOURCE_SUBENTRY, SOURCE_YAML
 LOGGER = logging.getLogger(__name__)
 
 _MODEL_CACHE = "panel_model_cache"
+# Per-entry digest of the connection each cached list was fetched over — see
+# `async_invalidate_stale_model_cache`.
+_CONNECTION_DIGESTS = "panel_model_cache_connections"
 
 
 @callback
@@ -107,9 +111,17 @@ async def _models_for(
     """Model list for an entry, fetched once and reused until asked to refresh.
 
     A flow dialog pays the network cost once per open. The panel would pay it on
-    every click between agents, so the list is cached and an explicit refresh is
-    the only invalidation. Keyed by entry id *and* purpose — a chat fetch and an
-    embeddings fetch on the same entry must not serve each other's list.
+    every click between agents, so the list is cached. Keyed by entry id *and*
+    purpose — a chat fetch and an embeddings fetch on the same entry must not
+    serve each other's list.
+
+    Two things invalidate it: an explicit Refresh models, and a change to the
+    connection the list was fetched over (`async_invalidate_stale_model_cache`).
+    The second was missing, and it made the hub's own settings look broken
+    rather than merely stale: Verify SSL began feeding this fetch in v5.4.11, so
+    a user whose network needs certificate checking would turn the switch on,
+    reopen the panel, and be served the list cached from the failing
+    connection — with nothing to suggest the setting had not taken.
 
     A *failed* fetch is not cached. It used to be, and the consequence was out
     of all proportion to its cause: one blip while the panel was first opening
@@ -136,6 +148,41 @@ async def _models_for(
         return static_models(engine, purpose)
     cache[key] = models
     return models
+
+
+@callback
+def async_invalidate_stale_model_cache(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Drop an entry's cached model lists when its *connection* has changed.
+
+    Called from `update_listener`, which fires for every write to the entry —
+    including an agent subentry save, which has nothing to do with which models
+    the provider serves. Invalidating on all of those would make the cache
+    little better than absent, so the trigger is narrowed to what a fetch
+    actually depends on: `connection_data(entry)`, the same view of the entry
+    the fetch itself is handed. Credentials, base URL and Verify SSL change the
+    answer; a prompt does not.
+
+    Both purposes go together. They are separate cache entries because they
+    hold different lists, but they are fetched over the one connection, so a
+    connection that has changed invalidates both.
+
+    The stored value is a one-way digest, never the connection itself:
+    `connection_data` carries the API key. It stays in `hass.data`, is never
+    returned, logged or sent anywhere, and nothing else may start reporting it.
+    """
+    domain_data = hass.data.setdefault(DOMAIN, {})
+    digests: dict[str, str] = domain_data.setdefault(_CONNECTION_DIGESTS, {})
+    digest = hashlib.sha256(
+        json.dumps(connection_data(entry), sort_keys=True, default=repr).encode()
+    ).hexdigest()
+
+    if digests.get(entry.entry_id) == digest:
+        return
+    digests[entry.entry_id] = digest
+
+    cache: dict[tuple[str, str], list[str]] = domain_data.setdefault(_MODEL_CACHE, {})
+    for purpose in (CAPABILITY_CHAT, CAPABILITY_EMBEDDINGS):
+        cache.pop((entry.entry_id, purpose), None)
 
 
 async def _async_field_texts(
@@ -441,15 +488,23 @@ def _invalid_fields(err: vol.Invalid) -> list[str]:
     return sorted({str(sub.path[0]) for sub in suberrors if getattr(sub, "path", None)})
 
 
-async def _describe_agent_invalid(hass: HomeAssistant, err: vol.Invalid) -> str:
+async def _describe_model_invalid(hass: HomeAssistant, err: vol.Invalid, subentry_type: str) -> str:
     """`_describe_invalid`, plus a sentence when the model is what was rejected.
 
-    The model select is the one field on this form whose valid values are
+    The model select is the one field on these forms whose valid values are
     decided elsewhere — by whatever the provider listed when the panel opened.
     So it is the one field a user can be refused on without having touched it:
     open an agent, edit the prompt, save, and be told `invalid_data: model`
     about a model that has been working all week. v5.4.7 fixed exactly this
-    shape of dead end for the stores form and did not carry it here.
+    shape of dead end for the stores form; v5.4.10 carried it to the agent
+    form and stopped there, leaving the embeddings form — whose stored value
+    is *more* likely to be off-list, because the docs tell people to type it
+    into Custom Model — reporting the raw machine key this release had just
+    finished removing one file over.
+
+    Both forms name the field `model` (`CONF_CHAT_MODEL`), so only the
+    translation scope differs and it is a parameter rather than a second copy
+    of this function.
 
     Every other field keeps the plain description: they fail because of
     something the user typed, and the control they typed it into is the
@@ -463,7 +518,7 @@ async def _describe_agent_invalid(hass: HomeAssistant, err: vol.Invalid) -> str:
         "model_unknown",
         "config_subentries",
         fallback=MODEL_UNKNOWN_FALLBACK,
-        subentry_type=SUBENTRY_TYPE_CONVERSATION,
+        subentry_type=subentry_type,
     )
     return invalid_data(fields, text)
 
@@ -538,7 +593,11 @@ async def ws_agent_save(
     try:
         data = ensure_storable(schema(dict(msg["data"])))
     except vol.Invalid as err:
-        connection.send_error(msg["id"], "invalid_data", await _describe_agent_invalid(hass, err))
+        connection.send_error(
+            msg["id"],
+            "invalid_data",
+            await _describe_model_invalid(hass, err, SUBENTRY_TYPE_CONVERSATION),
+        )
         return
 
     error = normalize_model_input(data)
@@ -1068,7 +1127,11 @@ async def ws_embeddings_save(
     try:
         data = ensure_storable(schema(dict(msg["data"])))
     except vol.Invalid as err:
-        connection.send_error(msg["id"], "invalid_data", _describe_invalid(err))
+        connection.send_error(
+            msg["id"],
+            "invalid_data",
+            await _describe_model_invalid(hass, err, SUBENTRY_TYPE_EMBEDDINGS),
+        )
         return
 
     model = _resolve_embeddings_model(data)
