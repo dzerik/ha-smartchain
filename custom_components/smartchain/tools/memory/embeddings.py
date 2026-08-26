@@ -16,6 +16,8 @@ from ...const import (
     CONF_BASE_URL,
     CONF_ENGINE,
     CONF_FOLDER_ID,
+    CONF_VERIFY_SSL,
+    DEFAULT_VERIFY_SSL,
     ID_GIGACHAT,
     ID_OLLAMA,
     ID_YANDEX_GPT,
@@ -98,7 +100,13 @@ def create_embeddings_from_subentry(
             GigaChatEmbeddings(
                 credentials=entry.data[CONF_API_KEY],
                 model=model,
-                verify_ssl_certs=False,
+                # Read from the entry's options, exactly as `get_client` reads
+                # it for the chat client (v5.4.1). Hardcoded False here, this
+                # was the one client left over which the hub's own "Verify SSL
+                # certificates" switch had no power: turning it on secured the
+                # conversation and left every embedding request unverified,
+                # against the same host with the same credentials.
+                verify_ssl_certs=entry.options.get(CONF_VERIFY_SSL, DEFAULT_VERIFY_SSL),
             ),
         )
 

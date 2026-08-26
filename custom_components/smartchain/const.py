@@ -94,13 +94,53 @@ CONF_ENGINE_OPTIONS = [
     selector.SelectOptionDict(value=ID_DEEPSEEK, label=UNIQUE_ID_DEEPSEEK),
     selector.SelectOptionDict(value=ID_ANTHROPIC, label=UNIQUE_ID_ANTHROPIC),
 ]
+# GigaChat's catalogue, newest first under the blank "custom" entry. This list
+# is what a user sees whenever the provider cannot be reached, so a name
+# missing here is not cosmetic: the model dropdown validates against it, and an
+# agent whose stored model is absent could not be saved at all.
+#
+# The 2.x names are what the API serves today. The first-generation names stay
+# because Sber still accepts them (requests are redirected to the 2.x
+# equivalents) and because dropping a name that somebody has stored is exactly
+# the failure this list caused. `GigaChat:latest` is the old version-pinned
+# spelling, kept for the same reason.
+#
+# `GigaChat-3-Ultra` heads the list and is reachable with no base-URL field,
+# which is worth writing down because the opposite is easy to assume. Sber
+# serves it from https://api.giga.chat/ — the address that replaced
+# gigachat.devices.sberbank.ru on 2026-07-17 — and the vendored SDK's
+# `Settings.base_url` already defaults to `https://api.giga.chat/v1`, so
+# `get_client` building against the default endpoint builds against the right
+# one. Verified against the installed stack, not inferred:
+# `GigaChat(credentials=...)._client._settings.base_url` is that URL.
+#
+# That default is a *dependency* fact, so it is pinned as one: the manifest
+# floor was `gigachat>=0.2.0` and is now `gigachat>=0.2.3,<0.3`. 0.2.0 and
+# 0.2.1 default to the legacy address, on which this model does not exist, so
+# the old floor permitted an install where the first entry in this list failed
+# every message. Constraining the SDK is enough on its own and is the right
+# lever — it is the package whose default decides the endpoint — and it drags
+# langchain-gigachat along for free, since the releases that cap the SDK below
+# 0.2.3 (0.3.0 requires `gigachat<0.2.0`) are then unsatisfiable. Adding a
+# floor to langchain-gigachat as well only forces `langchain-core>=1` onto
+# every resolution split and makes the lock unsolvable.
+#
+# The alternative — a GigaChat base-URL field — would be a question every user
+# has to answer correctly to reach a model Sber documents as current, which is
+# a worse trade than a version floor.
+# `test_gigachat_default_endpoint_serves_the_current_models` fails if a future
+# resolution reintroduces the old default.
 MODELS_GIGACHAT = [
     "",
+    "GigaChat-3-Ultra",
+    "GigaChat-2-Max",
+    "GigaChat-2-Pro",
+    "GigaChat-2",
+    "GigaChat-Max",
+    "GigaChat-Pro",
+    "GigaChat-Plus",
     "GigaChat",
     "GigaChat:latest",
-    "GigaChat-Plus",
-    "GigaChat-Pro",
-    "GigaChat-Max",
 ]
 DEFAULT_MODELS_YANDEX_GPT = ["", "YandexGPT", "YandexGPT Lite", "Summary"]
 MODELS_OPENAI = [
@@ -317,6 +357,46 @@ ALL_TOOLS_LABELS = {"en": "All tools", "ru": "Все инструменты"}
 # `__all__`, which is a legal tool name and must never be used here.
 ALL_TOOLS_SENTINEL = "*"
 
+# Custom tools as config subentries (v5.3.0)
+# A tool used to exist only as an entry under `tools:` in tools.yaml. It is now
+# also a subentry type, so it can be built by a form instead of typed.
+SUBENTRY_TYPE_TOOL = "tool"
+# The action types a user writes by hand. `mcp` is deliberately absent: an MCP
+# action is synthesised from a connected server, never authored.
+TOOL_ACTION_TYPES = ["service", "template", "rest", "script"]
+TOOL_DEFAULT_ACTION_TYPE = "service"
+# A script action targets one `script.*` entity, and the pattern is enforced in
+# both sources — the YAML schema and the subentry form — from this one literal.
+TOOL_SCRIPT_PATTERN = r"^script\.[a-z_][a-z0-9_]*$"
+REST_METHODS = ["GET", "POST", "PUT", "DELETE"]
+REST_RESPONSE_FORMATS = ["text", "json"]
+REST_DEFAULT_TIMEOUT = 10
+REST_MIN_TIMEOUT = 1
+REST_MAX_TIMEOUT = 120
+# How the `parameters` JSON Schema was authored. `simple` is a row per
+# argument, which covers the overwhelming majority of real tools; `advanced` is
+# a raw JSON Schema textarea, kept because rows cannot express `anyOf`, nested
+# objects or arrays and a constructor that refuses those shapes would be a
+# downgrade from the file it replaces.
+TOOL_PARAMS_MODE_SIMPLE = "simple"
+TOOL_PARAMS_MODE_ADVANCED = "advanced"
+TOOL_PARAMS_MODES = [TOOL_PARAMS_MODE_SIMPLE, TOOL_PARAMS_MODE_ADVANCED]
+# The JSON Schema scalar types a parameter row can declare. Deliberately not
+# `array` or `object`: a row has one type field and no way to describe an
+# element or a property, so offering them would produce a schema that validates
+# nothing. Those shapes are what `advanced` is for.
+TOOL_PARAM_TYPES = ["string", "integer", "number", "boolean"]
+# A parameter name becomes a key under `parameters.properties` and is what the
+# model passes back in a tool call, so it is looser than TOOL_NAME_PATTERN
+# (uppercase is legal in a JSON Schema property) but still an identifier — a
+# name with a space or a dot cannot be referenced from a Jinja template as
+# `{{ city }}`, which is how every action executor reads its arguments.
+TOOL_PARAM_NAME_PATTERN = r"^[A-Za-z_][A-Za-z0-9_]*\Z"
+# An empty JSON Schema object — a tool that takes no arguments. `_PARAMETERS`
+# in tools/schema.py requires `type` and `properties`, so "no arguments" still
+# has to be spelled out.
+TOOL_EMPTY_PARAMETERS: dict = {"type": "object", "properties": {}}
+
 # MCP client (v4.2.0)
 MCP_RECONNECT_INITIAL_DELAY = 1.0  # seconds
 MCP_RECONNECT_MAX_DELAY = 30.0  # seconds
@@ -362,6 +442,22 @@ MEMORY_SQLITE_SOFT_LIMIT = 50_000
 MEMORY_DEFAULT_QDRANT_COLLECTION = "smartchain_memory"
 MEMORY_DEFAULT_PG_TABLE = "smartchain_memory"
 
+# Memory stores as config subentries (v5.2.0)
+# A store used to be configurable only by editing the `memory:` block of
+# tools.yaml. It is now also a subentry type, which is what keeps `dsn` and
+# `api_key` — real credentials — out of a browser-visible text file.
+SUBENTRY_TYPE_MEMORY_STORE = "memory_store"
+# The store subentry's own `source_type` field: `none` is a plain memory store,
+# `entities` turns it into an index of the home. Kept separate from
+# ENTITY_SOURCE_TYPE so the "no source" case has a name the form can offer.
+# (MEMORY_SOURCE_TYPES is assembled further down, once ENTITY_SOURCE_TYPE
+# exists — a forward reference here would raise NameError on import.)
+MEMORY_SOURCE_TYPE_NONE = "none"
+# Fields of a store subentry that hold a credential. They are write-only: a
+# schema result reports `<field>_set: bool` instead of the value, and an empty
+# submission on an existing store means "keep what is stored", never "clear it".
+MEMORY_SECRET_FIELDS = ("dsn", "api_key")
+
 # Provider capabilities (v5.0.0)
 CAPABILITY_CHAT = "chat"
 CAPABILITY_EMBEDDINGS = "embeddings"
@@ -369,7 +465,26 @@ SUBENTRY_TYPE_EMBEDDINGS = "embeddings"
 
 # Static fallback embedding-model lists, used when a provider's API is
 # unreachable or has no list endpoint (YandexGPT).
-EMBEDDING_MODELS_GIGACHAT = ["", "Embeddings", "EmbeddingsGigaR", "GigaEmbedding"]
+#
+# GigaChat's list carries the same obligation as MODELS_GIGACHAT above, and
+# had gone stale in the same way: `Embeddings-2` and `Embeddings-3B-2025-09`
+# are both in Sber's model catalogue and neither was here. That gap was not
+# cosmetic either — it was what pushed people into the Custom Model field, and
+# a custom name is exactly what `embeddings_subentry_schema` used to refuse on
+# the *next* save, rename included.
+#
+# `GigaEmbedding` stays although Sber's catalogue page no longer lists it: the
+# rule for these lists is that a name somebody may already have stored is never
+# dropped, because dropping one is the failure the union in
+# `embeddings_subentry_schema` exists to catch.
+EMBEDDING_MODELS_GIGACHAT = [
+    "",
+    "Embeddings-3B-2025-09",
+    "Embeddings-2",
+    "EmbeddingsGigaR",
+    "Embeddings",
+    "GigaEmbedding",
+]
 EMBEDDING_MODELS_YANDEX_GPT = ["", "text-search-doc", "text-search-query"]
 EMBEDDING_MODELS_OPENAI = ["", "text-embedding-3-small", "text-embedding-3-large"]
 EMBEDDING_MODELS_OLLAMA = ["", "nomic-embed-text", "mxbai-embed-large", "bge-m3"]
@@ -383,6 +498,10 @@ ENGINE_EMBEDDING_MODELS = {
 
 # Entity indexing (v5.0.0)
 ENTITY_SOURCE_TYPE = "entities"
+# The store subentry's `source_type` options, in the order the form offers
+# them. Built from ENTITY_SOURCE_TYPE rather than repeating the literal, so a
+# store created in the UI and one written in YAML cannot drift apart.
+MEMORY_SOURCE_TYPES = [MEMORY_SOURCE_TYPE_NONE, ENTITY_SOURCE_TYPE]
 ENTITY_PRESETS = ["minimal", "optimal", "maximal", "paranoid"]
 ENTITY_DEFAULT_PRESET = "optimal"
 ENTITY_TOOL_NAME = "search_entities"
@@ -458,11 +577,47 @@ ENTITY_MEANINGFUL_DEVICE_CLASSES = [
     "problem",
 ]
 
-# RESERVED_TOOL_NAMES lives here, after ENTITY_TOOL_NAME, because it
-# references that name — defining it up near the other tool-name constants
+# The built-in tool names live here, after ENTITY_TOOL_NAME, because they
+# reference it — defining them up near the other tool-name constants
 # would forward-reference a name that doesn't exist yet at that point in the
 # module and raise NameError on import.
-RESERVED_TOOL_NAMES = frozenset({HISTORY_TOOL_NAME, DELEGATE_TOOL_NAME, ENTITY_TOOL_NAME})
+#
+# All six built-ins, not three. `search_memory`, `ask_agents` and
+# `critique_response` were shadowable until v5.3.0: a custom tool taking one of
+# those names reached `bind_tools` alongside the built-in, and which of the two
+# the model's call resolved to depended on list order — the custom tool is
+# appended last, so it won the dispatch lookup while the built-in's description
+# was the one the model read. Reserving the full set makes the collision a
+# refusal at the point it is written instead.
+#
+# The tuple is the ordered form: `allowed_tools` renders the built-ins in this
+# order and the agent inventory reports them in it, so the list a user reads is
+# stable between releases rather than following set iteration order.
+BUILTIN_TOOL_NAMES = (
+    HISTORY_TOOL_NAME,
+    DELEGATE_TOOL_NAME,
+    DELEGATE_MANY_TOOL_NAME,
+    CRITIQUE_TOOL_NAME,
+    MEMORY_TOOL_NAME,
+    ENTITY_TOOL_NAME,
+)
+
+RESERVED_TOOL_NAMES = frozenset(BUILTIN_TOOL_NAMES)
+
+# Suffix appended to a built-in's name in the `allowed_tools` picker, so a
+# built-in is distinguishable from a custom tool at a glance. `SelectOptionDict`
+# labels are plain strings that Home Assistant renders verbatim — they are not
+# looked up in `translations/`, which is why the two locales live here beside
+# `ALL_TOOLS_LABELS` rather than in the translation files.
+BUILTIN_TOOL_LABELS = {"en": "built-in", "ru": "встроенный"}
+
+# Suffix for a name an agent's `allowed_tools` still holds while the registry
+# has no such tool — deleted, switched off, or belonging to an MCP server that
+# was unreachable at the last reload. The option is offered anyway (see
+# `config_flow.allowed_tools_selector`), because a name the form cannot submit
+# makes the agent unsavable and a name the form does not render cannot be
+# removed. Same convention, and the same two locales, as the labels above.
+MISSING_TOOL_LABELS = {"en": "missing tool", "ru": "инструмент отсутствует"}
 
 # Dynamic entity context (v5.0.0, roadmap subsystem C)
 CONF_DYNAMIC_ENTITY_CONTEXT = "dynamic_entity_context"

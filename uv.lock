@@ -2240,7 +2240,7 @@ wheels = [
 
 [[package]]
 name = "ha-smartchain"
-version = "5.0.6"
+version = "5.4.11"
 source = { virtual = "." }
 
 [package.dev-dependencies]
@@ -2275,7 +2275,7 @@ dev = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "gigachat", specifier = ">=0.1" },
+    { name = "gigachat", specifier = ">=0.2.3,<0.3" },
     { name = "hassil", specifier = ">=3.5.0" },
     { name = "home-assistant-intents", specifier = ">=2026.3.3" },
     { name = "jsonschema", specifier = ">=4.0" },

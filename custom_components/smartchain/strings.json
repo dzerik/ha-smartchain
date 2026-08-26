@@ -61,12 +61,15 @@
     }
   },
   "options": {
+    "abort": {
+      "no_connection_settings": "This provider has no connection settings. Models, prompts and tools belong to an agent — add or edit one under this entry."
+    },
     "error": {
       "model_required": "Either Model or Custom Model required"
     },
     "step": {
       "settings": {
-        "title": "Model configuration",
+        "title": "Connection settings",
         "data": {
           "llm_hass_api": "Assist API (Control HA devices)",
           "prompt": "Prompt Template",
@@ -78,12 +81,10 @@
           "verify_ssl": "Verify SSL Certificates",
           "process_builtin_sentences": "Process HA Builtin Sentences",
           "chat_history": "Chat History",
-          "enable_history_tool": "State History Tool (LLM can query past device states)",
           "dynamic_entity_context": "Dynamic entity context (send a compact map of the home plus what the message is about, instead of every entity)",
           "dynamic_context_preset": "Which entities the map covers",
           "dynamic_context_on_assist": "Also add matched entities when the Assist API is enabled",
-          "allowed_tools": "Custom Tools (which YAML tools this agent may use)",
-          "enable_multi_agent_tools": "Multi-Agent Tools (agent can ask sibling agents and request a second opinion)"
+          "allowed_tools": "Tools (everything this agent may call, built-in and custom)"
         }
       }
     }
@@ -105,16 +106,12 @@
             "prompt": "Prompt Template",
             "temperature": "Temperature",
             "max_tokens": "Max Tokens",
-            "profanity": "Profanity",
-            "verify_ssl": "Verify SSL Certificates",
             "process_builtin_sentences": "Process HA Builtin Sentences",
             "chat_history": "Chat History",
-            "enable_history_tool": "State History Tool (LLM can query past device states)",
             "dynamic_entity_context": "Dynamic entity context (send a compact map of the home plus what the message is about, instead of every entity)",
             "dynamic_context_preset": "Which entities the map covers",
             "dynamic_context_on_assist": "Also add matched entities when the Assist API is enabled",
-            "allowed_tools": "Custom Tools (which YAML tools this agent may use)",
-            "enable_multi_agent_tools": "Multi-Agent Tools (agent can ask sibling agents and request a second opinion)"
+            "allowed_tools": "Tools (everything this agent may call, built-in and custom)"
           }
         },
         "reconfigure": {
@@ -126,21 +123,18 @@
             "prompt": "Prompt Template",
             "temperature": "Temperature",
             "max_tokens": "Max Tokens",
-            "profanity": "Profanity",
-            "verify_ssl": "Verify SSL Certificates",
             "process_builtin_sentences": "Process HA Builtin Sentences",
             "chat_history": "Chat History",
-            "enable_history_tool": "State History Tool (LLM can query past device states)",
             "dynamic_entity_context": "Dynamic entity context (send a compact map of the home plus what the message is about, instead of every entity)",
             "dynamic_context_preset": "Which entities the map covers",
             "dynamic_context_on_assist": "Also add matched entities when the Assist API is enabled",
-            "allowed_tools": "Custom Tools (which YAML tools this agent may use)",
-            "enable_multi_agent_tools": "Multi-Agent Tools (agent can ask sibling agents and request a second opinion)"
+            "allowed_tools": "Tools (everything this agent may call, built-in and custom)"
           }
         }
       },
       "error": {
-        "model_required": "Either Model or Custom Model required"
+        "model_required": "Either Model or Custom Model required",
+        "model_unknown": "That model is not in the list we could get from the provider just now. Press Refresh models if the connection was down, or type the exact name into Custom Model to use it anyway."
       }
     },
     "embeddings": {
@@ -169,6 +163,235 @@
       },
       "error": {
         "model_required": "Select a model or enter a custom name"
+      }
+    },
+    "memory_store": {
+      "entry_type": "Memory store",
+      "initiate_flow": {
+        "user": "Add memory store",
+        "reconfigure": "Reconfigure memory store"
+      },
+      "step": {
+        "user": {
+          "title": "Add memory store",
+          "description": "The name, the embeddings binding and the backend. The last two answers decide what the next step asks for.",
+          "data": {
+            "name": "Store name",
+            "embeddings": "Embeddings binding",
+            "description": "Description (shown to the model)",
+            "backend_type": "Vector backend",
+            "source_type": "What this store holds"
+          },
+          "data_description": {
+            "name": "Lowercase letters, digits and underscores, starting with a letter or underscore. This is the name search_memory and smartchain.clear_memory refer to, and for a file-based backend it is also the database filename — renaming a store points it at a fresh, empty one.",
+            "embeddings": "Which embeddings binding turns text into vectors for this store. Stores resolve a binding by its title, so a title used twice resolves to nothing at all.",
+            "description": "One line telling the model what lives in this store, so it can choose between several. Shown in the search_memory tool description.",
+            "backend_type": "Where the vectors are kept. sqlite_numpy needs nothing installed and is the right default; sqlite_vec is faster on large stores; pgvector and qdrant put the vectors on a server you already run.",
+            "source_type": "'none' is a memory store: conversation turns go in, search_memory reads them back. 'entities' turns it into a semantic index of your home for search_entities — the two cannot be combined, because retention would delete the index by age."
+          }
+        },
+        "reconfigure": {
+          "title": "Reconfigure memory store",
+          "description": "The name, the embeddings binding and the backend. The last two answers decide what the next step asks for.",
+          "data": {
+            "name": "Store name",
+            "embeddings": "Embeddings binding",
+            "description": "Description (shown to the model)",
+            "backend_type": "Vector backend",
+            "source_type": "What this store holds"
+          },
+          "data_description": {
+            "name": "Lowercase letters, digits and underscores, starting with a letter or underscore. This is the name search_memory and smartchain.clear_memory refer to, and for a file-based backend it is also the database filename — renaming a store points it at a fresh, empty one.",
+            "embeddings": "Which embeddings binding turns text into vectors for this store. Stores resolve a binding by its title, so a title used twice resolves to nothing at all.",
+            "description": "One line telling the model what lives in this store, so it can choose between several. Shown in the search_memory tool description.",
+            "backend_type": "Where the vectors are kept. sqlite_numpy needs nothing installed and is the right default; sqlite_vec is faster on large stores; pgvector and qdrant put the vectors on a server you already run.",
+            "source_type": "'none' is a memory store: conversation turns go in, search_memory reads them back. 'entities' turns it into a semantic index of your home for search_entities — the two cannot be combined, because retention would delete the index by age."
+          }
+        },
+        "details": {
+          "title": "Store settings",
+          "description": "The settings that depend on the backend and on what the store holds.",
+          "data": {
+            "path": "Database file (leave empty for the default)",
+            "dsn": "PostgreSQL connection string",
+            "table": "Table name",
+            "url": "Qdrant server URL",
+            "api_key": "Qdrant API key",
+            "collection": "Collection name",
+            "verify_ssl": "Verify the server's SSL certificate",
+            "retention_days": "Delete memories older than (days, 0 = never)",
+            "ingest_conversation": "Store conversation turns automatically",
+            "preset": "Which entities the index covers",
+            "index_states": "Also record each entity's current state",
+            "include": "Always include (a domain, or a full entity id)",
+            "exclude": "Never include (a domain, or a full entity id)"
+          },
+          "data_description": {
+            "path": "An absolute path to the SQLite file. Leave empty to keep it in Home Assistant's .storage directory, named after the store.",
+            "dsn": "postgresql://user:password@host/database. Stored with Home Assistant's other credentials and never shown again — leave empty when editing to keep the one already saved.",
+            "table": "Lowercase letters, digits and underscores. It is written straight into SQL and cannot be quoted, which is why the shape is restricted.",
+            "url": "https://host:6333 — the base URL of the Qdrant server.",
+            "api_key": "Never shown again once saved — leave empty when editing to keep the one already stored. Leave empty on a server that needs no key.",
+            "collection": "Lowercase letters, digits and underscores. It becomes part of a URL path and cannot be escaped, which is why the shape is restricted.",
+            "verify_ssl": "Turn off only for a server with a self-signed certificate; doing so removes protection against an intercepted connection.",
+            "retention_days": "Older memories are deleted once a day. 0 keeps everything forever, which on a busy install grows without limit.",
+            "ingest_conversation": "When on, every exchange with an agent is embedded into this store so the agent can recall it later. Turn off for a store you fill yourself.",
+            "preset": "How much of the home the index covers, smallest to largest. 'optimal' deliberately leaves out device_tracker: presence data is the most sensitive domain and indexing sends it to the embeddings provider.",
+            "index_states": "Records the current state alongside each entity, refreshed periodically. It makes filtering possible; it does not make states searchable by meaning.",
+            "include": "Added on top of the preset. Accepts a bare domain (sensor) or a full entity id (sensor.kitchen_temperature).",
+            "exclude": "Applied last and wins over both the preset and the include list."
+          }
+        }
+      },
+      "error": {
+        "invalid_name": "A store name must be lowercase letters, digits and underscores, starting with a letter or underscore.",
+        "name_taken": "Another memory store already uses this name.",
+        "embeddings_required": "Pick which embeddings binding this store uses.",
+        "embeddings_none": "No embeddings binding exists yet. Create one on the Embeddings tab first, then bind this store to it.",
+        "embeddings_unknown": "No embeddings binding has that name.",
+        "embeddings_ambiguous": "That embeddings title is claimed by more than one binding, so it resolves to nothing. Rename one of them first.",
+        "dsn_required": "The pgvector backend needs a connection string.",
+        "url_required": "The qdrant backend needs a server URL.",
+        "invalid_identifier": "Must be lowercase letters, digits and underscores, starting with a letter or underscore."
+      }
+    },
+    "tool": {
+      "entry_type": "Tool",
+      "initiate_flow": {
+        "user": "Add tool",
+        "reconfigure": "Reconfigure tool"
+      },
+      "step": {
+        "user": {
+          "title": "Add tool",
+          "description": "The name, what the tool does, and what happens when the model calls it. The last two answers decide what the next step asks for.",
+          "data": {
+            "name": "Tool name",
+            "description": "What the tool does",
+            "enabled": "Enabled",
+            "action_type": "What happens when the model calls it",
+            "params_mode": "How the arguments are described"
+          },
+          "data_description": {
+            "name": "Lowercase letters, digits and underscores, starting with a letter or underscore. This is the name the model calls, and the name an agent's “Allowed tools” setting refers to. The six built-in tool names are reserved.",
+            "description": "The only thing the model reads when deciding whether to call this tool. Say what it does and when to use it, not how it is implemented.",
+            "enabled": "Turn a tool off without deleting it. A disabled tool is not offered to any agent, and does not reserve its name against another tool.",
+            "action_type": "service calls a Home Assistant action, template renders Jinja and returns the text, rest calls an HTTP endpoint, script runs a script. Changing this changes which fields the rest of the form asks for.",
+            "params_mode": "simple is one row per argument and covers almost every tool. advanced is a raw JSON Schema box, for shapes rows cannot express — anyOf, nested objects, arrays."
+          }
+        },
+        "reconfigure": {
+          "title": "Reconfigure tool",
+          "description": "The name, what the tool does, and what happens when the model calls it. The last two answers decide what the next step asks for.",
+          "data": {
+            "name": "Tool name",
+            "description": "What the tool does",
+            "enabled": "Enabled",
+            "action_type": "What happens when the model calls it",
+            "params_mode": "How the arguments are described"
+          },
+          "data_description": {
+            "name": "Lowercase letters, digits and underscores, starting with a letter or underscore. This is the name the model calls, and the name an agent's “Allowed tools” setting refers to. The six built-in tool names are reserved.",
+            "description": "The only thing the model reads when deciding whether to call this tool. Say what it does and when to use it, not how it is implemented.",
+            "enabled": "Turn a tool off without deleting it. A disabled tool is not offered to any agent, and does not reserve its name against another tool.",
+            "action_type": "service calls a Home Assistant action, template renders Jinja and returns the text, rest calls an HTTP endpoint, script runs a script. Changing this changes which fields the rest of the form asks for.",
+            "params_mode": "simple is one row per argument and covers almost every tool. advanced is a raw JSON Schema box, for shapes rows cannot express — anyOf, nested objects, arrays."
+          }
+        },
+        "details": {
+          "title": "Tool details",
+          "description": "The arguments the model passes, and the settings of the action type chosen on the previous step.",
+          "data": {
+            "params_rows": "Arguments",
+            "params_json": "Arguments (JSON Schema)",
+            "service": "Home Assistant action",
+            "target": "Target",
+            "service_data": "Action data",
+            "response": "Return the action's response to the model",
+            "value_template": "Template",
+            "method": "HTTP method",
+            "url": "URL",
+            "headers": "Headers",
+            "payload": "JSON body",
+            "timeout": "Timeout (seconds)",
+            "response_format": "Response format",
+            "script": "Script",
+            "variables": "Script variables"
+          },
+          "data_description": {
+            "params_rows": "The arguments the model passes when it calls this tool. Reference one inside a template by its bare name: {{ city }}, not {{ args.city }}. Leave the list empty for a tool that takes no arguments.",
+            "params_json": "A JSON Schema object describing the call's arguments — an object with \"type\": \"object\" and a \"properties\" map. Validated before it is saved, and again against every call the model makes.",
+            "service": "The action to call, e.g. light.turn_on. Picked from the actions registered right now; an action from an integration that is not loaded can still be typed in.",
+            "target": "Which entities, devices or areas the action runs on.",
+            "service_data": "Extra data passed to the action. Values may contain {{ }} templates referencing the tool's arguments.",
+            "response": "On for an action that returns data the model should read (a forecast, a snapshot analysis). Off returns just “OK”. The action must support returning a response.",
+            "value_template": "Rendered with the tool's arguments in scope; the rendered text is what the model gets back.",
+            "method": "The HTTP method used for the request.",
+            "url": "May contain {{ }} templates referencing the tool's arguments.",
+            "headers": "Sent with the request; values may template too. Header values are never shown again once saved — leave one blank to keep the stored value, or type a new one to replace it.",
+            "payload": "JSON request body, for POST and PUT. Leave empty to send no body at all, which is not the same as sending an empty object.",
+            "timeout": "How long to wait for the endpoint, 1–120 seconds.",
+            "response_format": "json parses the response and hands the model the parsed data; text hands back the raw body.",
+            "script": "The script this tool runs.",
+            "variables": "Passed to the script as variables; values may contain {{ }} templates referencing the tool's arguments."
+          }
+        }
+      },
+      "error": {
+        "invalid_name": "A tool name must be lowercase letters, digits and underscores, starting with a letter or underscore.",
+        "reserved_name": "That name belongs to a built-in tool. A custom tool cannot replace a built-in — pick another name.",
+        "name_taken": "Another tool already uses this name.",
+        "mcp_name_taken": "A connected MCP server already provides a tool with this name. Pick another name, or give that server a prefix in tools.yaml.",
+        "description_required": "Describe what the tool does. This is the only thing the model reads when deciding whether to call it.",
+        "invalid_parameters_json": "The arguments box does not contain valid JSON.",
+        "invalid_parameters": "Arguments must be a JSON Schema object: an object with \"type\": \"object\" and a \"properties\" map.",
+        "invalid_parameter_name": "An argument name must be letters, digits and underscores, starting with a letter or underscore.",
+        "duplicate_parameter": "Two arguments have the same name.",
+        "parameter_type_required": "Every argument needs a type.",
+        "service_required": "Pick the Home Assistant action this tool calls.",
+        "invalid_service": "An action is written as domain.action, e.g. light.turn_on.",
+        "value_template_required": "Write the template this tool renders.",
+        "url_required": "The rest action needs a URL.",
+        "script_required": "Pick the script this tool runs.",
+        "invalid_script": "A script action targets a script.* entity.",
+        "invalid_action": "The action is not valid for its type. The detail is in the Home Assistant log — it is withheld here because an action can carry a credential.",
+        "unstorable": "The value in this field can not be saved. Remove it, or retype it as plain text."
+      }
+    }
+  },
+  "config_panel": {
+    "presets": {
+      "weather_forecast": {
+        "name": "Weather forecast",
+        "description": "Will it rain tomorrow afternoon? Assist reports the weather now; this answers questions about later."
+      },
+      "sun_times": {
+        "name": "Sun times",
+        "description": "Sunrise, sunset, dawn and dusk, for anything that depends on daylight."
+      },
+      "calendar_events": {
+        "name": "Calendar events",
+        "description": "What is planned. Reads events from a calendar over the range the question is about."
+      },
+      "todo_list_items": {
+        "name": "To-do list items",
+        "description": "Reads a to-do or shopping list back. Assist can add to a list but cannot tell you what is on it."
+      },
+      "area_summary": {
+        "name": "Area summary",
+        "description": "What is on in one room, in a single call, instead of the model guessing entity names one at a time."
+      },
+      "who_is_home": {
+        "name": "Who is home",
+        "description": "Who is home and who is away, without assembling the answer out of entity names."
+      },
+      "look_at_camera": {
+        "name": "Look at a camera",
+        "description": "Looks at a camera mid-conversation and describes what is visible."
+      },
+      "notify_device": {
+        "name": "Notify a device",
+        "description": "Lets the agent reach you: a notification sent to a device or a person, rather than only an answer."
       }
     }
   }

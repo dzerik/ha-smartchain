@@ -1,6 +1,6 @@
 [project]
 name = "ha-smartchain"
-version = "5.0.7"
+version = "5.4.11"
 description = "SmartChain — multi-provider LLM conversation agent for Home Assistant"
 readme = "README.md"
 license = "MIT"
@@ -29,7 +29,10 @@ dev = [
     "langchain-community>=0.3.0,<0.5",
     "langchain-anthropic>=0.3.0,<2",
     "langchain-ollama>=0.3.0,<2",
-    "gigachat>=0.1",
+    # >=0.2.3 is a reachability floor, not housekeeping: 0.2.3 is the release
+    # that moved the SDK's default base URL to https://api.giga.chat/v1, which
+    # is where Sber serves GigaChat-3-Ultra. See manifest.json.
+    "gigachat>=0.2.3,<0.3",
     "PyTurboJPEG>=2.0",
     "hassil>=3.5.0",
     "home-assistant-intents>=2026.3.3",

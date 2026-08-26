@@ -19,6 +19,7 @@ await Promise.all([
   import(`./components/agents-tab.js${_q}`),
   import(`./components/settings-tab.js${_q}`),
   import(`./components/embeddings-tab.js${_q}`),
+  import(`./components/stores-tab.js${_q}`),
   import(`./components/tools-tab.js${_q}`),
 ]);
 
@@ -33,6 +34,10 @@ const TABS = [
     // nothing this tab could ever let a user do.
     hiddenUnless: (overview) => overview.entries.some((entry) => entry.supports_embeddings),
   },
+  // No `hiddenUnless`, unlike Embeddings: a store binds to an embeddings
+  // *title*, which may live on a different config entry, so any provider can
+  // host one — and the tab is also where a store that failed to start says so.
+  { id: "stores", label: "Stores", tag: "sc-stores-tab", adminOnly: true },
   { id: "settings", label: "Settings", tag: "sc-settings-tab", adminOnly: true },
   { id: "tools", label: "Tools", tag: "sc-tools-tab", adminOnly: true },
   { id: "camera", label: "Camera", tag: "sc-camera-tab" },

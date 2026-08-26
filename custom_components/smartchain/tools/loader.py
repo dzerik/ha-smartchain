@@ -105,7 +105,7 @@ def load_tools_file(path: Path, config_dir: Path | None = None) -> LoaderResult:
                 name=name,
                 description=entry["description"],
                 parameters=entry["parameters"],
-                action=_action_from_dict(entry["action"]),
+                action=action_from_dict(entry["action"]),
                 enabled=True,
             )
         )
@@ -118,8 +118,13 @@ def load_tools_file(path: Path, config_dir: Path | None = None) -> LoaderResult:
     )
 
 
-def _action_from_dict(d: dict[str, Any]) -> ToolAction:
-    """Convert validated action dict into a typed ToolAction."""
+def action_from_dict(d: dict[str, Any]) -> ToolAction:
+    """Convert a validated action dict into a typed ToolAction.
+
+    Public because `tools/subentry_source.py` builds a subentry tool with this
+    same function: two sources, one dataclass, so nothing downstream can tell
+    a YAML tool from a form-built one.
+    """
     t = d["type"]
     if t == "service":
         return ServiceAction(

@@ -141,14 +141,42 @@ async def test_embeddings_capability_follows_the_provider(hass, hass_ws_client):
     assert served["supports_embeddings"] is False
 
 
-async def test_tool_count_is_none_when_unrestricted(hass, hass_ws_client, entry):
-    """No allowed_tools key means every tool; the panel shows "all tools"."""
+def _register_tools(hass, *names):
+    """Put custom tools in the live registry the overview reads."""
+    from custom_components.smartchain.tools.model import CustomTool, TemplateAction
+
+    registry = hass.data[DOMAIN]["tools"]
+    registry.replace_all(
+        [
+            CustomTool(
+                name=name,
+                description="x",
+                parameters={"type": "object", "properties": {}},
+                action=TemplateAction(value_template="x"),
+            )
+            for name in names
+        ]
+    )
+
+
+async def test_tool_count_counts_what_the_agent_can_actually_do(hass, hass_ws_client, entry):
+    """`tool_count` used to be `len(allowed_tools)` — a count of a *setting*,
+    which never mentioned a built-in and reported `None` for "all tools".
+    It is now the number of tools the agent would really be bound with, and
+    `tool_total` the number it could have, so the panel can say "2 of 8"."""
+    _register_tools(hass, "a", "b")
+
     client = await hass_ws_client(hass)
     await client.send_json_auto_id({"type": "smartchain/overview"})
     msg = await client.receive_json()
 
     agent = msg["result"]["entries"][0]["agents"][0]
-    assert agent["tool_count"] is None
+    # No siblings and no memory store, so every built-in is unavailable; the
+    # two custom tools are all this agent can actually call.
+    assert agent["tool_count"] == 2
+    # ... but the six built-ins are still *reported*, which is the whole point:
+    # a user can now see them and why they are off.
+    assert agent["tool_total"] == 8
 
 
 async def test_tool_count_is_zero_when_restricted_to_nothing(hass, hass_ws_client):
@@ -187,26 +215,29 @@ async def test_tool_count_counts_a_restricted_list(hass, hass_ws_client):
         title=UNIQUE_ID_OPENAI,
         subentries_data=[
             ConfigSubentryData(
-                data={CONF_CHAT_MODEL: "gpt-4.1-mini", CONF_ALLOWED_TOOLS: ["a", "b"]},
+                data={CONF_CHAT_MODEL: "gpt-4.1-mini", CONF_ALLOWED_TOOLS: ["a"]},
                 subentry_type=SUBENTRY_TYPE_CONVERSATION,
-                title="Two Tools",
+                title="One Tool",
                 unique_id=None,
             )
         ],
     )
     entry.add_to_hass(hass)
+    _register_tools(hass, "a", "b")
 
     client = await hass_ws_client(hass)
     await client.send_json_auto_id({"type": "smartchain/overview"})
     msg = await client.receive_json()
 
     agent = msg["result"]["entries"][0]["agents"][0]
-    assert agent["tool_count"] == 2
+    assert agent["tool_count"] == 1
+    assert agent["tool_total"] == 8
 
 
-async def test_tool_count_is_none_for_the_all_tools_sentinel(hass, hass_ws_client):
-    """`["*"]` means "all tools", so the panel must show it the same way it
-    shows `None` (never touched) — a count of 1 would be wrong and misleading."""
+async def test_the_sentinel_counts_every_custom_tool(hass, hass_ws_client):
+    """`["*"]` means every *custom* tool — not every tool. A built-in still
+    needs its own name in the list, which is why this agent's count is 2 and
+    not 8."""
     await async_setup_component(hass, DOMAIN, {})
     entry = MockConfigEntry(
         domain=DOMAIN,
@@ -223,13 +254,15 @@ async def test_tool_count_is_none_for_the_all_tools_sentinel(hass, hass_ws_clien
         ],
     )
     entry.add_to_hass(hass)
+    _register_tools(hass, "a", "b")
 
     client = await hass_ws_client(hass)
     await client.send_json_auto_id({"type": "smartchain/overview"})
     msg = await client.receive_json()
 
     agent = msg["result"]["entries"][0]["agents"][0]
-    assert agent["tool_count"] is None
+    assert agent["tool_count"] == 2
+    assert agent["tool_total"] == 8
 
 
 async def test_agents_excludes_non_conversation_subentries(hass, hass_ws_client):

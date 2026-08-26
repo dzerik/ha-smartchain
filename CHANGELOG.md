@@ -5,6 +5,437 @@ All notable changes to this project are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 project follows [Semantic Versioning](https://semver.org/).
 
+> **Note:** `5.0.1`–`5.0.7` were released without changelog entries and are not
+> reconstructed here.
+>
+> **Note:** the `5.4.0` section below is a roll-up: it covers `5.4.0` through
+> `5.4.7`, which were developed on one branch and are not separated here.
+
+## [5.4.10] - unreleased
+
+### Fixed
+- **An agent whose model we could not list was an agent you could not edit.**
+  Five defects compounded into one dead end for a GigaChat user running
+  `GigaChat-2-Max` and `GigaChat-2-Pro`:
+  - `MODELS_GIGACHAT` stopped at `GigaChat-Max` and knew none of the
+    second-generation names. It now lists `GigaChat-3-Ultra`, `GigaChat-2-Max`,
+    `GigaChat-2-Pro` and `GigaChat-2` alongside the first-generation names,
+    which are kept because Sber still accepts them and because removing a name
+    somebody has stored is the very failure this list caused.
+  - `async_fetch_models` swallowed every exception and returned the shipped
+    list, so a caller could not tell a catalogue from a shrug. It now logs the
+    error at WARNING, and callers that cache can pass `strict=True` to get a
+    `ModelFetchError` instead of a substitute.
+  - The panel cached that substitute as though it were an answer, so one blip
+    while the Agents tab was first opening lasted until a restart. A failed
+    fetch is no longer cached; the next open retries.
+  - An agent's own model is now always present in its own dropdown, whether or
+    not the provider (or the shipped list) named it. Opening an agent to change
+    its prompt no longer dead-ends on the model field.
+  - When a model genuinely is unknown, the refusal is a translated sentence
+    (`model_unknown`, EN + RU) naming both ways out, not the bare
+    `invalid_data: model`. Same treatment `5.4.7` gave the stores form.
+- **"Refresh models" discarded whatever the user had typed.** The one recovery
+  from a stale model list overwrote the form with the server's stored values.
+  On a refresh, edits to fields the returned schema still declares are kept.
+- **GigaChat's model listing ignored Verify SSL and had no timeout.** It was
+  pinned to `verify_ssl_certs=False` — the last client `5.4.7` did not reach —
+  and was the only provider fetch with no time bound, so a provider that
+  accepted the connection and never answered hung the Agents tab. The switch
+  now reaches it (via a new `connection_data`, which merges the hub's own
+  options into the fetch payload) and the call is bounded at 10s.
+
+## [5.4.9] - unreleased
+
+### Documentation
+- **The user guide told people to click controls that no longer exist.** Four
+  subsystems changed between `5.1.0` and `5.4.8` and `docs/USAGE.md` /
+  `docs/USAGE-ru.md` had not been touched. Corrected in both languages:
+  - `verify_ssl` and `profanity` were listed as **agent** options. They left the
+    agent form in `5.4.1` and the `3 -> 4` migration deletes them from an
+    agent's storage; they are connection settings on the entry. The agent-options
+    table now ends where the form does, and a new **§4.2** documents the two
+    connection settings, where they are edited, why they moved and what the
+    migration does with a value an agent already stored.
+  - **§10.1** said to toggle "Enable multi-agent tools". That switch was deleted
+    in `5.4.0`. The section now says to tick `ask_agents` and `critique_response`
+    in the agent's **Tools** list, and says plainly that on a migrated agent both
+    are **off** — the old switch defaulted to off, so the migration wrote down an
+    agent that never had them. Same for `get_state_history` in **§6.1**.
+  - **§12** said administrators see five panel tabs. There are six — Agents,
+    Embeddings, Stores, Settings, Tools, Camera — and Embeddings is the one that
+    can disappear, which the section now explains rather than leaving as a
+    surprise.
+  - **§9.1** routed embeddings-binding setup through the Devices & Services
+    three-dot menu and never mentioned the **Embeddings tab**, which is what a
+    user needs before the Stores form will accept anything. Both routes are now
+    given, the tab first, with the dependency stated where it bites.
+- **§3 is rewritten as "Hubs and agents".** It described sub-entries as "multiple
+  agents per provider" and pointed at a menu item ("Add sub-entry") that has not
+  existed since there were four sub-entry types. It now states the `5.1.0` model
+  — a config entry is a connection and nothing else — tabulates the four
+  sub-entry kinds against their real menu names and their sections, and records
+  that a hub with no agents is a valid state and what the `1 -> 2` migration does
+  to a `5.0.x` entry that had one.
+- Swept the chapters the changed subsystems touch. Newly documented, all of it
+  reachable behaviour that had no entry anywhere: the `(missing tool)` label and
+  the `invalid_data: allowed_tools` dead end it fixed (§7.5); what a migrated
+  `allowed_tools` list actually contains (§7.5); the storability guard and why a
+  templated target is now safe to re-save (§7.0.1); a broken `tools.yaml` no
+  longer disabling UI-built tools and stores, and the banner that reports it
+  (§7.7); a disabled imported tool no longer waking its `tools.yaml` twin (§7.7);
+  a store save that reports whether the store started (§9.2); a sub-entry write
+  that no longer reloads the hub (§9.2); the agent form's `model_user` field,
+  which the options table had never listed (§4). Six new troubleshooting entries
+  answer the questions the four stale passages would have produced.
+- `README.md` / `README-ru.md`: the panel is described as the six tabs it has
+  rather than "a camera analysis tab"; the configuration model is the hub/agent
+  split; Quick Start's agent fields match the form; the "What's new" table gains
+  `5.1.0` through `5.4.x`; the test badge is current. The Russian overview also
+  stopped claiming SmartChain ships an AI panel for generating and deploying
+  automations from a text description — that feature was removed in `4.0.0`.
+
+## [5.4.8] - unreleased
+
+### Fixed
+- **Switching on one ready-made tool reloaded the whole hub.** Measured on a copy
+  of a real install: installing three presets cost 3 `async_setup_entry` cycles,
+  3 unloads, 6 `conversation.* → offline` transitions and 6 embedding-dimension
+  probes — each probe a fresh OAuth exchange under a 30 s timeout — and an Assist
+  request landing in one of those windows failed. `update_listener` was doing two
+  different jobs and paying for both on every write: a reload is what a change to
+  the *entry* needs, while a tool, store or embeddings binding needs none of it
+  (`custom_tools_for` reads the live registry at request time, so a tool switched
+  on is in the next message without the entity being touched). Each half is now
+  gated on its own fingerprint — `_entry_fingerprint` over everything a reload
+  would pick up, defined by exclusion so a field added later is reloaded for by
+  default, and the subsystem fingerprint moved inside `_reload_registry` under
+  the rebuild lock, where two paths reacting to one write can no longer both read
+  it stale. After: 0 setup cycles, 0 unloads, 0 entity transitions, 3 rebuilds
+  and 3 probes for three presets. Handlers that edit `tools.yaml` still rebuild
+  ungated, since no fingerprint can see the file, and a skipped rebuild returns
+  the standing `tools.yaml` error rather than clearing the Tools-tab banner on a
+  file that is still broken.
+
+## [5.4.0] - unreleased
+
+### Added
+- **A normal set of tools you can just switch on.** The **Tools** tab opens with
+  a **Ready-made tools** catalogue above your own: eight real tools — weather
+  forecast, sun times, calendar events, to-do list items, area summary, who is
+  home, look at a camera, notify a device — each a row with a switch. Switching
+  one on writes it as an ordinary tool sub-entry: editable, disableable,
+  deletable, indistinguishable afterwards from one built in the form.
+  The catalogue covers what Assist and the built-in tools do not, on purpose —
+  it does not offer a second way to turn a light on. Three things the catalogue
+  deliberately omits (energy over a period, sensor min/max/mean, recent logbook
+  events) need the recorder's statistics or the logbook, which are websocket-only
+  and belong in a built-in tool rather than in a preset.
+- Two admin-only commands behind it: `smartchain/tool/presets` lists the
+  catalogue with an `installed` flag derived from the tool sub-entries that
+  exist, and `smartchain/tool/preset/install` materialises one. Install reuses
+  `validate_tool_name` (reserved names, duplicates, a live MCP tool's name), the
+  same `_write_subentry` storability guard and the same registry rebuild as
+  `smartchain/tool/save`, and reports `shadows_yaml` the same way.
+- **A translation key convention for panel text**: `config_panel.presets.<tool
+  name>.name` and `.description`, in both locales. The tool's own `description`
+  — the sentence the *model* reads — stays English in `tools/presets.py`, since
+  that is what the providers are trained on. Different audiences, different
+  strings, different places.
+- **One place that says what an agent can do.** The **Agents** tab's tools cell
+  expands into the agent's whole inventory — the six built-in tools and every
+  custom tool together, the ones that are *off* included, each with where it
+  comes from and, when it is off, why. Backed by a new admin-only
+  `smartchain/agent/tools` command.
+- **`tools/inventory.py`** is the single assembly. `_async_handle_message` binds
+  the tools this module returns, and the panel reports the same call, so the
+  report and the runtime cannot drift. A test drives a real message, captures
+  the `bind_tools` argument and asserts the two sets are equal.
+- `smartchain/overview` now serves `tool_count` (tools the agent really has) and
+  `tool_total` (tools it could have) per agent, so the tab can say "2 of 8".
+
+### Changed
+- **"Allowed tools" is now the one control over an agent's tools, and it always
+  renders.** It previously appeared only when the tools registry was non-empty,
+  so a user who had never written a `tools.yaml` had never seen it. It now lists
+  the six built-ins alongside your own tools, labelled as built-in.
+- **`enable_history_tool` and `enable_multi_agent_tools` are gone from the agent
+  form.** They were a second opinion on a question the list now answers, and two
+  controls that can disagree are worse than either alone. Config entries migrate
+  to minor version 3, which writes each agent's built-ins into its
+  `allowed_tools` list and deletes the switches — every agent keeps exactly the
+  tools it had. The two keys are still honoured for an agent that carries no
+  list at all, so a subentry built by a downstream integration still works.
+- **`ask_agents` and `critique_response` are separable.** One switch used to
+  hold both; they hold one list entry each, so an agent may fan out to its
+  siblings without also being allowed to ask one for a review.
+
+### Fixed
+- **Saving a tool whose target was a template broke Home Assistant's config
+  storage — for every integration on the system.** `docs/USAGE.md` §7.1 teaches
+  `target: {entity_id: "{{ entity }}"}`, and importing such a tool worked. But
+  opening it in the Tools tab and pressing Save handed the string to
+  `selector.TargetSelector`, which turns it into a `Template` *object*, and that
+  object went into the subentry. From then on every write of
+  `core.config_entries` raised `TypeError` inside a delayed-write task that
+  discards its buffer and reports nothing — so the file stopped being updated
+  for every integration, and a restart read back whatever had last been written:
+  the tool gone, and anything configured after it gone with it.
+  Every subentry write — tools, stores, agents, embeddings — and the entry's own
+  options now pass through one guard (`storable.py`). A value that carries its
+  own source text is normalised back to it (a `Template` becomes the string that
+  was typed, exactly as Home Assistant's `TemplateSelector` already does);
+  anything else JSON cannot hold is refused, naming the field, rather than
+  written. Both the panel's websocket commands and Home Assistant's own subentry
+  dialogs are covered, the latter by a shared base class so a flow added later
+  cannot forget.
+- **A `Template` reaching a service action did nothing, silently.**
+  `_render_value` templated `str`, `dict` and `list` and passed anything else
+  through untouched, so the object went straight into
+  `hass.services.async_call(target=…)` and the model's argument never reached
+  the service. It is now rendered.
+- **The first Save a new user performs said `model_required`.**
+  `DEFAULT_CHAT_MODEL` is empty, so **Agents → + Agent** opens with no model
+  selected; saving answered with a bare machine key that the panel could not
+  attach to a field and toasted verbatim. Every save command now reports a
+  rejected field as `invalid_data: <fields> — <reason>`, the panel attaches the
+  reason to the control, and the reason for this one is the sentence the config
+  flow has always shown, read from the translation files in the user's own
+  language.
+- **`allowed_tools` did not do what it said.** Every built-in was appended
+  unconditionally and only custom tools were filtered, so an agent "restricted
+  to one custom tool" still received `search_memory`, `search_entities`,
+  `ask_agent` and the history tool. The list now filters built-ins too. Note
+  what this means for an agent that *already* had a restricted list: the
+  built-ins it never named are dropped from it — which is what the panel had
+  been telling users all along, and what minor version 3 writes down explicitly
+  so nobody's agent changes silently.
+- **`tool_count` in the Agents tab counted a setting, not a capability.** It was
+  `len(allowed_tools)`, or "all tools" when unset, and so never mentioned a
+  single built-in.
+- **`enable_multi_agent_tools` was gated on the wrong condition** — whether *any*
+  entry had *any* two subentries, so an embeddings binding made it appear where
+  it could not work, and it was hidden while creating the second agent, which is
+  when it is first wanted. The field is gone; the inventory answers the real
+  question (a second *conversation* agent on *this* entry) and says
+  `no_siblings` when the answer is no.
+- **Saving an agent could destroy a stored value.** `smartchain/agent/schema`
+  strips keys the current schema does not declare, and both save paths then
+  replaced `subentry.data` wholesale — so opening and saving an agent deleted
+  anything that happened to be out of schema. Both the websocket command and the
+  Devices & Services dialog now merge.
+- The Tools tab's note on "Allowed tools" is rewritten again: as of this release
+  it really does govern built-ins, which 5.3.0 corrected it to deny.
+- **The Stores tab dead-ended a first-time user with a machine key.** With no
+  embeddings binding configured, the store form's `embeddings` dropdown is
+  required and its option list is *empty* — a field no value can satisfy — and
+  pressing Save answered `invalid_data: embeddings`, which the panel rendered
+  under that unanswerable control. `smartchain/store/save` ran the voluptuous
+  schema before the rules, so every sentence `STORE_ERROR_TEXT` has about
+  `embeddings` was unreachable. The rules now run first (the same fix
+  `model_required` got on the agent form), the sentence is read from the
+  translation files in the user's language, and a new one says what to actually
+  do: create a binding on the Embeddings tab first. The tab no longer lets the
+  Save be pressed into that wall — it already received `embeddings_available`
+  from the schema command and ignored it; it now says so above the form and
+  holds Save until a binding exists.
+- **A store that failed to build was reported as a plain green "Saved".**
+  `smartchain/store/save` now carries `store_error`, the same safe text
+  `store/status` serves, and the tab says the store did not start. The per-store
+  row could not explain itself either: `_describe_store` read the registry's
+  failures only when the registry was truthy, and `MemoryRegistry.__len__`
+  counts *live* stores — so an install whose every store failed was exactly the
+  one told `reason: null`. The row now names the reason.
+- **The GigaChat embeddings client ignored "Verify SSL certificates".**
+  `verify_ssl_certs=False` was hardcoded, so turning the hub's switch on secured
+  the conversation client (fixed in 5.4.1) and left every embedding request
+  against the same host unverified. It reads `entry.options` like every other
+  client.
+
+### Notes
+- **`ALL_TOOLS_SENTINEL` (`*`) still means every *custom* tool**, not every
+  tool: a built-in needs its own name in the list. Widening it would make "all
+  my tools, but not `search_memory`" inexpressible. Absent still means no
+  restriction, and an empty list still means nothing — the ordering that keeps a
+  newly added tool from being granted to an agent that already has restrictions.
+  That rule now covers built-ins too, so a built-in added in a future release
+  will not appear in a migrated agent's list on its own.
+
+## [5.3.0] - unreleased
+
+### Added
+- **Custom tools are built in a form, not typed as YAML.** A tool is now a `tool`
+  config sub-entry — add one from the rebuilt **Tools** tab in the SmartChain
+  panel, or from **Settings > Devices & Services > SmartChain > Add tool**. Name,
+  description and enabled are plain fields; the action type is a picker and the
+  rest of the form follows it, so a `service` tool asks for a Home Assistant
+  action and a target (both pickers) and a `script` tool asks for a script
+  entity. Arguments are a row per argument — name, type, description, required —
+  which is the `parameters` JSON Schema, built for you.
+- **A raw JSON Schema box for the shapes rows cannot express.** `anyOf`, nested
+  objects and arrays are still writable: switch the parameter mode to `advanced`.
+  Both modes end at the same validator `tools.yaml` passes through, and a tool
+  reopened for editing lands in whichever mode can represent it — a schema the
+  rows would silently shrink opens in the advanced box instead.
+- **The whole constructor is a backend-served schema.** `smartchain/tool/schema`
+  serialises every field, its selector, and the two fields that reshape the form;
+  `<sc-config-form>` renders it. The Tools tab declares no field name of its own,
+  and a test enforces that.
+- **Websocket commands** `smartchain/tool/schema|save|delete|list` and
+  `smartchain/tools/import|export`, all admin-only, plus a `tools` list on
+  `smartchain/overview`.
+- **Import / export.** Import turns the tools in `tools.yaml` into editable
+  sub-entries, leaving the file untouched; export writes them back out as YAML.
+
+### Changed
+- **`ToolRegistry` builds from both sources.** An existing `tools.yaml` keeps
+  working unchanged — it is still the only home for `mcp_servers:` — but a name
+  defined in both resolves in favour of the sub-entry, the editable one, and the
+  shadowing is logged, reported by `smartchain/tool/list` and shown in the panel
+  rather than left to be discovered. Same rule, and same reasoning, as stores in
+  5.2.0.
+- The Tools tab's YAML editor is demoted into an **Import / Export** block. It
+  keeps its server-side validation, backup and rollback.
+- `smartchain.reload_tools`'s count now covers both sources. It still excludes
+  MCP tools, which arrive asynchronously after the reload returns.
+
+### Fixed
+- **`smartchain.reload_tools` could print a resolved secret.** It raised
+  `HomeAssistantError(str(err))` on a loader failure, and a schema failure's
+  message interpolates the offending value — which Home Assistant has already
+  resolved from `secrets.yaml`, including for mapping *keys*. Calling the action
+  from Developer Tools on a rejected `tools.yaml` therefore put the secret in the
+  UI toast and into the automation trace, where it persists. It now goes through
+  `_safe_loader_error`, the guard the websocket path already used.
+- **Three built-in tool names were shadowable.** `RESERVED_TOOL_NAMES` listed
+  three of six, so a custom tool named `search_memory`, `ask_agents` or
+  `critique_response` was registered alongside the built-in and appended last:
+  the model read the built-in's description while the dispatch resolved to the
+  custom tool. All six are reserved now, in `tools.yaml` and in the form.
+- **The Rollback button ignored a backup it could see.** The panel kept a local
+  "did *this session* make a backup" flag, on the stated belief that the backend
+  had no way to answer the question — but `smartchain/tools/get` has returned
+  `backup_exists` all along. A backup surviving a restart now surfaces the
+  button, which is when it is most wanted.
+- The tab's reserved-name note listed three of six names, and its `allowed_tools`
+  note claimed the setting restricts an agent to the names listed. It filters
+  custom tools only; enabled built-ins are added regardless. Both corrected.
+
+### Security
+- **A REST header value is write-only.** A header is where an `Authorization`
+  token goes, and it now lives in `.storage` rather than in a file the user knows
+  the browser can read. No `tool/*` response carries one back — the form shows the
+  header's name with an empty value, and an empty submission keeps what is stored
+  (per key, so a header can still be removed). Export blanks them too and names
+  the tools affected: an export is a response like any other, and the rule that
+  no response carries a credential does not acquire an exception because the user
+  asked for it.
+- **Importing a `tools.yaml` that uses `!secret` is refused outright**, naming no
+  value. Importing would have to resolve the reference and write the resolved
+  value into `.storage` as plain text, quietly moving a credential out of
+  `secrets.yaml`. The file is also parsed without a secrets store, so nothing can
+  resolve even if the scan were bypassed.
+
+## [5.2.0] - unreleased
+
+### Added
+- **Memory and vector stores are configurable from the UI.** A store is now a
+  `memory_store` config sub-entry — add one from **Settings > Devices & Services >
+  SmartChain > Add memory store**, or from the new **Stores** tab in the SmartChain
+  panel. The form covers everything the `memory:` block of `tools.yaml` covered:
+  the embeddings binding, the description, all four vector backends and their
+  settings, retention, conversation ingest, and the entity-index source with its
+  preset and include/exclude lists.
+- **A store's credentials stop passing through a browser-visible text file.**
+  `backend.dsn` (a PostgreSQL connection string, password included) and
+  `backend.api_key` (a qdrant token) written in `tools.yaml` are handed to the
+  browser by `smartchain/tools/get`, which serves that file's raw text. In a
+  sub-entry they live in `.storage` and are **write-only**: no schema, overview or
+  error response ever carries one back, only whether one is held. Leaving the
+  field empty when editing keeps the stored value; switching backend drops it.
+- **Failure visibility.** `MemoryRegistry` contains a failing store so the others
+  still start, which used to mean a store that never came up was
+  indistinguishable from a working one anywhere but the log. It now records why,
+  a new `smartchain/store/status` command reports it, and the Stores tab shows a
+  health line per store — including for stores that still live in `tools.yaml`.
+- New websocket commands `smartchain/store/schema`, `/save`, `/delete` and
+  `/status`, all admin-only. `smartchain/overview` gained a `stores` list per
+  entry.
+
+### Changed
+- **`tools.yaml` is now one source of stores, not the only one.** An existing
+  `memory:` block keeps working exactly as before. When both a file and a
+  sub-entry define a store of the same name the **sub-entry wins** — it is the one
+  the UI can edit — and the shadowing is reported, both as a warning in the log
+  and in the panel, rather than left to be discovered.
+- `<sc-config-form>` learned reactive schemas: a schema command may return
+  `reactive: ["<field>", ...]`, and changing one of those fields re-requests the
+  schema with the values entered so far. That is what lets one store form ask for
+  a DSN or a qdrant URL without a wizard. Commands that return no `reactive` key
+  are unaffected.
+
+### Fixed
+- Adding, editing or deleting an **embeddings** binding through the panel did not
+  rebuild the memory registry, so the change did nothing until
+  `smartchain.reload_tools` or a restart, with no error to explain why. Both the
+  embeddings and the new store commands now rebuild and report a rebuild failure
+  alongside the successful write.
+
+### Known limitations
+- The store form has **no logbook-ingest switch**. `tools/memory/ingest.py`
+  depends on `logbook._get_events` / `logbook.humanify`, which the installed Home
+  Assistant no longer exposes, so the poller is a runtime no-op — a toggle would
+  advertise something the code cannot do. The YAML `ingest_logbook:` block still
+  parses for anyone who set it, and starts working again the day the fetcher does.
+
+## [5.1.0] - unreleased
+
+### ⚠ BREAKING CHANGES
+
+**A config entry is a connection, not an agent.** The entry's **Configure** dialog
+used to edit an agent — model, prompt, temperature, tools, entity context — using
+the very same form an agent sub-entry uses. Those values drove exactly one thing:
+a single "legacy" conversation entity that existed only while the entry had no
+agent sub-entries. For anyone who had created an agent they were dead
+configuration: a control that looked live and was not.
+
+The dialog now offers **connection settings only**. For GigaChat that is
+`verify_ssl` and `profanity`; every other provider has none and the step says so
+instead of presenting an empty form. The legacy single-entity path is gone: an
+entry with no agents provides no conversation entity, which is a coherent state —
+a connection nobody is using yet — and not an error.
+
+**Automatic migration, with the entity id preserved.** On the first start after
+upgrading, an entry that has agent-shaped options and no conversation sub-entry
+gets one created from those options. The legacy entity's unique id was the config
+entry id and an agent's is `{entry_id}_{subentry_id}`, so a naive migration would
+have orphaned the old entity and broken every automation, script and dashboard
+card naming it. Instead the existing registry rows are rewritten **in place** —
+both the `conversation` entity and the `ai_task` one — so the entity id, friendly
+name and area survive untouched. If a rewrite is impossible (a colliding unique
+id, say) the migration **refuses**: it undoes what it did, leaves the entry exactly
+as it was, logs why, and that entry keeps the legacy path until the conflict is
+resolved.
+
+An entry that has **both** options and agents is left alone — the options stay in
+storage, unread and no longer presented, and a single log line says they were
+found and ignored.
+
+### Fixed
+- An entry whose only sub-entry was an **embeddings** binding lost its conversation
+  entity. The old test was `if entry.subentries:` — the truthiness of the whole
+  sub-entry dict — rather than "has a conversation sub-entry".
+- Saving the entry's settings replaced `entry.options` wholesale. It now merges, so
+  a key the current form does not present cannot be destroyed by a save.
+
+### Changed
+- The panel's Settings tab is now connection settings, and prints an honest
+  sentence for a provider that has none. Its "Refresh models" button is gone from
+  that form — a connection form declares no model.
+- `smartchain/settings/get` serves `connection_schema` and a new `empty` flag, and
+  no longer fetches a model list; `smartchain/settings/save` refuses a provider
+  with no connection settings rather than validating against the agent form.
+
 ## [5.0.0] - unreleased
 
 ### ⚠ BREAKING CHANGES

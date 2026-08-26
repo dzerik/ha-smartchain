@@ -13,14 +13,21 @@ from ..const import (
     MEMORY_LOGBOOK_POLL_MAX_MINUTES,
     MEMORY_LOGBOOK_POLL_MIN_MINUTES,
     MEMORY_STORE_NAME_PATTERN,
+    REST_DEFAULT_TIMEOUT,
+    REST_MAX_TIMEOUT,
+    REST_METHODS,
+    REST_MIN_TIMEOUT,
+    REST_RESPONSE_FORMATS,
+    TOOL_ACTION_TYPES,
     TOOL_NAME_PATTERN,
+    TOOL_SCRIPT_PATTERN,
 )
 
 _NAME = vol.All(str, vol.Match(TOOL_NAME_PATTERN))
 _NON_EMPTY_STR = vol.All(str, vol.Length(min=1))
 _MEMORY_IDENTIFIER = vol.All(str, vol.Match(MEMORY_IDENTIFIER_PATTERN))
 
-_PARAMETERS = vol.Schema(
+PARAMETERS_SCHEMA = vol.Schema(
     {
         vol.Required("type"): "object",
         vol.Required("properties"): dict,
@@ -50,28 +57,39 @@ _TEMPLATE_ACTION = vol.Schema(
 _REST_ACTION = vol.Schema(
     {
         vol.Required("type"): "rest",
-        vol.Required("method"): vol.In(["GET", "POST", "PUT", "DELETE"]),
+        vol.Required("method"): vol.In(REST_METHODS),
         vol.Required("url"): _NON_EMPTY_STR,
         vol.Optional("headers", default=dict): {str: str},
         vol.Optional("payload", default=None): vol.Any(dict, None),
-        vol.Optional("timeout", default=10): vol.All(int, vol.Range(min=1, max=120)),
-        vol.Optional("response_format", default="text"): vol.In(["text", "json"]),
+        vol.Optional("timeout", default=REST_DEFAULT_TIMEOUT): vol.All(
+            int, vol.Range(min=REST_MIN_TIMEOUT, max=REST_MAX_TIMEOUT)
+        ),
+        vol.Optional("response_format", default="text"): vol.In(REST_RESPONSE_FORMATS),
     }
 )
 
 _SCRIPT_ACTION = vol.Schema(
     {
         vol.Required("type"): "script",
-        vol.Required("script"): vol.All(str, vol.Match(r"^script\.[a-z_][a-z0-9_]*$")),
+        vol.Required("script"): vol.All(str, vol.Match(TOOL_SCRIPT_PATTERN)),
         vol.Optional("variables", default=dict): dict,
     }
 )
 
-_ACTION_TYPES = ["service", "template", "rest", "script"]
+# The lists the form's pickers offer come from const.py, so a tool built in the
+# UI cannot offer an action type, an HTTP method or a response format this
+# validator would then reject.
+_ACTION_TYPES = TOOL_ACTION_TYPES
 
 
-def _validate_action(value: object) -> dict:
-    """Validate the action block with a clear error on unknown type."""
+def validate_action(value: object) -> dict:
+    """Validate the action block with a clear error on unknown type.
+
+    Public because the `tool` subentry path validates the action dict it
+    composes from the form with exactly this function — the point being that a
+    tool written in YAML and one built in the panel go through one validator,
+    not two that can drift.
+    """
     if not isinstance(value, dict) or "type" not in value:
         raise vol.Invalid("action must be a dict with a 'type' key")
     action_type = value["type"]
@@ -86,13 +104,13 @@ def _validate_action(value: object) -> dict:
     raise vol.Invalid(f"unknown action type {action_type!r}; expected one of {_ACTION_TYPES}")
 
 
-_ACTION = _validate_action
+_ACTION = validate_action
 
 TOOL_SCHEMA = vol.Schema(
     {
         vol.Required("name"): _NAME,
         vol.Required("description"): _NON_EMPTY_STR,
-        vol.Required("parameters"): _PARAMETERS,
+        vol.Required("parameters"): PARAMETERS_SCHEMA,
         vol.Required("action"): _ACTION,
         vol.Optional("enabled", default=True): bool,
     }

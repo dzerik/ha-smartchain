@@ -109,3 +109,20 @@ def mock_get_client(mock_llm_client):
         return_value=mock_llm_client,
     ) as mock:
         yield mock
+
+
+# The six built-in tool names, written out rather than imported from
+# `RESERVED_TOOL_NAMES`. Parametrising a reserved-name test over the constant
+# under test makes it self-referential: removing a name from the frozenset
+# would also remove it from the parametrisation, and the regression would pass
+# unnoticed. Found exactly that way — by substituting the old three-name set
+# and watching the tests stay green. This list is the specification;
+# `test_the_reserved_set_is_exactly_the_built_ins` pins the constant to it.
+BUILT_IN_TOOL_NAMES = [
+    "ask_agent",
+    "ask_agents",
+    "critique_response",
+    "get_state_history",
+    "search_entities",
+    "search_memory",
+]

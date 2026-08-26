@@ -37,14 +37,10 @@ from langchain_core.messages import (
 )
 
 from .const import (
-    ALL_TOOLS_SENTINEL,
-    CONF_ALLOWED_TOOLS,
     CONF_CHAT_HISTORY,
     CONF_DYNAMIC_CONTEXT_ON_ASSIST,
     CONF_DYNAMIC_CONTEXT_PRESET,
     CONF_DYNAMIC_ENTITY_CONTEXT,
-    CONF_ENABLE_HISTORY_TOOL,
-    CONF_ENABLE_MULTI_AGENT_TOOLS,
     CONF_LLM_HASS_API,
     CONF_PROCESS_BUILTIN_SENTENCES,
     CONF_PROMPT,
@@ -53,8 +49,6 @@ from .const import (
     DEFAULT_DEVICES_PROMPT,
     DEFAULT_DYNAMIC_CONTEXT_ON_ASSIST,
     DEFAULT_DYNAMIC_ENTITY_CONTEXT,
-    DEFAULT_ENABLE_HISTORY_TOOL,
-    DEFAULT_ENABLE_MULTI_AGENT_TOOLS,
     DEFAULT_PROCESS_BUILTIN_SENTENCES,
     DEFAULT_PROMPT,
     DELEGATE_MANY_TOOL_NAME,
@@ -84,6 +78,13 @@ from .tools.delegate_many_tool import (
     get_delegate_many_tool_definition,
 )
 from .tools.dispatcher import dispatch as dispatch_custom_tool
+from .tools.inventory import (
+    builtin_admitted,
+    builtin_tool_names,
+    custom_admitted,
+    custom_tools_for,
+    sibling_agents,
+)
 from .tools.memory.entity_context import build_entity_context, build_retrieved_context
 from .tools.memory.entity_tool import (
     execute_entity_search,
@@ -108,20 +109,22 @@ async def async_setup_entry(
     """Set up conversation entities."""
     entities: list[SmartChainConversationEntity] = []
 
-    subentries = config_entry.subentries
-    if subentries:
-        for sub_id, subentry in subentries.items():
-            if subentry.subentry_type != SUBENTRY_TYPE_CONVERSATION:
-                continue
-            entities.append(
-                SmartChainConversationEntity(
-                    config_entry,
-                    subentry_id=sub_id,
-                    options=dict(subentry.data),
-                )
+    for sub_id, subentry in (config_entry.subentries or {}).items():
+        if subentry.subentry_type != SUBENTRY_TYPE_CONVERSATION:
+            continue
+        entities.append(
+            SmartChainConversationEntity(
+                config_entry,
+                subentry_id=sub_id,
+                options=dict(subentry.data),
             )
-    else:
-        # Legacy mode: single entity from entry.options
+        )
+
+    if not entities and config_entry.minor_version < 2:
+        # Only an entry whose migration refused stays below minor version 2
+        # (see `__init__._migrate_legacy_agent`). It keeps its single legacy
+        # entity rather than losing it; an entry with no agents and no refused
+        # migration is a connection nobody is using yet and gets no entity.
         entities.append(SmartChainConversationEntity(config_entry))
 
     async_add_entities(entities)
@@ -187,16 +190,7 @@ class SmartChainConversationEntity(ConversationEntity):
         cache = getattr(self, "_sibling_agents_cache", None)
         if cache is not None:
             return cache
-        if not self._subentry_id or not self.entry.subentries:
-            return []
-        agents = []
-        for sub_id, subentry in self.entry.subentries.items():
-            if sub_id == self._subentry_id:
-                continue
-            if subentry.subentry_type != SUBENTRY_TYPE_CONVERSATION:
-                continue
-            agents.append({"name": subentry.title, "sub_id": sub_id})
-        return agents
+        return sibling_agents(self.entry, self._subentry_id)
 
     @property
     def _agent_map(self) -> dict[str, str]:
@@ -206,17 +200,13 @@ class SmartChainConversationEntity(ConversationEntity):
     def _collect_custom_tools(self, registry: ToolRegistry) -> list[CustomTool]:
         """Return registry tools allowed for this agent.
 
-        `allowed_tools` semantics: missing/None => all tools;
-        [ALL_TOOLS_SENTINEL, ...] => all tools; [] => none.
+        The admission rule itself lives in `tools/inventory.py`, so that the
+        tools this agent is bound with and the tools the panel reports for it
+        are decided by the same function. This wrapper only supplies the
+        registry, and exists because a caller with a registry in hand should
+        not have to reach into `hass.data` to filter it.
         """
-        allowed = self._agent_options.get(CONF_ALLOWED_TOOLS)
-        all_tools = list(registry.all())
-        if allowed is None:
-            return all_tools
-        allowed_set = set(allowed)
-        if ALL_TOOLS_SENTINEL in allowed_set:
-            return all_tools
-        return [t for t in all_tools if t.name in allowed_set]
+        return [tool for tool in registry.all() if custom_admitted(self._agent_options, tool.name)]
 
     def _render_prompt_cached(self, raw_prompt: str) -> str:
         """Render Jinja2 prompt with TTL cache to avoid repeated template rendering."""
@@ -379,33 +369,39 @@ class SmartChainConversationEntity(ConversationEntity):
             [_ha_tool_to_dict(tool) for tool in chat_log.llm_api.tools] if chat_log.llm_api else []
         )
 
-        # Add history tool if enabled
-        history_enabled = options.get(CONF_ENABLE_HISTORY_TOOL, DEFAULT_ENABLE_HISTORY_TOOL)
+        # Which built-ins this agent gets is decided in exactly one place —
+        # tools/inventory.py — so that `smartchain/agent/tools` reports the set
+        # that is actually bound here rather than a second guess at it.
+        siblings = self._sibling_agents
+        builtin_names = builtin_tool_names(self.hass, self.entry, self._subentry_id, options)
+
+        history_enabled = HISTORY_TOOL_NAME in builtin_names
         if history_enabled:
             tools.append(get_history_tool_definition())
 
-        # Add delegate tool if there are sibling agents
-        sibling_agents = self._sibling_agents
-        if sibling_agents:
-            tools.append(get_delegate_tool_definition(sibling_agents))
+        if DELEGATE_TOOL_NAME in builtin_names:
+            tools.append(get_delegate_tool_definition(siblings))
 
-        multi_agent_tool_names = _collect_multi_agent_tool_names(self)
-        multi_agent_enabled = bool(multi_agent_tool_names)
-        if multi_agent_enabled:
-            tools.append(get_delegate_many_tool_definition(sibling_agents))
-            tools.append(get_critique_tool_definition(sibling_agents))
+        # `ask_agents` and `critique_response` shared one switch and now hold
+        # one list entry each, so they are tracked apart: an agent may fan out
+        # without also being allowed to ask for a second opinion.
+        delegate_many_enabled = DELEGATE_MANY_TOOL_NAME in builtin_names
+        critique_enabled = CRITIQUE_TOOL_NAME in builtin_names
+        if delegate_many_enabled:
+            tools.append(get_delegate_many_tool_definition(siblings))
+        if critique_enabled:
+            tools.append(get_critique_tool_definition(siblings))
 
         memory_registry: MemoryRegistry | None = self.hass.data.get(DOMAIN, {}).get("memory")
-        memory_enabled = memory_registry is not None and len(memory_registry) > 0
+        memory_enabled = MEMORY_TOOL_NAME in builtin_names
         if memory_enabled:
             tools.append(get_memory_tool_definition(memory_registry))
 
-        entity_enabled = memory_registry is not None and bool(memory_registry.entity_store_names())
+        entity_enabled = ENTITY_TOOL_NAME in builtin_names
         if entity_enabled:
             tools.append(get_entity_tool_definition(memory_registry))
 
-        registry: ToolRegistry | None = self.hass.data.get(DOMAIN, {}).get("tools")
-        custom_tools = self._collect_custom_tools(registry) if registry else []
+        custom_tools = custom_tools_for(self.hass, options)
         if custom_tools:
             tools.extend(t.to_llm_schema() for t in custom_tools)
         bound_client = client.bind_tools(tools) if tools else client
@@ -434,8 +430,10 @@ class SmartChainConversationEntity(ConversationEntity):
                 )
                 if entity_enabled:
                     _extra_external |= {ENTITY_TOOL_NAME}
-                if multi_agent_enabled:
-                    _extra_external |= {DELEGATE_MANY_TOOL_NAME, CRITIQUE_TOOL_NAME}
+                if delegate_many_enabled:
+                    _extra_external |= {DELEGATE_MANY_TOOL_NAME}
+                if critique_enabled:
+                    _extra_external |= {CRITIQUE_TOOL_NAME}
                 async for _content in chat_log.async_add_delta_content_stream(
                     user_input.agent_id,
                     _async_langchain_stream(
@@ -526,16 +524,18 @@ class SmartChainConversationEntity(ConversationEntity):
                                 tool_result=result_text,
                             )
                         )
-            if sibling_agents:
+            if siblings:
                 rd = self.entry.runtime_data
                 clients = rd if isinstance(rd, dict) else {}
-                await _handle_delegate_tool_calls(
-                    clients, self._agent_map, chat_log, user_input.agent_id
-                )
-                if multi_agent_enabled:
+                if DELEGATE_TOOL_NAME in builtin_names:
+                    await _handle_delegate_tool_calls(
+                        clients, self._agent_map, chat_log, user_input.agent_id
+                    )
+                if delegate_many_enabled:
                     await _handle_delegate_many_tool_calls(
                         clients, self._agent_map, chat_log, user_input.agent_id
                     )
+                if critique_enabled:
                     await _handle_critique_tool_calls(
                         clients, self._agent_map, chat_log, user_input.agent_id
                     )
@@ -856,11 +856,17 @@ def _collect_multi_agent_tool_names(
 ) -> list[str]:
     """Return the names of multi-agent tools this entity would expose right now.
 
-    Used by tests and by `_async_handle_message` to keep the gating logic in
-    one place.
+    Answers the question for an *entity*, whose sibling list may be stubbed;
+    `tools.inventory.builtin_tool_names` answers it for a config entry, which
+    is what `_async_handle_message` and the panel use. Both defer to
+    `builtin_admitted` for the admission rule, so the two cannot disagree about
+    whether the agent is allowed these tools — only about who its siblings are.
     """
-    options = entity._agent_options
-    enabled = options.get(CONF_ENABLE_MULTI_AGENT_TOOLS, DEFAULT_ENABLE_MULTI_AGENT_TOOLS)
-    if not enabled or not entity._sibling_agents:
+    if not entity._sibling_agents:
         return []
-    return [DELEGATE_MANY_TOOL_NAME, CRITIQUE_TOOL_NAME]
+    options = entity._agent_options
+    return [
+        name
+        for name in (DELEGATE_MANY_TOOL_NAME, CRITIQUE_TOOL_NAME)
+        if builtin_admitted(options, name)
+    ]

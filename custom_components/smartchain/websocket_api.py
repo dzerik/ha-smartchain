@@ -7,9 +7,11 @@ config flow builds, so the field list has one definition rather than two.
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 import shutil
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -23,27 +25,44 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import translation
 
-from .client_util import async_fetch_models, supports
+from .client_util import (
+    ModelFetchError,
+    async_fetch_models,
+    connection_data,
+    static_models,
+    supports,
+)
 from .const import (
-    ALL_TOOLS_SENTINEL,
     CAPABILITY_CHAT,
     CAPABILITY_EMBEDDINGS,
-    CONF_ALLOWED_TOOLS,
     CONF_CHAT_MODEL,
     CONF_CHAT_MODEL_USER,
     CONF_ENGINE,
     DOMAIN,
     ID_GIGACHAT,
+    MEMORY_DEFAULT_BACKEND,
+    MEMORY_SECRET_FIELDS,
+    MEMORY_SOURCE_TYPE_NONE,
     SUBENTRY_TYPE_CONVERSATION,
     SUBENTRY_TYPE_EMBEDDINGS,
+    SUBENTRY_TYPE_MEMORY_STORE,
+    SUBENTRY_TYPE_TOOL,
+    TOOL_DEFAULT_ACTION_TYPE,
+    TOOL_PARAMS_MODE_ADVANCED,
+    TOOL_PARAMS_MODE_SIMPLE,
     UNIQUE_ID,
 )
+from .storable import UNSTORABLE_TEXT, UnstorableValue, ensure_storable
 from .tools.loader import LoaderError, load_tools_file
 from .tools.memory.registry import MemoryRegistry
+from .tools.subentry_source import SOURCE_SUBENTRY, SOURCE_YAML
 
 LOGGER = logging.getLogger(__name__)
 
 _MODEL_CACHE = "panel_model_cache"
+# Per-entry digest of the connection each cached list was fetched over — see
+# `async_invalidate_stale_model_cache`.
+_CONNECTION_DIGESTS = "panel_model_cache_connections"
 
 
 @callback
@@ -51,6 +70,7 @@ def async_register(hass: HomeAssistant) -> None:
     """Register every panel command."""
     websocket_api.async_register_command(hass, ws_agent_schema)
     websocket_api.async_register_command(hass, ws_agent_save)
+    websocket_api.async_register_command(hass, ws_agent_tools)
     websocket_api.async_register_command(hass, ws_settings_get)
     websocket_api.async_register_command(hass, ws_settings_save)
     websocket_api.async_register_command(hass, ws_agent_duplicate)
@@ -58,6 +78,18 @@ def async_register(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_embeddings_schema)
     websocket_api.async_register_command(hass, ws_embeddings_save)
     websocket_api.async_register_command(hass, ws_embeddings_delete)
+    websocket_api.async_register_command(hass, ws_store_schema)
+    websocket_api.async_register_command(hass, ws_store_save)
+    websocket_api.async_register_command(hass, ws_store_delete)
+    websocket_api.async_register_command(hass, ws_store_status)
+    websocket_api.async_register_command(hass, ws_tool_schema)
+    websocket_api.async_register_command(hass, ws_tool_save)
+    websocket_api.async_register_command(hass, ws_tool_delete)
+    websocket_api.async_register_command(hass, ws_tool_list)
+    websocket_api.async_register_command(hass, ws_tool_presets)
+    websocket_api.async_register_command(hass, ws_tool_preset_install)
+    websocket_api.async_register_command(hass, ws_tools_import)
+    websocket_api.async_register_command(hass, ws_tools_export)
     websocket_api.async_register_command(hass, ws_overview)
     websocket_api.async_register_command(hass, ws_tools_get)
     websocket_api.async_register_command(hass, ws_tools_validate)
@@ -79,18 +111,78 @@ async def _models_for(
     """Model list for an entry, fetched once and reused until asked to refresh.
 
     A flow dialog pays the network cost once per open. The panel would pay it on
-    every click between agents, so the list is cached and an explicit refresh is
-    the only invalidation. Keyed by entry id *and* purpose — a chat fetch and an
-    embeddings fetch on the same entry must not serve each other's list.
+    every click between agents, so the list is cached. Keyed by entry id *and*
+    purpose — a chat fetch and an embeddings fetch on the same entry must not
+    serve each other's list.
+
+    Two things invalidate it: an explicit Refresh models, and a change to the
+    connection the list was fetched over (`async_invalidate_stale_model_cache`).
+    The second was missing, and it made the hub's own settings look broken
+    rather than merely stale: Verify SSL began feeding this fetch in v5.4.11, so
+    a user whose network needs certificate checking would turn the switch on,
+    reopen the panel, and be served the list cached from the failing
+    connection — with nothing to suggest the setting had not taken.
+
+    A *failed* fetch is not cached. It used to be, and the consequence was out
+    of all proportion to its cause: one blip while the panel was first opening
+    replaced the provider's catalogue with the shipped list, and that stayed
+    until Home Assistant restarted or the user found "Refresh models" — by
+    which time their own model was missing from every agent form and every save
+    was refused. Only an answer is worth remembering; a non-answer is worth
+    trying again.
     """
     cache: dict[tuple[str, str], list[str]] = hass.data.setdefault(DOMAIN, {}).setdefault(
         _MODEL_CACHE, {}
     )
     key = (entry.entry_id, purpose)
-    if refresh or key not in cache:
-        engine = entry.data.get(CONF_ENGINE, ID_GIGACHAT)
-        cache[key] = await async_fetch_models(hass, engine, entry.data, purpose=purpose)
-    return cache[key]
+    if not refresh and key in cache:
+        return cache[key]
+
+    engine = entry.data.get(CONF_ENGINE, ID_GIGACHAT)
+    try:
+        models = await async_fetch_models(
+            hass, engine, connection_data(entry), purpose=purpose, strict=True
+        )
+    except ModelFetchError:
+        # Deliberately outside the cache: the next open retries.
+        return static_models(engine, purpose)
+    cache[key] = models
+    return models
+
+
+@callback
+def async_invalidate_stale_model_cache(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Drop an entry's cached model lists when its *connection* has changed.
+
+    Called from `update_listener`, which fires for every write to the entry —
+    including an agent subentry save, which has nothing to do with which models
+    the provider serves. Invalidating on all of those would make the cache
+    little better than absent, so the trigger is narrowed to what a fetch
+    actually depends on: `connection_data(entry)`, the same view of the entry
+    the fetch itself is handed. Credentials, base URL and Verify SSL change the
+    answer; a prompt does not.
+
+    Both purposes go together. They are separate cache entries because they
+    hold different lists, but they are fetched over the one connection, so a
+    connection that has changed invalidates both.
+
+    The stored value is a one-way digest, never the connection itself:
+    `connection_data` carries the API key. It stays in `hass.data`, is never
+    returned, logged or sent anywhere, and nothing else may start reporting it.
+    """
+    domain_data = hass.data.setdefault(DOMAIN, {})
+    digests: dict[str, str] = domain_data.setdefault(_CONNECTION_DIGESTS, {})
+    digest = hashlib.sha256(
+        json.dumps(connection_data(entry), sort_keys=True, default=repr).encode()
+    ).hexdigest()
+
+    if digests.get(entry.entry_id) == digest:
+        return
+    digests[entry.entry_id] = digest
+
+    cache: dict[tuple[str, str], list[str]] = domain_data.setdefault(_MODEL_CACHE, {})
+    for purpose in (CAPABILITY_CHAT, CAPABILITY_EMBEDDINGS):
+        cache.pop((entry.entry_id, purpose), None)
 
 
 async def _async_field_texts(
@@ -166,6 +258,90 @@ async def async_field_descriptions(
     )
 
 
+# Where the panel-facing text of a preset lives, and the one convention chosen
+# for it: `config_panel.presets.<preset name>.{name,description}`.
+#
+# `config_panel` because it is the only category Home Assistant defines for text
+# a custom panel shows — hassfest validates it as a free-form tree of
+# translation keys down to strings, which is exactly the shape needed, and it
+# says in the key itself that this text is for the panel and not for a flow.
+# `presets` scopes it the way `config_subentries` is scoped by subentry type, so
+# a second kind of panel text added later cannot collide with a preset name.
+#
+# The split it establishes is the point: `<preset>.name` and
+# `<preset>.description` are UI strings and are translated, while the tool's own
+# `description` — the sentence the *model* reads to decide whether to call it —
+# stays in English in `tools/presets.py` and is never read from here. They are
+# different audiences, so they are different strings in different places.
+PRESET_TEXT_CATEGORY = "config_panel"
+PRESET_TEXT_PREFIX = f"component.{DOMAIN}.{PRESET_TEXT_CATEGORY}.presets."
+
+
+async def async_preset_texts(hass: HomeAssistant) -> dict[str, dict[str, str]]:
+    """`{preset name: {"name": ..., "description": ...}}` in the user's language.
+
+    Returns whatever it can, like `async_field_labels` does: a preset with no
+    translation is simply absent from the map and the panel falls back to the
+    tool's own name, so a preset added without a translation still renders.
+    """
+    resources = await translation.async_get_translations(
+        hass, hass.config.language, PRESET_TEXT_CATEGORY, [DOMAIN]
+    )
+    texts: dict[str, dict[str, str]] = {}
+    for key, value in resources.items():
+        if not key.startswith(PRESET_TEXT_PREFIX):
+            continue
+        preset, _, field = key[len(PRESET_TEXT_PREFIX) :].partition(".")
+        if field not in ("name", "description"):
+            continue
+        texts.setdefault(preset, {})[field] = value
+    return texts
+
+
+# Said only when the translation file has nothing to say — an English sentence
+# rather than a key, because the bare key is exactly what a new user used to
+# be shown. The rule is about both fields, so it names both.
+MODEL_REQUIRED_FALLBACK = "select a model from the list, or type a custom model name"
+MODEL_REQUIRED_FIELDS = (CONF_CHAT_MODEL, CONF_CHAT_MODEL_USER)
+
+# The other half of the same story. `model_required` covers "you picked
+# nothing"; this covers "you picked something the list has never heard of",
+# which is what a user whose provider has just shipped a model — or whose
+# provider was unreachable when the panel opened — actually hits. It says which
+# of the two it is likely to be, and both ways out.
+MODEL_UNKNOWN_FALLBACK = (
+    "that model is not in the list we could get from the provider just now — "
+    "press Refresh models if the connection was down, or type the exact name "
+    "into the custom model field to use it anyway"
+)
+
+
+async def async_flow_error_text(
+    hass: HomeAssistant,
+    key: str,
+    category: str,
+    *,
+    fallback: str,
+    subentry_type: str | None = None,
+) -> str:
+    """The `error.<key>` sentence a config flow would show, for the panel.
+
+    A config flow renders `errors={"base": key}` through `strings.json`, so
+    every rule already has a translated sentence written for it. The panel has
+    no translation layer of its own, and the websocket commands that enforce
+    the *same* rules were sending the bare key instead — which is why a new
+    user's first Save toasted `model_required` at them. This reads the sentence
+    that already exists, in the user's own language, rather than adding a
+    second English-only copy of it to Python.
+
+    Same walk as `async_field_labels`, same `subentry_type` scoping, and for
+    the same reason: `conversation` and `embeddings` both define
+    `model_required`, and they are not the same sentence.
+    """
+    texts = await _async_field_texts(hass, category, ".error.", subentry_type=subentry_type)
+    return texts.get(key) or fallback
+
+
 @websocket_api.require_admin
 @websocket_api.websocket_command(
     {
@@ -225,6 +401,67 @@ async def ws_agent_schema(
     )
 
 
+@websocket_api.require_admin
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "smartchain/agent/tools",
+        vol.Required("entry_id"): str,
+        vol.Required("subentry_id"): str,
+    }
+)
+@websocket_api.async_response
+async def ws_agent_tools(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Everything this agent can do, and what is stopping the rest.
+
+    The one screen that answers the question. Carries no configuration values —
+    only tool names, where each comes from, and whether it is on — so nothing
+    from `subentry.data` (which may hold a provider key on a legacy entry)
+    reaches the wire through here.
+    """
+    from .tools.inventory import describe_agent_tools
+
+    entry = _get_entry(hass, msg["entry_id"])
+    if entry is None:
+        connection.send_error(msg["id"], "not_found", "Unknown config entry")
+        return
+
+    subentry = entry.subentries.get(msg["subentry_id"])
+    if subentry is None or subentry.subentry_type != SUBENTRY_TYPE_CONVERSATION:
+        connection.send_error(msg["id"], "not_found", "Unknown agent")
+        return
+
+    connection.send_result(
+        msg["id"],
+        {"tools": describe_agent_tools(hass, entry, subentry.subentry_id, subentry.data)},
+    )
+
+
+def invalid_data(fields: Iterable[str], detail: str | None = None) -> str:
+    """The one shape every save command reports a rejected field in.
+
+    `invalid_data: <field>[, <field>…][ — <human text>]`. The field list is
+    what lets `<sc-config-form>` attach the message to the control the user is
+    looking at instead of toasting it; the optional text after the em dash is
+    what makes the message worth attaching. Both halves are optional in
+    practice — a failure with no identifiable field degrades to a bare
+    `invalid_data` — and the separator is an em dash precisely because a field
+    name can never contain one, so the split is unambiguous on the panel side.
+
+    Written down here, once, because three files used to spell it out
+    independently and one of them (`normalize_model_input`'s "model_required")
+    did not spell it at all — which is how a new user's very first Save came to
+    toast a machine key.
+    """
+    joined = ", ".join(fields)
+    if not joined:
+        return f"invalid_data — {detail}" if detail else "invalid_data"
+    return f"invalid_data: {joined} — {detail}" if detail else f"invalid_data: {joined}"
+
+
 def _describe_invalid(err: vol.Invalid) -> str:
     """A validation message that names the offending field.
 
@@ -233,13 +470,89 @@ def _describe_invalid(err: vol.Invalid) -> str:
     validators, includes the value that failed. Only the field name and a
     short reason travel here, so the message stays safe regardless of how
     voluptuous chooses to render itself.
+
+    `UnstorableValue` is the single exception, and it is a type rather than a
+    string comparison: its message is a module constant built from nothing the
+    client sent, so carrying it through is provably safe in a way that reading
+    an arbitrary `vol.Invalid`'s message would not be.
     """
-    fields = sorted(
-        {str(sub.path[0]) for sub in getattr(err, "errors", [err]) if getattr(sub, "path", None)}
+    suberrors = getattr(err, "errors", None) or [err]
+    fields = _invalid_fields(err)
+    detail = UNSTORABLE_TEXT if any(isinstance(sub, UnstorableValue) for sub in suberrors) else None
+    return invalid_data(fields, detail)
+
+
+def _invalid_fields(err: vol.Invalid) -> list[str]:
+    """The schema field names one `vol.Invalid` names, deduplicated and sorted."""
+    suberrors = getattr(err, "errors", None) or [err]
+    return sorted({str(sub.path[0]) for sub in suberrors if getattr(sub, "path", None)})
+
+
+async def _describe_model_invalid(hass: HomeAssistant, err: vol.Invalid, subentry_type: str) -> str:
+    """`_describe_invalid`, plus a sentence when the model is what was rejected.
+
+    The model select is the one field on these forms whose valid values are
+    decided elsewhere — by whatever the provider listed when the panel opened.
+    So it is the one field a user can be refused on without having touched it:
+    open an agent, edit the prompt, save, and be told `invalid_data: model`
+    about a model that has been working all week. v5.4.7 fixed exactly this
+    shape of dead end for the stores form; v5.4.10 carried it to the agent
+    form and stopped there, leaving the embeddings form — whose stored value
+    is *more* likely to be off-list, because the docs tell people to type it
+    into Custom Model — reporting the raw machine key this release had just
+    finished removing one file over.
+
+    Both forms name the field `model` (`CONF_CHAT_MODEL`), so only the
+    translation scope differs and it is a parameter rather than a second copy
+    of this function.
+
+    Every other field keeps the plain description: they fail because of
+    something the user typed, and the control they typed it into is the
+    message.
+    """
+    fields = _invalid_fields(err)
+    if CONF_CHAT_MODEL not in fields:
+        return _describe_invalid(err)
+    text = await async_flow_error_text(
+        hass,
+        "model_unknown",
+        "config_subentries",
+        fallback=MODEL_UNKNOWN_FALLBACK,
+        subentry_type=subentry_type,
     )
-    if not fields:
-        return "invalid_data"
-    return f"invalid_data: {', '.join(fields)}"
+    return invalid_data(fields, text)
+
+
+def _write_subentry(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    subentry: ConfigSubentry | None,
+    *,
+    subentry_type: str,
+    data: Mapping[str, Any],
+    title: str,
+) -> str:
+    """Create or update one subentry, and return its id.
+
+    Every subentry this integration writes goes through here, so the
+    JSON-serialisability guard is structural rather than a line someone has to
+    remember at each of the six call sites. That matters more than the
+    deduplication: a value orjson cannot encode does not corrupt *this*
+    subentry, it kills every subsequent write of `core.config_entries` for
+    every integration on the system (see `storable`), and the failure surfaces
+    as a `TypeError` in a delayed-write task that nobody sees.
+
+    Raises `vol.Invalid` — the same exception the schema raises, carrying the
+    same `path` — so a caller's existing `except vol.Invalid` branch reports it
+    with no new error handling.
+    """
+    stored = ensure_storable(data)
+    if subentry is None:
+        new = ConfigSubentry(data=stored, subentry_type=subentry_type, title=title, unique_id=None)
+        hass.config_entries.async_add_subentry(entry, new)
+        return new.subentry_id
+    hass.config_entries.async_update_subentry(entry, subentry, data=stored, title=title)
+    return subentry.subentry_id
 
 
 @websocket_api.require_admin
@@ -278,30 +591,57 @@ async def ws_agent_save(
     schema = subentry_schema(hass, entry.unique_id, defaults, models=models)
 
     try:
-        data = dict(schema(dict(msg["data"])))
+        data = ensure_storable(schema(dict(msg["data"])))
     except vol.Invalid as err:
-        connection.send_error(msg["id"], "invalid_data", _describe_invalid(err))
+        connection.send_error(
+            msg["id"],
+            "invalid_data",
+            await _describe_model_invalid(hass, err, SUBENTRY_TYPE_CONVERSATION),
+        )
         return
 
     error = normalize_model_input(data)
     if error:
-        connection.send_error(msg["id"], "invalid_data", error)
-        return
-
-    title = agent_title(data)
-    if subentry is None:
-        new = ConfigSubentry(
-            data=data,
+        # Named fields and a sentence, not a bare key: this is the very first
+        # Save a new user performs — `DEFAULT_CHAT_MODEL` is "" so "+ Agent"
+        # opens with nothing selected — and it used to toast "model_required".
+        text = await async_flow_error_text(
+            hass,
+            error,
+            "config_subentries",
+            fallback=MODEL_REQUIRED_FALLBACK,
             subentry_type=SUBENTRY_TYPE_CONVERSATION,
-            title=title,
-            unique_id=None,
         )
-        hass.config_entries.async_add_subentry(entry, new)
-        connection.send_result(msg["id"], {"subentry_id": new.subentry_id})
+        connection.send_error(msg["id"], "invalid_data", invalid_data(MODEL_REQUIRED_FIELDS, text))
         return
 
-    hass.config_entries.async_update_subentry(entry, subentry, data=data, title=title)
-    connection.send_result(msg["id"], {"subentry_id": subentry.subentry_id})
+    # Keep what this schema does not declare. `ws_agent_schema` strips undeclared
+    # keys before serving them (see F1 there), so a conditional field that is out
+    # of schema right now comes back absent — and replacing `subentry.data`
+    # wholesale would then delete the stored value. Merging is the actual fix;
+    # the field being conditional is only the trigger, and the next conditional
+    # field would reintroduce it.
+    declared = {str(key.schema) for key in schema.schema}
+    preserved = (
+        {name: value for name, value in subentry.data.items() if name not in declared}
+        if subentry is not None
+        else {}
+    )
+    data = {**preserved, **data}
+
+    try:
+        result_id = _write_subentry(
+            hass,
+            entry,
+            subentry,
+            subentry_type=SUBENTRY_TYPE_CONVERSATION,
+            data=data,
+            title=agent_title(data),
+        )
+    except vol.Invalid as err:
+        connection.send_error(msg["id"], "invalid_data", _describe_invalid(err))
+        return
+    connection.send_result(msg["id"], {"subentry_id": result_id})
 
 
 @websocket_api.require_admin
@@ -318,8 +658,16 @@ async def ws_settings_get(
     connection: websocket_api.ActiveConnection,
     msg: dict[str, Any],
 ) -> None:
-    """Serve the entry's options form — the same schema the agent form uses."""
-    from .config_flow import subentry_schema
+    """Serve the entry's *connection* form.
+
+    Not the agent schema: an entry is a connection, and the model, prompt and
+    tools live on a conversation subentry. Most providers therefore have no
+    connection settings at all, which is why the result carries ``empty`` — the
+    panel must say so rather than render a form with no fields. ``refresh`` is
+    accepted and ignored; a connection form has no model list, so it must not
+    pay a network round trip to open.
+    """
+    from .config_flow import connection_schema
 
     entry = _get_entry(hass, msg["entry_id"])
     if entry is None:
@@ -327,13 +675,14 @@ async def ws_settings_get(
         return
 
     defaults = dict(entry.options)
-    models = await _models_for(hass, entry, refresh=msg["refresh"], purpose=CAPABILITY_CHAT)
-    schema = subentry_schema(hass, entry.unique_id, defaults, models=models)
+    engine = entry.data.get(CONF_ENGINE, ID_GIGACHAT)
+    schema = connection_schema(engine, defaults)
 
     # Same trap as ws_agent_schema (see F1): the schema is conditional, so a
     # stale option key it no longer declares must not be served — <ha-form>
     # would echo it back and PREVENT_EXTRA in ws_settings_save would reject it
-    # forever.
+    # forever. It also keeps a legacy entry's leftover agent options off the
+    # wire entirely.
     declared = {str(key.schema) for key in schema.schema}
     served = {name: value for name, value in defaults.items() if name in declared}
 
@@ -342,6 +691,7 @@ async def ws_settings_get(
         {
             "schema": voluptuous_serialize.convert(schema, custom_serializer=cv.custom_serializer),
             "data": served,
+            "empty": not schema.schema,
             "labels": await async_field_labels(hass, "options"),
             "descriptions": await async_field_descriptions(hass, "options"),
         },
@@ -362,33 +712,42 @@ async def ws_settings_save(
     connection: websocket_api.ActiveConnection,
     msg: dict[str, Any],
 ) -> None:
-    """Save the entry's options, validating exactly as the agent form does.
+    """Save the entry's connection settings.
 
     Written with ``options=``, never ``data=`` — ``entry.data`` is where the
-    provider credential lives.
+    provider credential lives. There is no ``normalize_model_input`` here: the
+    connection schema declares no model, so that check would reject every
+    submission with "model_required".
     """
-    from .config_flow import normalize_model_input, subentry_schema
+    from .config_flow import connection_schema
 
     entry = _get_entry(hass, msg["entry_id"])
     if entry is None:
         connection.send_error(msg["id"], "not_found", "Unknown config entry")
         return
 
-    models = await _models_for(hass, entry, refresh=False, purpose=CAPABILITY_CHAT)
-    schema = subentry_schema(hass, entry.unique_id, dict(entry.options), models=models)
+    stored = dict(entry.options)
+    engine = entry.data.get(CONF_ENGINE, ID_GIGACHAT)
+    schema = connection_schema(engine, stored)
+    if not schema.schema:
+        connection.send_error(
+            msg["id"], "not_supported", "This provider has no connection settings"
+        )
+        return
 
     try:
-        data = dict(schema(dict(msg["data"])))
+        # `entry.options` reaches storage through the same
+        # `as_storage_fragment` a subentry does, so the connection form is
+        # guarded on the same terms — see `storable`.
+        data = ensure_storable(schema(dict(msg["data"])))
     except vol.Invalid as err:
         connection.send_error(msg["id"], "invalid_data", _describe_invalid(err))
         return
 
-    error = normalize_model_input(data)
-    if error:
-        connection.send_error(msg["id"], "invalid_data", error)
-        return
-
-    hass.config_entries.async_update_entry(entry, options=data)
+    # Merge, never replace: a legacy entry that also has agents keeps its old
+    # agent-shaped options in storage untouched — they simply stop being
+    # presented — and replacing wholesale would destroy them on the first save.
+    hass.config_entries.async_update_entry(entry, options={**stored, **data})
     connection.send_result(msg["id"], {"entry_id": entry.entry_id})
 
 
@@ -442,15 +801,23 @@ async def ws_agent_duplicate(
         return
     entry, subentry = resolved
 
-    copy = ConfigSubentry(
-        data=dict(subentry.data),
-        subentry_type=SUBENTRY_TYPE_CONVERSATION,
-        # A copy sharing the original's title is indistinguishable in a list.
-        title=_unique_copy_title(entry, subentry.title),
-        unique_id=None,
-    )
-    hass.config_entries.async_add_subentry(entry, copy)
-    connection.send_result(msg["id"], {"subentry_id": copy.subentry_id})
+    try:
+        copy_id = _write_subentry(
+            hass,
+            entry,
+            None,
+            subentry_type=SUBENTRY_TYPE_CONVERSATION,
+            data=dict(subentry.data),
+            # A copy sharing the original's title is indistinguishable in a list.
+            title=_unique_copy_title(entry, subentry.title),
+        )
+    except vol.Invalid as err:
+        # Only reachable if the *original* already holds something unstorable,
+        # in which case duplicating it would spread the damage rather than
+        # start it.
+        connection.send_error(msg["id"], "invalid_data", _describe_invalid(err))
+        return
+    connection.send_result(msg["id"], {"subentry_id": copy_id})
 
 
 @websocket_api.require_admin
@@ -510,7 +877,7 @@ def _describe_entry(hass: HomeAssistant, entry: ConfigEntry) -> dict[str, Any]:
         "engine_label": UNIQUE_ID.get(engine, engine),
         "supports_embeddings": supports(engine, CAPABILITY_EMBEDDINGS),
         "agents": [
-            _describe_agent(subentry)
+            _describe_agent(hass, entry, subentry)
             for subentry in entry.subentries.values()
             if subentry.subentry_type == SUBENTRY_TYPE_CONVERSATION
         ],
@@ -519,22 +886,69 @@ def _describe_entry(hass: HomeAssistant, entry: ConfigEntry) -> dict[str, Any]:
             for subentry in entry.subentries.values()
             if subentry.subentry_type == SUBENTRY_TYPE_EMBEDDINGS
         ],
+        "stores": [
+            _describe_store(registry, subentry)
+            for subentry in entry.subentries.values()
+            if subentry.subentry_type == SUBENTRY_TYPE_MEMORY_STORE
+        ],
+        # Present so the Tools tab knows which entry to create a tool on and
+        # which tools this entry already hosts. The tab's own list comes from
+        # `smartchain/tool/list`, which also covers tools.yaml and MCP.
+        "tools": [
+            _describe_tool_subentry(entry, subentry)
+            for subentry in entry.subentries.values()
+            if subentry.subentry_type == SUBENTRY_TYPE_TOOL
+        ],
     }
 
 
-def _describe_agent(subentry: Any) -> dict[str, Any]:
+def _describe_agent(hass: HomeAssistant, entry: ConfigEntry, subentry: Any) -> dict[str, Any]:
+    """Public description of one agent, including how many tools it really has.
+
+    `tool_count` used to be `len(allowed_tools)`, or `None` for "all tools" —
+    a count of one *setting*, which never mentioned a built-in and so
+    understated every agent that had one. It is now the number of tools the
+    agent would actually be bound with, taken from the same inventory
+    `_async_handle_message` binds from.
+    """
+    from .tools.inventory import describe_agent_tools
+
     data = subentry.data
     model = (data.get(CONF_CHAT_MODEL_USER) or "").strip() or data.get(CONF_CHAT_MODEL, "")
-    allowed = data.get(CONF_ALLOWED_TOOLS)
-    # None (never touched) and the sentinel (explicitly "all tools") both mean
-    # every tool; the panel shows "all tools" rather than a count it cannot
-    # know without building the registry.
-    all_tools = allowed is None or ALL_TOOLS_SENTINEL in allowed
+    inventory = describe_agent_tools(hass, entry, subentry.subentry_id, data)
     return {
         "subentry_id": subentry.subentry_id,
         "title": subentry.title,
         "model": model,
-        "tool_count": None if all_tools else len(allowed),
+        "tool_count": sum(1 for row in inventory if row["enabled"]),
+        "tool_total": len(inventory),
+    }
+
+
+def _describe_store(registry: Any, subentry: Any) -> dict[str, Any]:
+    """Public description of one memory store subentry.
+
+    Assembled field by field for the same reason `_describe_entry` is:
+    `subentry.data` holds `dsn` and `api_key`, so forwarding it wholesale —
+    now or by a later edit — would put a database password on the wire. Only
+    whether a credential is held travels, never the credential.
+    """
+    data = subentry.data
+    name = subentry.title
+    # `is not None`, not truthiness: MemoryRegistry defines __len__ over its
+    # *live* stores, so a registry whose every store failed is falsy — and the
+    # row that most needed a reason was the one guaranteed to be told `None`.
+    failures = getattr(registry, "failures", None) or {}
+    live = registry is not None and name in registry.stores
+    return {
+        "subentry_id": subentry.subentry_id,
+        "title": name,
+        "embeddings": data.get("embeddings", ""),
+        "backend_type": data.get("backend_type", MEMORY_DEFAULT_BACKEND),
+        "source_type": data.get("source_type", MEMORY_SOURCE_TYPE_NONE),
+        "secrets_set": {field: bool(data.get(field)) for field in MEMORY_SECRET_FIELDS},
+        "ok": live,
+        "reason": None if live else failures.get(name),
     }
 
 
@@ -551,7 +965,10 @@ def _describe_binding(registry: Any, subentry: Any) -> dict[str, Any]:
         "subentry_id": subentry.subentry_id,
         "title": subentry.title,
         "model": model,
-        "bound_stores": registry.stores_bound_to(subentry.title) if registry else [],
+        # `is not None` for the reason spelled out in `_describe_store`: an
+        # all-failed registry is falsy and would answer this as "nothing is
+        # bound", which is a different claim from "nothing came up".
+        "bound_stores": registry.stores_bound_to(subentry.title) if registry is not None else [],
     }
 
 
@@ -708,14 +1125,28 @@ async def ws_embeddings_save(
     schema = embeddings_subentry_schema(models, defaults)
 
     try:
-        data = dict(schema(dict(msg["data"])))
+        data = ensure_storable(schema(dict(msg["data"])))
     except vol.Invalid as err:
-        connection.send_error(msg["id"], "invalid_data", _describe_invalid(err))
+        connection.send_error(
+            msg["id"],
+            "invalid_data",
+            await _describe_model_invalid(hass, err, SUBENTRY_TYPE_EMBEDDINGS),
+        )
         return
 
     model = _resolve_embeddings_model(data)
     if not model:
-        connection.send_error(msg["id"], "invalid_data", "model_required")
+        # Same rule, same fields and the same reason for spelling it out as in
+        # `ws_agent_save` — but this subentry type's own sentence, which is not
+        # the conversation one.
+        text = await async_flow_error_text(
+            hass,
+            "model_required",
+            "config_subentries",
+            fallback=MODEL_REQUIRED_FALLBACK,
+            subentry_type=SUBENTRY_TYPE_EMBEDDINGS,
+        )
+        connection.send_error(msg["id"], "invalid_data", invalid_data(MODEL_REQUIRED_FIELDS, text))
         return
 
     title = data["name"]
@@ -731,25 +1162,28 @@ async def ws_embeddings_save(
             connection.send_error(
                 msg["id"],
                 "invalid_data",
-                f"invalid_data: name (already used by {taken_by})",
+                invalid_data(["name"], f"already used by {taken_by}"),
             )
             return
 
-    stored = {"model": model, "model_user": data.get("model_user", "")}
-
-    if subentry is None:
-        new = ConfigSubentry(
-            data=stored,
+    try:
+        result_id = _write_subentry(
+            hass,
+            entry,
+            subentry,
             subentry_type=SUBENTRY_TYPE_EMBEDDINGS,
+            data={"model": model, "model_user": data.get("model_user", "")},
             title=title,
-            unique_id=None,
         )
-        hass.config_entries.async_add_subentry(entry, new)
-        connection.send_result(msg["id"], {"subentry_id": new.subentry_id})
+    except vol.Invalid as err:
+        connection.send_error(msg["id"], "invalid_data", _describe_invalid(err))
         return
 
-    hass.config_entries.async_update_subentry(entry, subentry, data=stored, title=title)
-    connection.send_result(msg["id"], {"subentry_id": subentry.subentry_id})
+    # A store binds to this title, and nothing rebuilds the memory registry on
+    # its own — without this a new binding did nothing until
+    # `smartchain.reload_tools` or a restart, with no error to explain why.
+    reload_error = await _rebuild_after_subentry_write(hass)
+    connection.send_result(msg["id"], {"subentry_id": result_id, "reload_error": reload_error})
 
 
 def _resolve_embeddings(
@@ -791,7 +1225,358 @@ async def ws_embeddings_delete(
     bound_stores = registry.stores_bound_to(subentry.title)
 
     hass.config_entries.async_remove_subentry(entry, subentry.subentry_id)
-    connection.send_result(msg["id"], {"bound_stores": bound_stores})
+    reload_error = await _rebuild_after_subentry_write(hass)
+    connection.send_result(msg["id"], {"bound_stores": bound_stores, "reload_error": reload_error})
+
+
+async def _rebuild_after_subentry_write(hass: HomeAssistant) -> str | None:
+    """Rebuild the tool/MCP/memory registry after a subentry changed.
+
+    Adding a memory store or an embeddings binding used to do nothing until
+    `smartchain.reload_tools` or a restart — the store simply was not there,
+    with no error to explain why. `async_add_subentry` fires no event the
+    memory subsystem listens for, so the rebuild has to be explicit.
+
+    Never raises: the write already happened and reporting it as a failure
+    would be a lie. A tools.yaml that no longer loads, or an MCP server that
+    will not start, comes back as a safe reason string for the panel to show
+    beside the successful save — via `_safe_loader_error`, so a `!secret` that
+    a validation error interpolated cannot travel with it.
+
+    `only_if_changed` because the same write also fires `update_listener` as a
+    background task, and whichever of the two arrives second has nothing left
+    to do: the fingerprint check inside `_reload_registry` runs under the
+    rebuild lock, so exactly one of them rebuilds. Before that gate the panel
+    handler rebuilt unconditionally and the pair cost two — two MCP bounces,
+    two reopened backends, and two embedding dimension probes, each a fresh
+    OAuth exchange under a 30 s timeout.
+
+    Every caller of this function writes a subentry and nothing else. A handler
+    that edits tools.yaml — `tools/save`, `tools/rollback` — calls
+    `_reload_registry` directly and ungated, because the fingerprint digests
+    subentries and would not see the file move.
+
+    When the gate skips, the standing tools.yaml error is still what comes
+    back: the file is as broken as it was a moment ago, and reporting the save
+    as clean would hide a banner the user needs.
+    """
+    from . import _reload_registry
+
+    try:
+        rebuilt = await _reload_registry(hass, only_if_changed=True)
+    except Exception as err:  # noqa: BLE001 — the write succeeded regardless
+        LOGGER.warning(  # detail stays server-side
+            "registry rebuild after a subentry change failed: %s", err
+        )
+        return _safe_loader_error(err)
+    if rebuilt is None:
+        return hass.data.get(DOMAIN, {}).get("yaml_error")
+    return None
+
+
+def _store_defaults(subentry: Any) -> dict[str, Any]:
+    """Stored values for the store form. The title *is* the store name."""
+    return {**subentry.data, "name": subentry.title}
+
+
+def _resolve_store(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> tuple[ConfigEntry, Any] | None:
+    """Entry and store subentry named by the message, or None after an error."""
+    entry = _get_entry(hass, msg["entry_id"])
+    if entry is None:
+        connection.send_error(msg["id"], "not_found", "Unknown config entry")
+        return None
+    subentry = entry.subentries.get(msg["subentry_id"])
+    if subentry is None or subentry.subentry_type != SUBENTRY_TYPE_MEMORY_STORE:
+        connection.send_error(msg["id"], "not_found", "Unknown memory store")
+        return None
+    return entry, subentry
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "smartchain/store/schema",
+        vol.Required("entry_id"): str,
+        vol.Optional("subentry_id"): str,
+        vol.Optional("data"): dict,
+        vol.Optional("refresh", default=False): bool,
+    }
+)
+@websocket_api.async_response
+async def ws_store_schema(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Serialise the memory-store form, reshaped around the choices made so far.
+
+    Which fields a store has depends on its backend and on whether it indexes
+    entities, and `<ha-form>` cannot change shape by itself. So this command
+    accepts the in-progress form values in `data` and rebuilds the schema
+    around them; `reactive` tells the panel which fields are worth a round
+    trip. The panel therefore still declares no field name of its own — the
+    list of fields that reshape the form comes from here, like everything else.
+
+    `dsn` and `api_key` are never served from storage — only `secrets_set`
+    says whether one is held. A value the *client itself* just sent comes back
+    (it is already the client's own), so a credential typed before switching
+    backends is not silently dropped.
+    """
+    from .config_flow import memory_store_subentry_schema
+
+    entry = _get_entry(hass, msg["entry_id"])
+    if entry is None:
+        connection.send_error(msg["id"], "not_found", "Unknown config entry")
+        return
+
+    stored: dict[str, Any] = {}
+    subentry_id = msg.get("subentry_id")
+    if subentry_id is not None:
+        subentry = entry.subentries.get(subentry_id)
+        if subentry is None or subentry.subentry_type != SUBENTRY_TYPE_MEMORY_STORE:
+            connection.send_error(msg["id"], "not_found", "Unknown memory store")
+            return
+        stored = _store_defaults(subentry)
+
+    draft = dict(msg.get("data") or {})
+    defaults = {**stored, **draft}
+    schema = memory_store_subentry_schema(hass, defaults)
+
+    # Same trap as ws_agent_schema (see F1): only serve fields the schema still
+    # declares, or <ha-form> echoes a stale key back and PREVENT_EXTRA rejects
+    # the save forever.
+    declared = {str(key.schema) for key in schema.schema}
+    served = {
+        name: value
+        for name, value in defaults.items()
+        if name in declared and (name not in MEMORY_SECRET_FIELDS or name in draft)
+    }
+
+    from .tools.memory.registry import embeddings_subentries_by_title
+
+    available = embeddings_subentries_by_title(hass)
+
+    connection.send_result(
+        msg["id"],
+        {
+            "schema": voluptuous_serialize.convert(schema, custom_serializer=cv.custom_serializer),
+            "data": served,
+            "labels": await async_field_labels(
+                hass, "config_subentries", subentry_type=SUBENTRY_TYPE_MEMORY_STORE
+            ),
+            "descriptions": await async_field_descriptions(
+                hass, "config_subentries", subentry_type=SUBENTRY_TYPE_MEMORY_STORE
+            ),
+            # Changing one of these changes which fields exist, so the panel
+            # asks for the schema again rather than guessing.
+            "reactive": ["backend_type", "source_type"],
+            "secrets_set": {field: bool(stored.get(field)) for field in MEMORY_SECRET_FIELDS},
+            # A title claimed twice resolves to nothing (see
+            # embeddings_subentries_by_title). Named here so the tab can warn
+            # before a write rather than explain a dead store afterwards.
+            "embeddings_ambiguous": sorted(
+                title for title, binding in available.items() if binding is None
+            ),
+            "embeddings_available": sorted(available),
+        },
+    )
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "smartchain/store/save",
+        vol.Required("entry_id"): str,
+        vol.Optional("subentry_id"): str,
+        vol.Required("data"): dict,
+    }
+)
+@websocket_api.async_response
+async def ws_store_save(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Create or update a memory store, then rebuild the registry.
+
+    Validated with exactly the schema `ws_store_schema` served and exactly the
+    rules the config-flow dialog applies (`validate_store_input`), so a store
+    made here and one made through Devices & Services are the same store.
+
+    Nothing about the submission is echoed back: `msg["data"]` can carry a
+    database password, so no error message is built from a submitted value —
+    `_describe_invalid` reports field names only, and a rule failure reports a
+    field name plus a fixed sentence keyed by `STORE_ERROR_TEXT`.
+    """
+    from .config_flow import (
+        STORE_ERROR_TEXT,
+        memory_store_subentry_schema,
+        merge_store_secrets,
+        validate_store_input,
+    )
+
+    entry = _get_entry(hass, msg["entry_id"])
+    if entry is None:
+        connection.send_error(msg["id"], "not_found", "Unknown config entry")
+        return
+
+    subentry_id = msg.get("subentry_id")
+    subentry = None
+    if subentry_id is not None:
+        subentry = entry.subentries.get(subentry_id)
+        if subentry is None or subentry.subentry_type != SUBENTRY_TYPE_MEMORY_STORE:
+            connection.send_error(msg["id"], "not_found", "Unknown memory store")
+            return
+
+    stored = _store_defaults(subentry) if subentry is not None else {}
+    submitted = dict(msg["data"])
+    # The schema's *shape* follows the submission, not what is stored: a save
+    # that switches the backend must be validated against the new backend's
+    # fields. Only the two shaping keys are taken on trust here, and the
+    # selectors in the schema reject an unknown value for either.
+    shape = {
+        **stored,
+        "backend_type": submitted.get("backend_type") or MEMORY_DEFAULT_BACKEND,
+        "source_type": submitted.get("source_type") or MEMORY_SOURCE_TYPE_NONE,
+    }
+    schema = memory_store_subentry_schema(hass, shape)
+    declared = {str(key.schema) for key in schema.schema}
+
+    # Rules first, schema second. The other way round — as this was — the
+    # `embeddings` dropdown answers for itself before any rule runs: it is
+    # vol.Required, and on an install with no embeddings binding its option
+    # list is *empty*, so the first Save a new user presses returns
+    # `required key not provided` and the panel labels an unanswerable field
+    # `invalid_data: embeddings`. Every sentence in STORE_ERROR_TEXT about
+    # `embeddings` was unreachable on this path. Nothing is validated less:
+    # a submission that clears the rules still goes through the schema below,
+    # and the rules read only strings the schema does not coerce.
+    #
+    # Same shape of failure, and the same fix, as `model_required` on the
+    # agent form (see `MODEL_REQUIRED_FALLBACK`): named fields plus a
+    # translated sentence, never a bare key.
+    error = validate_store_input(
+        hass,
+        # Merged, because "keep the stored credential" is what an empty `dsn`
+        # means — validating the raw submission would report `dsn_required`
+        # for an untouched pgvector store.
+        merge_store_secrets(submitted, stored, declared),
+        subentry_id=subentry_id,
+    )
+    if error is not None:
+        field, key = error
+        text = await async_flow_error_text(
+            hass,
+            key,
+            "config_subentries",
+            fallback=STORE_ERROR_TEXT[key],
+            subentry_type=SUBENTRY_TYPE_MEMORY_STORE,
+        )
+        connection.send_error(msg["id"], "invalid_data", invalid_data([field], text))
+        return
+
+    try:
+        data = ensure_storable(schema(submitted))
+    except vol.Invalid as err:
+        connection.send_error(msg["id"], "invalid_data", _describe_invalid(err))
+        return
+
+    data = merge_store_secrets(data, stored, declared)
+
+    title = str(data.pop("name")).strip()
+
+    try:
+        result_id = _write_subentry(
+            hass,
+            entry,
+            subentry,
+            subentry_type=SUBENTRY_TYPE_MEMORY_STORE,
+            data=data,
+            title=title,
+        )
+    except vol.Invalid as err:
+        connection.send_error(msg["id"], "invalid_data", _describe_invalid(err))
+        return
+
+    reload_error = await _rebuild_after_subentry_write(hass)
+    registry = hass.data.get(DOMAIN, {}).get("memory")
+    connection.send_result(
+        msg["id"],
+        {
+            "subentry_id": result_id,
+            "reload_error": reload_error,
+            # The write succeeded; the store it describes may still not have
+            # come up — a wrong DSN, an embeddings binding that resolves to
+            # nothing. `MemoryRegistry.build` contains that failure so the
+            # other stores start, which left this command answering a plain
+            # success and the panel toasting a green "Saved" over a store that
+            # never ran. The reason is the same safe text `store/status`
+            # serves, taken straight after the rebuild that produced it.
+            "store_error": (getattr(registry, "failures", None) or {}).get(title),
+            # A YAML store of the same name is now ignored. Reported rather
+            # than left to a log line nobody reads.
+            "shadows_yaml": title in (hass.data.get(DOMAIN, {}).get("store_shadowed") or []),
+        },
+    )
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "smartchain/store/delete",
+        vol.Required("entry_id"): str,
+        vol.Required("subentry_id"): str,
+    }
+)
+@websocket_api.async_response
+async def ws_store_delete(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Remove a memory store and rebuild the registry.
+
+    The vectors themselves are not deleted: a file-based backend keeps its
+    `.db` beside the others and a remote one keeps its table or collection, so
+    re-creating the store under the same name finds its contents again. Saying
+    otherwise would be the more dangerous default.
+    """
+    resolved = _resolve_store(hass, connection, msg)
+    if resolved is None:
+        return
+    entry, subentry = resolved
+    name = subentry.title
+
+    hass.config_entries.async_remove_subentry(entry, subentry.subentry_id)
+    reload_error = await _rebuild_after_subentry_write(hass)
+    connection.send_result(msg["id"], {"name": name, "reload_error": reload_error})
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): "smartchain/store/status"})
+@websocket_api.async_response
+async def ws_store_status(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Which configured stores are actually live, and why the others are not.
+
+    `MemoryRegistry.build` contains it when one store fails so the rest still
+    come up — which used to mean a failure left no trace outside the log, and
+    every command that touched memory reported success over a subsystem that
+    never started.
+    """
+    registry: MemoryRegistry | None = hass.data.get(DOMAIN, {}).get("memory")
+    connection.send_result(
+        msg["id"],
+        {
+            "stores": registry.status() if registry is not None else [],
+            "shadowed_yaml": list(hass.data.get(DOMAIN, {}).get("store_shadowed") or []),
+        },
+    )
 
 
 def _read_tools_file(path: Path) -> dict[str, Any]:
@@ -903,7 +1688,7 @@ def _safe_loader_error(err: Exception) -> str:
     `MultipleInvalid` — not its message, not its `.path` — is safe to forward:
 
     - `str(err)` / `.msg`: two of this schema's own validators
-      (`_validate_action`, `_validate_mcp_server` in tools/schema.py) build
+      (`validate_action`, `_validate_mcp_server` in tools/schema.py) build
       their message with the offending value interpolated straight in, e.g.
       ``unknown action type 'sk-...'`` — exactly what a `!secret` resolving
       into a `type:` field produces.
@@ -1259,3 +2044,654 @@ async def ws_tools_rollback(
 
     new = await hass.async_add_executor_job(_read_tools_file, path)
     connection.send_result(msg["id"], {"ok": True, "hash": new["hash"]})
+
+
+# ----- custom tools ------------------------------------------------------
+
+
+def _resolve_tool(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> tuple[ConfigEntry, Any] | None:
+    """Entry and tool subentry named by the message, or None after an error."""
+    entry = _get_entry(hass, msg["entry_id"])
+    if entry is None:
+        connection.send_error(msg["id"], "not_found", "Unknown config entry")
+        return None
+    subentry = entry.subentries.get(msg["subentry_id"])
+    if subentry is None or subentry.subentry_type != SUBENTRY_TYPE_TOOL:
+        connection.send_error(msg["id"], "not_found", "Unknown tool")
+        return None
+    return entry, subentry
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "smartchain/tool/schema",
+        vol.Required("entry_id"): str,
+        vol.Optional("subentry_id"): str,
+        vol.Optional("data"): dict,
+        vol.Optional("refresh", default=False): bool,
+    }
+)
+@websocket_api.async_response
+async def ws_tool_schema(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Serialise the tool constructor, reshaped around the choices made so far.
+
+    This is what makes the Tools tab a constructor rather than a text editor,
+    and it is deliberately the *only* place the tool's field names exist on the
+    wire: the panel renders whatever arrives through `<sc-config-form>`, the
+    same way the agents, embeddings and stores tabs do. Which fields a tool has
+    depends on its action type and on how its arguments are being authored, and
+    `<ha-form>` cannot change shape by itself — so this accepts the in-progress
+    values in `data` and rebuilds the schema around them, and `reactive` names
+    the two fields worth a round trip.
+
+    A `rest` action's *stored* header values are never served — only their
+    names, plus `headers_set` to say which ones hold something. A value the
+    client itself just sent comes back untouched, since it is already the
+    client's own; redacting the merged dict blanked the draft too, so a header
+    typed just before a reshaping round trip came home empty and saved empty on
+    a new tool, or silently reverted to the stored value on an edit. This is
+    the same per-field rule `ws_store_schema` applies to `dsn` / `api_key`.
+    """
+    from .config_flow import tool_form_defaults, tool_subentry_schema
+
+    entry = _get_entry(hass, msg["entry_id"])
+    if entry is None:
+        connection.send_error(msg["id"], "not_found", "Unknown config entry")
+        return
+
+    stored: dict[str, Any] = {}
+    raw: dict[str, Any] = {}
+    subentry_id = msg.get("subentry_id")
+    if subentry_id is not None:
+        subentry = entry.subentries.get(subentry_id)
+        if subentry is None or subentry.subentry_type != SUBENTRY_TYPE_TOOL:
+            connection.send_error(msg["id"], "not_found", "Unknown tool")
+            return
+        stored = tool_form_defaults(subentry)
+        raw = tool_form_defaults(subentry, redact=False)
+
+    draft = dict(msg.get("data") or {})
+    # `stored` already arrives redacted — `tool_form_defaults` redacts by
+    # default and only the save paths ask for `redact=False` — so the merge
+    # needs no second pass, and must not have one: redacting `{**stored,
+    # **draft}` blanked the client's own draft as well as storage. The rule is
+    # `ws_store_schema`'s, `name not in secrets or name in draft`, applied to
+    # the one field that holds a map: the draft's `headers` replaces the stored
+    # map wholesale, which is also what lets a header be deleted in the form.
+    defaults = {**stored, **draft}
+    schema = tool_subentry_schema(hass, defaults)
+
+    # Same trap as ws_agent_schema (see F1): only serve fields the schema still
+    # declares, or <ha-form> echoes a stale key back and PREVENT_EXTRA rejects
+    # the save forever.
+    declared = {str(key.schema) for key in schema.schema}
+    served = {name: value for name, value in defaults.items() if name in declared}
+
+    connection.send_result(
+        msg["id"],
+        {
+            "schema": voluptuous_serialize.convert(schema, custom_serializer=cv.custom_serializer),
+            "data": served,
+            "labels": await async_field_labels(
+                hass, "config_subentries", subentry_type=SUBENTRY_TYPE_TOOL
+            ),
+            "descriptions": await async_field_descriptions(
+                hass, "config_subentries", subentry_type=SUBENTRY_TYPE_TOOL
+            ),
+            # Changing one of these changes which fields exist, so the panel
+            # asks for the schema again rather than guessing.
+            "reactive": ["action_type", "params_mode"],
+            "headers_set": {key: bool(value) for key, value in (raw.get("headers") or {}).items()},
+        },
+    )
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "smartchain/tool/save",
+        vol.Required("entry_id"): str,
+        vol.Optional("subentry_id"): str,
+        vol.Required("data"): dict,
+    }
+)
+@websocket_api.async_response
+async def ws_tool_save(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Create or update a custom tool, then rebuild the registry.
+
+    Validated with exactly the schema `ws_tool_schema` served and exactly the
+    rules the config-flow dialog applies (`build_tool_subentry_data`), so a
+    tool made here and one made through Devices & Services are the same tool —
+    and both end at `tools.schema.validate_action` and `PARAMETERS_SCHEMA`, the
+    validators tools.yaml goes through.
+
+    Nothing about the submission is echoed back: `msg["data"]` can carry a REST
+    header holding a bearer token, so `_describe_invalid` reports field names
+    only and a rule failure reports a field name plus fixed text from
+    `TOOL_ERROR_TEXT`.
+    """
+    from .config_flow import (
+        TOOL_ERROR_TEXT,
+        build_tool_subentry_data,
+        merge_tool_secrets,
+        tool_form_defaults,
+        tool_subentry_schema,
+    )
+
+    entry = _get_entry(hass, msg["entry_id"])
+    if entry is None:
+        connection.send_error(msg["id"], "not_found", "Unknown config entry")
+        return
+
+    subentry_id = msg.get("subentry_id")
+    subentry = None
+    if subentry_id is not None:
+        subentry = entry.subentries.get(subentry_id)
+        if subentry is None or subentry.subentry_type != SUBENTRY_TYPE_TOOL:
+            connection.send_error(msg["id"], "not_found", "Unknown tool")
+            return
+
+    stored = tool_form_defaults(subentry, redact=False) if subentry is not None else {}
+    submitted = dict(msg["data"])
+    # The schema's *shape* follows the submission, not what is stored: a save
+    # that switches the action type must be validated against the new type's
+    # fields. Only the two shaping keys are taken on trust here, and the
+    # selectors in the schema reject an unknown value for either.
+    shape = {
+        **stored,
+        "action_type": submitted.get("action_type") or TOOL_DEFAULT_ACTION_TYPE,
+        "params_mode": submitted.get("params_mode") or TOOL_PARAMS_MODE_SIMPLE,
+    }
+    schema = tool_subentry_schema(hass, shape)
+
+    try:
+        # `target` is the field this exists for: `selector.TargetSelector`
+        # hands back a `Template` object for `entity_id: "{{ entity }}"` — the
+        # shape docs/USAGE.md §7.1 teaches and the importer stores as a plain
+        # string — and writing that object into the subentry breaks every
+        # later write of `core.config_entries`, for every integration. Run
+        # before `build_tool_subentry_data` so a refusal names the form field
+        # the user can see rather than the composed `action` block.
+        form = ensure_storable(schema(submitted))
+    except vol.Invalid as err:
+        connection.send_error(msg["id"], "invalid_data", _describe_invalid(err))
+        return
+
+    form = merge_tool_secrets(form, stored)
+    data, error = build_tool_subentry_data(hass, form, subentry_id=subentry_id)
+    if error is not None:
+        field, key = error
+        connection.send_error(
+            msg["id"], "invalid_data", invalid_data([field], TOOL_ERROR_TEXT[key])
+        )
+        return
+
+    title = str(form["name"]).strip()
+
+    try:
+        result_id = _write_subentry(
+            hass,
+            entry,
+            subentry,
+            subentry_type=SUBENTRY_TYPE_TOOL,
+            data=data,
+            title=title,
+        )
+    except vol.Invalid as err:
+        connection.send_error(msg["id"], "invalid_data", _describe_invalid(err))
+        return
+
+    reload_error = await _rebuild_after_subentry_write(hass)
+    connection.send_result(
+        msg["id"],
+        {
+            "subentry_id": result_id,
+            "reload_error": reload_error,
+            # A YAML tool of the same name is now ignored. Reported rather than
+            # left to a log line nobody reads.
+            "shadows_yaml": title in (hass.data.get(DOMAIN, {}).get("tools_shadowed") or []),
+        },
+    )
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "smartchain/tool/delete",
+        vol.Required("entry_id"): str,
+        vol.Required("subentry_id"): str,
+    }
+)
+@websocket_api.async_response
+async def ws_tool_delete(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Remove a custom tool and rebuild the registry."""
+    resolved = _resolve_tool(hass, connection, msg)
+    if resolved is None:
+        return
+    entry, subentry = resolved
+    name = subentry.title
+
+    hass.config_entries.async_remove_subentry(entry, subentry.subentry_id)
+    reload_error = await _rebuild_after_subentry_write(hass)
+    connection.send_result(msg["id"], {"name": name, "reload_error": reload_error})
+
+
+def _describe_tool_subentry(entry: ConfigEntry, subentry: Any) -> dict[str, Any]:
+    """Public description of one tool subentry.
+
+    Assembled field by field for the same reason `_describe_store` is: a REST
+    action's headers can hold a bearer token, so `subentry.data` is never
+    forwarded wholesale. Only whether a header holds a value travels.
+    """
+    data = subentry.data
+    action = dict(data.get("action") or {})
+    return {
+        "entry_id": entry.entry_id,
+        "subentry_id": subentry.subentry_id,
+        "name": subentry.title,
+        "description": data.get("description", ""),
+        "action_type": action.get("type", ""),
+        "enabled": bool(data.get("enabled", True)),
+        "source": SOURCE_SUBENTRY,
+        "headers_set": {key: bool(value) for key, value in (action.get("headers") or {}).items()},
+    }
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): "smartchain/tool/list"})
+@websocket_api.async_response
+async def ws_tool_list(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Every tool the installation has, and where each one comes from.
+
+    Three sources reach one registry, and the panel can only edit one of them,
+    so saying which is which is the whole point: a subentry tool is editable
+    here, a tools.yaml tool is editable in the Import/Export box, and an MCP
+    tool is not editable at all because it is discovered from a server.
+
+    Disabled subentry tools are listed even though they are *not* in the
+    registry — they exist, the user turned them off, and a list that hid them
+    would leave no way to turn one back on.
+    """
+    from .tools.model import MCPAction
+    from .tools.subentry_source import tool_subentries
+
+    tools = [_describe_tool_subentry(entry, subentry) for entry, subentry in tool_subentries(hass)]
+
+    registry = hass.data.get(DOMAIN, {}).get("tools")
+    sources = hass.data.get(DOMAIN, {}).get("tool_sources") or {}
+    subentry_names = {tool["name"] for tool in tools}
+    for tool in registry.all() if registry is not None else []:
+        if tool.name in subentry_names:
+            continue
+        tools.append(
+            {
+                "entry_id": None,
+                "subentry_id": None,
+                "name": tool.name,
+                "description": tool.description,
+                "action_type": tool.action.type,
+                "enabled": True,
+                "source": "mcp"
+                if isinstance(tool.action, MCPAction)
+                else sources.get(tool.name, SOURCE_YAML),
+                "headers_set": {},
+            }
+        )
+
+    connection.send_result(
+        msg["id"],
+        {
+            "tools": sorted(tools, key=lambda tool: tool["name"]),
+            "shadowed_yaml": list(hass.data.get(DOMAIN, {}).get("tools_shadowed") or []),
+            # A tools.yaml that will not load no longer takes the subentry
+            # tools down with it, which means the list below looks perfectly
+            # healthy while the file's own tools are missing. Say so here: a
+            # standing line on the tab, not a toast tied to whichever action
+            # happened to trigger the rebuild. Already passed through
+            # `_safe_loader_error` in `_reload_registry`.
+            "yaml_error": hass.data.get(DOMAIN, {}).get("yaml_error"),
+        },
+    )
+
+
+def _scan_for_secret_tags(text: str) -> bool:
+    """Does this YAML text use `!secret` anywhere?
+
+    A cheap textual scan, on purpose. The alternative — parsing with a
+    `Secrets` store and inspecting the result — would resolve the secret in
+    order to find out that it is there, which is exactly what the import must
+    not do.
+    """
+    return "!secret" in text
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "smartchain/tools/import",
+        vol.Required("entry_id"): str,
+    }
+)
+@websocket_api.async_response
+async def ws_tools_import(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Turn the tools already in tools.yaml into editable `tool` subentries.
+
+    Parsed **without** a `Secrets` store, and refused outright if the file uses
+    `!secret` anywhere. Resolving one here would write the plaintext value into
+    `.storage`, silently moving a credential out of `secrets.yaml` — the same
+    rule and the same reasoning as the memory-store importer. The user is told
+    to replace those references with values typed into the form, where they are
+    at least stored knowingly.
+
+    tools.yaml is left exactly as it is. An imported tool then shadows its YAML
+    twin, which `tool/list` reports; deleting it from the file is the user's
+    call to make, not an importer's.
+    """
+    from . import _tools_yaml_path
+    from .config_flow import validate_tool_name
+
+    entry = _get_entry(hass, msg["entry_id"])
+    if entry is None:
+        connection.send_error(msg["id"], "not_found", "Unknown config entry")
+        return
+
+    path = _tools_yaml_path(hass)
+    current = await hass.async_add_executor_job(_read_tools_file, path)
+    if not current["exists"] or current["error"]:
+        connection.send_result(msg["id"], {"ok": False, "reason": "no_file", "imported": []})
+        return
+    if _scan_for_secret_tags(current["text"]):
+        connection.send_result(
+            msg["id"], {"ok": False, "reason": "secrets_present", "imported": []}
+        )
+        return
+
+    try:
+        # config_dir omitted deliberately — see the docstring. Without it HA's
+        # loader refuses `!secret` rather than resolving it, so even a form the
+        # scan above did not anticipate cannot leak.
+        result = await hass.async_add_executor_job(load_tools_file, path)
+    except LoaderError as err:
+        LOGGER.warning("tools.yaml import failed: %s", err)  # detail stays server-side
+        connection.send_result(
+            msg["id"],
+            {"ok": False, "reason": "invalid", "error": _safe_loader_error(err), "imported": []},
+        )
+        return
+
+    imported: list[str] = []
+    skipped: list[str] = []
+    for tool in result.yaml_tools:
+        form = {
+            "name": tool.name,
+            "description": tool.description,
+            "enabled": True,
+            "parameters": tool.parameters,
+        }
+        if validate_tool_name(hass, tool.name) is not None:
+            skipped.append(tool.name)
+            continue
+        data = {
+            "description": form["description"],
+            "parameters": dict(tool.parameters),
+            "action": _action_to_dict(tool.action),
+            "enabled": True,
+            "params_mode": _params_mode_for(tool.parameters),
+        }
+        try:
+            _write_subentry(
+                hass,
+                entry,
+                None,
+                subentry_type=SUBENTRY_TYPE_TOOL,
+                data=data,
+                title=tool.name,
+            )
+        except vol.Invalid:
+            # One tool that cannot be stored must not abort an import of
+            # twenty, and it must not be reported by echoing its value — an
+            # action can hold a bearer token. It joins the skipped list.
+            skipped.append(tool.name)
+            continue
+        imported.append(tool.name)
+
+    reload_error = await _rebuild_after_subentry_write(hass)
+    connection.send_result(
+        msg["id"],
+        {
+            "ok": True,
+            "imported": imported,
+            "skipped": skipped,
+            "reload_error": reload_error,
+        },
+    )
+
+
+# ----- the preset catalogue ---------------------------------------------
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): "smartchain/tool/presets"})
+@websocket_api.async_response
+async def ws_tool_presets(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """The ready-made tool catalogue, with each entry's install state.
+
+    `installed` is derived from the tool subentries that exist right now rather
+    than remembered anywhere, because there is nothing to remember: installing a
+    preset writes an ordinary tool subentry and the integration keeps no mark on
+    it afterwards. A user who renames an installed preset therefore sees the
+    catalogue offer it again — correctly, since under that name it no longer
+    exists.
+
+    A tools.yaml tool of the same name does *not* count as installed. It is not
+    a subentry, the panel cannot edit it, and installing over it is allowed —
+    the result shadows the file, which `preset/install` reports the same way
+    `tool/save` does.
+    """
+    from .tools.presets import PRESET_TOOLS
+    from .tools.subentry_source import tool_subentries
+
+    texts = await async_preset_texts(hass)
+    installed = {subentry.title for _entry, subentry in tool_subentries(hass)}
+
+    connection.send_result(
+        msg["id"],
+        {
+            "presets": [
+                {
+                    "name": preset.name,
+                    # The panel-facing pair, translated; falls back to the tool
+                    # name and to nothing, so an untranslated preset still
+                    # renders as a row the user can switch on.
+                    "title": texts.get(preset.name, {}).get("name", preset.name),
+                    "blurb": texts.get(preset.name, {}).get("description", ""),
+                    "action_type": preset.action_type,
+                    "installed": preset.name in installed,
+                }
+                for preset in PRESET_TOOLS
+            ]
+        },
+    )
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "smartchain/tool/preset/install",
+        vol.Required("entry_id"): str,
+        vol.Required("preset"): str,
+    }
+)
+@websocket_api.async_response
+async def ws_tool_preset_install(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Materialise one preset as an ordinary tool subentry.
+
+    The same three writes `ws_tool_save` performs, in the same order and
+    through the same functions: `validate_tool_name` for the reserved-name,
+    duplicate-name and live-MCP-name rules, `_write_subentry` for the
+    JSON-storability guard, `_rebuild_after_subentry_write` for the registry.
+    Nothing here is a preset-specific code path, which is what makes the
+    resulting tool an ordinary one — after this command the integration has no
+    way of telling it apart from a tool built in the form, and does not try.
+
+    A refusal comes back as `{"ok": False, "reason": ...}` rather than as a
+    websocket error, following `tools/import` rather than `tool/save`: there is
+    no form open and no field to attach a message to, so the panel needs a
+    reason it can turn into its own sentence. `params_mode` is derived, not
+    stored in the catalogue — see `preset_subentry_data`.
+    """
+    from .config_flow import validate_tool_name
+    from .tools.presets import PRESETS_BY_NAME, preset_subentry_data
+
+    entry = _get_entry(hass, msg["entry_id"])
+    if entry is None:
+        connection.send_error(msg["id"], "not_found", "Unknown config entry")
+        return
+
+    preset = PRESETS_BY_NAME.get(msg["preset"])
+    if preset is None:
+        connection.send_error(msg["id"], "not_found", "Unknown preset")
+        return
+
+    error = validate_tool_name(hass, preset.name)
+    if error is not None:
+        _field, key = error
+        connection.send_result(msg["id"], {"ok": False, "reason": key})
+        return
+
+    data = preset_subentry_data(preset)
+    data["params_mode"] = _params_mode_for(data["parameters"])
+
+    try:
+        subentry_id = _write_subentry(
+            hass,
+            entry,
+            None,
+            subentry_type=SUBENTRY_TYPE_TOOL,
+            data=data,
+            title=preset.name,
+        )
+    except vol.Invalid:
+        # Unreachable with the catalogue as it stands — every entry is plain
+        # JSON, and a test holds it to that — but the guard is structural in
+        # `_write_subentry` and swallowing its refusal here would be the one
+        # place that undoes it.
+        LOGGER.warning("preset %r could not be stored", preset.name)
+        connection.send_result(msg["id"], {"ok": False, "reason": "unstorable"})
+        return
+
+    reload_error = await _rebuild_after_subentry_write(hass)
+    connection.send_result(
+        msg["id"],
+        {
+            "ok": True,
+            "name": preset.name,
+            "subentry_id": subentry_id,
+            "reload_error": reload_error,
+            # Same report as `tool/save`: a tools.yaml tool of this name is now
+            # ignored in favour of the one just written.
+            "shadows_yaml": preset.name in (hass.data.get(DOMAIN, {}).get("tools_shadowed") or []),
+        },
+    )
+
+
+def _params_mode_for(parameters: dict[str, Any]) -> str:
+    from .config_flow import _parameters_are_row_expressible
+
+    return (
+        TOOL_PARAMS_MODE_SIMPLE
+        if _parameters_are_row_expressible(parameters)
+        else TOOL_PARAMS_MODE_ADVANCED
+    )
+
+
+def _action_to_dict(action: Any) -> dict[str, Any]:
+    """A `ToolAction` dataclass back as the plain dict both sources store.
+
+    `dataclasses.asdict` rather than a hand-written per-type mapping: the field
+    names of `ServiceAction` and friends *are* the YAML keys, so a mapping
+    table would be a second place for them to live and the first place to drift.
+    """
+    import dataclasses
+
+    return dataclasses.asdict(action)
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): "smartchain/tools/export"})
+@websocket_api.async_response
+async def ws_tools_export(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Every tool subentry as tools.yaml text, for backup or for another install.
+
+    **REST header values are exported blank**, and the tools whose headers were
+    blanked are named in `redacted`. Export is a response like any other, and
+    the rule that no response carries a credential does not acquire an
+    exception because the user asked nicely — an `Authorization` header pasted
+    into the form would otherwise come back out as plaintext into a browser and
+    from there into wherever the text is pasted. The structure is complete and
+    importable; the values are retyped, or written as `!secret` once the file
+    is on disk.
+    """
+    from .tools.subentry_source import tool_from_subentry, tool_subentries
+
+    tools: list[dict[str, Any]] = []
+    redacted: list[str] = []
+    for _entry, subentry in tool_subentries(hass):
+        try:
+            tool = tool_from_subentry(subentry)
+        except Exception as err:  # noqa: BLE001 — one bad tool must not fail the export
+            LOGGER.warning(
+                "tool subentry %r could not be exported (%s)", subentry.title, type(err).__name__
+            )
+            continue
+        action = _action_to_dict(tool.action)
+        if action.get("headers"):
+            action["headers"] = dict.fromkeys(action["headers"], "")
+            redacted.append(tool.name)
+        entry_dict: dict[str, Any] = {
+            "name": tool.name,
+            "description": tool.description,
+            "parameters": tool.parameters,
+            "action": action,
+        }
+        if not tool.enabled:
+            entry_dict["enabled"] = False
+        tools.append(entry_dict)
+
+    text = yaml.safe_dump({"tools": tools}, sort_keys=False, allow_unicode=True) if tools else ""
+    connection.send_result(msg["id"], {"text": text, "count": len(tools), "redacted": redacted})

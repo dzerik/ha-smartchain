@@ -723,3 +723,125 @@ async def test_embeddings_responses_carry_no_credential(hass, hass_ws_client, en
     body = json.dumps([schema_msg, save_msg])
     assert SECRET not in body
     assert CONF_API_KEY not in body
+
+
+async def test_renaming_a_binding_on_a_custom_model_is_not_refused(hass, hass_ws_client, entry):
+    """The dead end the docs walk people into.
+
+    `subentry_schema` unions an agent's stored model into its own dropdown so
+    that opening an agent to change one field cannot be refused over another
+    the user never touched. `embeddings_subentry_schema` was not given the same
+    union, and the omission bites harder here: `_resolve_embeddings_model`
+    collapses a Custom Model name into `model`, and the release notes tell
+    users to type the model into Custom Model whenever the shipped list has not
+    caught up — which, with `EMBEDDING_MODELS_GIGACHAT` stale, was routine.
+
+    So the stored value is one the dropdown does not offer, and the *next*
+    save is rejected on the model field. No unreachable provider and no failed
+    fetch is needed: this test's fetch succeeds throughout. The save here
+    changes nothing but the name.
+    """
+    client = await hass_ws_client(hass)
+
+    # A model this fixture's provider list does not contain — the shape of a
+    # name typed into Custom Model.
+    await client.send_json_auto_id(
+        {
+            "type": "smartchain/embeddings/save",
+            "entry_id": entry.entry_id,
+            "data": {"name": "Embeddings Two", "model_user": "Embeddings-2"},
+        }
+    )
+    created = await client.receive_json()
+    assert created["success"], created
+    subentry_id = created["result"]["subentry_id"]
+    assert entry.subentries[subentry_id].data["model"] == "Embeddings-2"
+    assert "Embeddings-2" not in _EMBEDDING_MODELS  # or this proves nothing
+
+    # The form is rendered from the stored data, so this is what the panel
+    # sends back when the user edits only the name.
+    await client.send_json_auto_id(
+        {
+            "type": "smartchain/embeddings/save",
+            "entry_id": entry.entry_id,
+            "subentry_id": subentry_id,
+            "data": {
+                "name": "Embeddings Two Renamed",
+                "model": "Embeddings-2",
+                "model_user": "Embeddings-2",
+            },
+        }
+    )
+    renamed = await client.receive_json()
+    assert renamed["success"], renamed
+    assert entry.subentries[subentry_id].title == "Embeddings Two Renamed"
+    assert entry.subentries[subentry_id].data["model"] == "Embeddings-2"
+
+
+async def test_schema_offers_the_stored_model_back(hass, hass_ws_client, entry):
+    """The same fix seen from the form rather than the save.
+
+    A dropdown that omits the value it is being pre-filled with is a control
+    the user cannot leave alone, so the union has to be visible in the options
+    the panel receives — not merely tolerated by the validator.
+    """
+    client = await hass_ws_client(hass)
+    await client.send_json_auto_id(
+        {
+            "type": "smartchain/embeddings/save",
+            "entry_id": entry.entry_id,
+            "data": {"name": "Custom", "model_user": "Embeddings-3B-2025-09"},
+        }
+    )
+    created = await client.receive_json()
+    assert created["success"], created
+
+    await client.send_json_auto_id(
+        {
+            "type": "smartchain/embeddings/schema",
+            "entry_id": entry.entry_id,
+            "subentry_id": created["result"]["subentry_id"],
+        }
+    )
+    msg = await client.receive_json()
+    assert msg["success"], msg
+    model_field = next(f for f in msg["result"]["schema"] if f["name"] == "model")
+    assert "Embeddings-3B-2025-09" in model_field["selector"]["select"]["options"]
+    # And it is what the field is pre-filled with, so the two agree.
+    assert model_field["description"]["suggested_value"] == "Embeddings-3B-2025-09"
+
+
+async def test_an_off_list_model_is_refused_in_words_not_a_machine_key(hass, hass_ws_client, entry):
+    """When the model *is* genuinely the problem, say so in a sentence.
+
+    The union above removes the common cause of this rejection but not the
+    rejection itself — a panel left open across a provider change can still
+    submit a model no list contains. `ws_agent_save` was taught to answer that
+    with the `model_unknown` sentence in v5.4.10; this command was left
+    reporting the bare `invalid_data: model` the same release had just removed
+    from the agent form, which is the machine key a user cannot act on.
+    """
+    client = await hass_ws_client(hass)
+    await client.send_json_auto_id(
+        {
+            "type": "smartchain/embeddings/save",
+            "entry_id": entry.entry_id,
+            "data": {"name": "Off List", "model": "a-model-no-list-contains"},
+        }
+    )
+    msg = await client.receive_json()
+    assert not msg["success"]
+    assert msg["error"]["code"] == "invalid_data"
+    message = msg["error"]["message"]
+    # Still names the field, so the panel can attach it to the right control.
+    assert message.startswith("invalid_data: model")
+    # But no longer *only* the field.
+    assert "—" in message, f"no human sentence in {message!r}"
+    embeddings_text = _TRANSLATIONS_EN["config_subentries"]["embeddings"]["error"]["model_unknown"]
+    assert embeddings_text in message
+    # The embeddings form's own sentence, not the conversation one.
+    conversation_text = _TRANSLATIONS_EN["config_subentries"]["conversation"]["error"][
+        "model_unknown"
+    ]
+    assert embeddings_text != conversation_text
+    assert conversation_text not in message

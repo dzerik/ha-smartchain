@@ -166,7 +166,7 @@ export const SC_STYLES = `
     color: var(--primary-text-color, #212121);
   }
   sc-camera-tab { display: block; max-width: 800px; margin: 0 auto; }
-  sc-agents-tab, sc-embeddings-tab, sc-settings-tab, sc-tools-tab { display: block; max-width: 1100px; margin: 0 auto; }
+  sc-agents-tab, sc-embeddings-tab, sc-stores-tab, sc-settings-tab, sc-tools-tab { display: block; max-width: 1100px; margin: 0 auto; }
 
   /* ========== Agents Tab ========== */
   .sc-entry { margin-bottom: 24px; }
@@ -187,6 +187,19 @@ export const SC_STYLES = `
   .sc-agent-model, .sc-agent-tools {
     color: var(--secondary-text-color); font-size: 13px;
   }
+  .sc-agent-tools summary { cursor: pointer; }
+  .sc-tool-inventory-list { list-style: none; margin: 6px 0 0; padding: 0; }
+  .sc-tool-inventory-list li {
+    display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; padding: 2px 0;
+  }
+  .sc-tool-inventory-list code { font-size: 12px; color: var(--primary-text-color); }
+  /* A tool that is off must read as off at a glance, not only by its reason. */
+  .sc-tool-off code { text-decoration: line-through; color: var(--secondary-text-color); }
+  .sc-tool-source {
+    font-size: 11px; padding: 1px 6px; border-radius: 10px;
+    border: 1px solid var(--divider-color, #e0e0e0);
+  }
+  .sc-tool-reason { font-size: 11px; font-style: italic; }
   .sc-agent-actions { display: flex; gap: 8px; }
   .sc-agent-actions button, .sc-add {
     appearance: none; border: 1px solid var(--divider-color, #e0e0e0);
@@ -225,6 +238,32 @@ export const SC_STYLES = `
     .sc-embed-row { grid-template-columns: 1fr; gap: 4px; }
   }
 
+  /* ========== Stores Tab ========== */
+  .sc-store-list { list-style: none; margin: 0 0 12px; padding: 0; }
+  .sc-store-status {
+    display: grid;
+    grid-template-columns: 1fr 1fr 2fr;
+    gap: 12px; align-items: baseline;
+    padding: 8px 0 8px 10px;
+    border-left: 3px solid var(--divider-color, #e0e0e0);
+    border-bottom: 1px solid var(--divider-color, #e0e0e0);
+  }
+  .sc-store-status.sc-ok { border-left-color: var(--success-color, #43a047); }
+  .sc-store-status.sc-bad { border-left-color: var(--error-color, #db4437); }
+  .sc-store-name { font-weight: 500; }
+  .sc-store-origin { color: var(--secondary-text-color); font-size: 13px; }
+  .sc-store-reason { color: var(--secondary-text-color); font-size: 13px; }
+  .sc-store-status.sc-bad .sc-store-reason { color: var(--error-color, #db4437); }
+  /* The store form cannot be filled in at all — see NO_BINDINGS_NOTICE. */
+  .sc-store-blocked {
+    color: var(--error-color, #db4437);
+    border-left: 3px solid var(--error-color, #db4437);
+    padding: 8px 10px; margin: 0 0 12px;
+  }
+  @media (max-width: 600px) {
+    .sc-store-status { grid-template-columns: 1fr; gap: 4px; }
+  }
+
   /* ========== Settings Tab ========== */
   .sc-entry-picker { list-style: none; margin: 0; padding: 0; }
   .sc-entry-picker li { margin-bottom: 8px; }
@@ -239,6 +278,21 @@ export const SC_STYLES = `
   .sc-entry-pick .sc-entry-engine { margin-left: auto; }
 
   /* ========== Tools Tab ========== */
+  /* The tools.yaml editor is no longer the tab — it is the escape hatch under
+     it, so it gets breathing room above and a picker that lines up with the
+     Add button beside it. */
+  .sc-tools-io { margin-top: 20px; }
+  /* The ready-made catalogue. Its blurb is a sentence rather than a model
+     name, so the middle column gets the room the tool list does not need. */
+  .sc-presets .sc-empty { margin: 8px 0 4px; }
+  .sc-preset-row { grid-template-columns: minmax(140px, 1fr) 2fr auto; }
+  .sc-preset-row .sc-embed-actions { align-items: center; }
+  @media (max-width: 600px) {
+    .sc-preset-row { grid-template-columns: 1fr; }
+  }
+  .sc-tools-export { min-height: 160px; margin-bottom: 12px; }
+  .sc-entry-head .sc-tools-owner { max-width: 220px; margin-left: auto; }
+  .sc-entry-head .sc-tools-owner + .sc-add { margin-left: 8px; }
   .sc-tools-head {
     display: flex; align-items: center; gap: 12px;
     padding-bottom: 12px; margin-bottom: 12px;

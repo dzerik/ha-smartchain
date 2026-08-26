@@ -12,7 +12,21 @@ import { callWS, showToast } from "../services.js";
  * here with no change to this file.
  *
  * Properties: .hass, .commands ({schema, save}), .entryId, .subentryId,
- *             .showCancel (default true — a generic UI toggle, not a field)
+ *             .showCancel (default true — a generic UI toggle, not a field),
+ *             .showRefresh (default true — "Refresh models" is meaningless on
+ *              a form whose schema has no model in it),
+ *             .saveEnabled (default true — false when the host knows this form
+ *              cannot be satisfied at all, e.g. a required dropdown whose
+ *              options are empty. Still a generic toggle: this component is
+ *              told, it does not work it out)
+ *
+ * Some forms change shape as they are filled in: a memory store on the qdrant
+ * backend asks for different fields than one on sqlite. A schema command can
+ * say so by returning `reactive: ["<field>", ...]`; when one of those fields
+ * changes value this component re-requests the schema, passing the values
+ * entered so far as `data`. The list of such fields comes from the backend
+ * like everything else, so no field name is declared here either. A command
+ * that returns no `reactive` key behaves exactly as before.
  *
  * Events:
  *   sc-loaded      — detail: the full schema-command result (schema, data,
@@ -27,8 +41,9 @@ import { callWS, showToast } from "../services.js";
  *   sc-saved       — detail: the save-command result.
  *   sc-save-error  — detail: {message, fields}. `fields` is whichever
  *                    declared schema field names the backend's
- *                    "invalid_data: <fields>" message named, generically
- *                    parsed — never a hardcoded field.
+ *                    "invalid_data: <fields> — <reason>" message named, and
+ *                    `message` is that reason on its own — both generically
+ *                    parsed, never a hardcoded field. See `_parseError`.
  *   sc-cancelled   — the Cancel button was pressed.
  */
 export class ScConfigForm extends HTMLElement {
@@ -43,6 +58,16 @@ export class ScConfigForm extends HTMLElement {
     this._descriptions = {};
     this._fieldErrors = null;
     this._showCancel = true;
+    this._showRefresh = true;
+    this._saveEnabled = true;
+    // Field names whose value changes the shape of the form — supplied by the
+    // schema command, never known here. Empty for every command that does not
+    // send one, which is what keeps this inert for the other tabs.
+    this._reactive = [];
+    // Guards the reload a reactive change triggers: `_apply` assigns
+    // `form.data`, and an <ha-form> that answers that with its own
+    // value-changed would otherwise start a reload loop.
+    this._reloading = false;
     // Guards only the *automatic* load triggered by property arrival (see
     // _loadIfReady) — it does not affect explicit calls to load(), which is
     // how the Refresh control keeps working after the first load.
@@ -71,7 +96,17 @@ export class ScConfigForm extends HTMLElement {
 
   set showCancel(val) {
     this._showCancel = val !== false;
-    this._syncCancelVisibility();
+    this._syncActions();
+  }
+
+  set showRefresh(val) {
+    this._showRefresh = val !== false;
+    this._syncActions();
+  }
+
+  set saveEnabled(val) {
+    this._saveEnabled = val !== false;
+    this._syncActions();
   }
 
   connectedCallback() {
@@ -104,21 +139,33 @@ export class ScConfigForm extends HTMLElement {
     this.load();
   }
 
-  _syncCancelVisibility() {
-    const button = this.querySelector("#sc-form-cancel");
-    if (button) button.classList.toggle("sc-hidden", !this._showCancel);
+  _syncActions() {
+    const cancel = this.querySelector("#sc-form-cancel");
+    if (cancel) cancel.classList.toggle("sc-hidden", !this._showCancel);
+    const refresh = this.querySelector("#sc-form-refresh");
+    if (refresh) refresh.classList.toggle("sc-hidden", !this._showRefresh);
+    // Disabled rather than hidden: a Save that vanished would read as "this
+    // form has no Save", where a greyed one plus the host's notice reads as
+    // "not until you do that first".
+    const save = this.querySelector("#sc-form-save");
+    if (save) save.disabled = !this._saveEnabled;
   }
 
   async load(refresh = false) {
     if (!this._hass || !this._entryId || !this._commands) return;
     const payload = { entry_id: this._entryId, refresh };
     if (this._subentryId) payload.subentry_id = this._subentryId;
+    // Only sent once the backend has said this form is reactive — a command
+    // that does not declare `data` would reject it as an extra key.
+    if (this._reactive.length) payload.data = this._data;
+    this._reloading = true;
     try {
       const result = await callWS(this._hass, this._commands.schema, payload);
       this._schema = result.schema;
-      this._data = result.data || {};
+      this._data = this._merged(result, refresh);
       this._labels = result.labels || {};
       this._descriptions = result.descriptions || {};
+      this._reactive = Array.isArray(result.reactive) ? result.reactive : [];
       this._fieldErrors = null;
       this._apply();
       this.dispatchEvent(
@@ -128,7 +175,36 @@ export class ScConfigForm extends HTMLElement {
       // Leave whatever schema/data we already had in place — a failed
       // refresh should not blank out a form the user was mid-edit on.
       showToast(err.message || "Could not load the form", "error");
+    } finally {
+      this._reloading = false;
     }
+  }
+
+  /**
+   * What the form should hold after a schema response comes back.
+   *
+   * An automatic or reactive load is the server telling us what this form is;
+   * it wins outright. A *refresh* is not — the user pressed "Refresh models"
+   * on a form they have been typing into, and the values they entered are the
+   * whole reason they are still on this screen. Overwriting them made the one
+   * recovery from a stale model list cost the user their prompt, which is a
+   * poor trade for a dropdown.
+   *
+   * Only fields the returned schema still declares are kept. The server prunes
+   * values it no longer wants to hear about (a conditional field that has gone
+   * out of schema), and putting one back would have the save rejected as an
+   * extra key — so the edits survive without smuggling anything past the
+   * server's own idea of the form.
+   */
+  _merged(result, refresh) {
+    const served = result.data || {};
+    if (!refresh) return served;
+    const declared = new Set((result.schema || []).map((field) => field.name));
+    const kept = {};
+    for (const [name, value] of Object.entries(this._data || {})) {
+      if (declared.has(name)) kept[name] = value;
+    }
+    return { ...served, ...kept };
   }
 
   /**
@@ -150,8 +226,9 @@ export class ScConfigForm extends HTMLElement {
     } catch (err) {
       // The backend never puts a credential in a message, so this is safe
       // to show as-is.
-      const message = err.message || "Could not save";
-      const fields = this._matchingFields(message);
+      const raw = err.message || "Could not save";
+      const { fields, text } = this._parseError(raw);
+      const message = text || raw;
       if (fields.length) {
         this._fieldErrors = Object.fromEntries(fields.map((f) => [f, message]));
         this._apply();
@@ -171,20 +248,42 @@ export class ScConfigForm extends HTMLElement {
 
   /**
    * Every save command reports a validation failure the same way:
-   * "invalid_data: field_one, field_two". This is a generic protocol
-   * convention shared by agent/save, settings/save and embeddings/save —
-   * not a SmartChain field name — so parsing it here, and checking the
-   * result against whichever fields *this* schema happens to declare, adds
-   * no per-field knowledge to this component.
+   * "invalid_data: field_one, field_two — human readable reason". This is a
+   * generic protocol convention shared by every save command — not a
+   * SmartChain field name — so parsing it here, and checking the result
+   * against whichever fields *this* schema happens to declare, adds no
+   * per-field knowledge to this component.
+   *
+   * Both halves after the code are optional. Older commands sent only the
+   * field list, and a failure with no identifiable field sends neither; the
+   * em dash separates them because a field name can never contain one, which
+   * is what makes a reason containing commas safe to carry.
+   *
+   * Returning the reason separately, rather than showing the whole message,
+   * is the difference between a `model` field labelled "select a model from
+   * the list, or type a custom model name" and one labelled
+   * "invalid_data: model, model_user — select a model…".
    */
-  _matchingFields(message) {
-    const match = /^invalid_data: (.+)$/.exec(message || "");
-    if (!match || !Array.isArray(this._schema)) return [];
+  _parseError(message) {
+    const match = /^invalid_data(?::\s*([^—]*?))?\s*(?:—\s*([\s\S]*))?$/.exec(message || "");
+    if (!match) return { fields: [], text: null };
+    const text = (match[2] || "").trim() || null;
+    if (!Array.isArray(this._schema)) return { fields: [], text };
     const declared = new Set(this._schema.map((field) => field.name));
-    return match[1]
+    const fields = (match[1] || "")
       .split(",")
       .map((name) => name.trim())
       .filter((name) => declared.has(name));
+    return { fields, text };
+  }
+
+  /**
+   * Did one of the backend-declared reactive fields actually change value?
+   * <ha-form> fires value-changed on every keystroke, so comparing the whole
+   * object would reload the form while the user types.
+   */
+  _reactiveChanged(previous, next) {
+    return this._reactive.some((name) => (previous || {})[name] !== (next || {})[name]);
   }
 
   _render() {
@@ -202,7 +301,11 @@ export class ScConfigForm extends HTMLElement {
       </div>
     `;
     this.querySelector("ha-form").addEventListener("value-changed", (ev) => {
+      const previous = this._data;
       this._data = ev.detail.value;
+      // A field the backend named as reactive decides which other fields
+      // exist, so the schema is asked for again rather than guessed at here.
+      if (!this._reloading && this._reactiveChanged(previous, this._data)) this.load();
     });
 
     this.querySelector("#sc-form-save").addEventListener("click", () => this._trySave());
@@ -215,10 +318,11 @@ export class ScConfigForm extends HTMLElement {
       this.load(true);
     });
 
-    this._syncCancelVisibility();
+    this._syncActions();
   }
 
   async _trySave() {
+    if (!this._saveEnabled) return;
     const proceed = this.dispatchEvent(
       new CustomEvent("sc-before-save", {
         detail: { data: this._data },

@@ -173,7 +173,18 @@ async def test_a_rejected_value_never_appears_in_the_message(hass, hass_ws_clien
 
 
 async def test_missing_model_is_reported_against_the_model_field(hass, hass_ws_client, entry):
+    """Named fields and a sentence — the two halves the panel needs.
+
+    `<sc-config-form>` attaches an error to a control by matching the field
+    list against the schema it rendered, and shows the text after the em dash.
+    A message with neither, which is what "model_required" was, can only be
+    toasted as a machine key.
+    """
     client = await hass_ws_client(hass)
+    await client.send_json_auto_id({"type": "smartchain/agent/schema", "entry_id": entry.entry_id})
+    schema_msg = await client.receive_json()
+    declared = {field["name"] for field in schema_msg["result"]["schema"]}
+
     await client.send_json_auto_id(
         {
             "type": "smartchain/agent/save",
@@ -183,7 +194,12 @@ async def test_missing_model_is_reported_against_the_model_field(hass, hass_ws_c
     )
     msg = await client.receive_json()
     assert not msg["success"]
-    assert "model_required" in msg["error"]["message"]
+    message = msg["error"]["message"]
+    fields, _, text = message.removeprefix("invalid_data: ").partition(" — ")
+    named = [name.strip() for name in fields.split(",")]
+    assert named, message
+    assert set(named) <= declared, "the panel can only attach a field its schema declares"
+    assert text and "model_required" not in text
 
 
 async def test_no_label_or_error_response_carries_a_credential(hass, hass_ws_client, entry):

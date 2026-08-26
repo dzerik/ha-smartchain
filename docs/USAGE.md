@@ -8,16 +8,16 @@ This document covers every SmartChain feature with a running example for each. F
 
 1. [Installation](#1-installation)
 2. [Providers and credentials](#2-providers-and-credentials)
-3. [Sub-entries — multiple agents per provider](#3-sub-entries--multiple-agents-per-provider)
-4. [Conversation entity options](#4-conversation-entity-options)
+3. [Hubs and agents — how a SmartChain install is shaped](#3-hubs-and-agents--how-a-smartchain-install-is-shaped)
+4. [Agent options](#4-agent-options)
 5. [Services reference](#5-services-reference)
 6. [Built-in conversation tools](#6-built-in-conversation-tools)
-7. [Custom tools from YAML](#7-custom-tools-from-yaml)
+7. [Custom tools](#7-custom-tools)
 8. [MCP client — external tool servers](#8-mcp-client--external-tool-servers)
 9. [Long-term memory / RAG](#9-long-term-memory--rag)
 10. [Multi-agent orchestration](#10-multi-agent-orchestration)
 11. [AI Task entity](#11-ai-task-entity)
-12. [Sidebar panel — camera analysis](#12-sidebar-panel--camera-analysis)
+12. [Sidebar panel](#12-sidebar-panel)
 13. [Skills system](#13-skills-system)
 14. [Troubleshooting](#14-troubleshooting)
 
@@ -67,39 +67,49 @@ Either one plugs into every SmartChain feature that consumes a chat model, and b
 
 ---
 
-## 3. Sub-entries — multiple agents per provider
+## 3. Hubs and agents — how a SmartChain install is shaped
 
-Each SmartChain config entry can hold **multiple conversation agents** under it ("sub-entries"). Different sub-entries can run different models, system prompts and option sets while sharing the same credentials.
+**A config entry is a connection to a provider, and nothing else** *(v5.1.0+)*. Credentials, endpoint, and — for GigaChat only — two switches that belong to the connection itself. That is the whole of it. Everything you would recognise as an assistant lives *under* the entry, as a sub-entry.
 
-**Create a sub-entry:**
+There are four kinds of sub-entry, and each has its own place in this guide:
 
-**Settings > Devices & Services > SmartChain > 3-dot menu > Add sub-entry** — fill the form below.
+| Sub-entry | Menu item | What it is | Section |
+|---|---|---|---|
+| **Conversation agent** | Add conversation agent | A model, a prompt and a tool list. Becomes one `conversation.smartchain_*` entity. | §4 |
+| **Embeddings binding** | Add embeddings binding | One embedding model on this entry's credentials. | §9.1 |
+| **Memory store** *(v5.2.0+)* | Add memory store | One vector backend bound to one embeddings binding. | §9.2 |
+| **Tool** *(v5.3.0+)* | Add tool | One LLM-callable action, built in a form. | §7.0.1 |
 
-Each sub-entry becomes its own `conversation.smartchain_*` entity. You can assign different sub-entries to different rooms / users / Voice pipelines.
+**Create one from either end.** **Settings > Devices & Services > SmartChain > 3-dot menu** offers all four by the names above, and the SmartChain panel has a tab for each (§12). They write the same storage; use whichever is in front of you.
+
+An entry can hold **several conversation agents** at once, each on its own model, prompt and option set, all sharing one set of credentials. Assign different agents to different rooms, users or Voice pipelines.
+
+> **A hub with no agents is a valid state.** It is a connection nobody is using yet: no conversation entity, no AI Task entity, nothing to control. Add an agent and both appear.
+>
+> **Upgrading from 5.0.x?** Before v5.1.0 an entry with no agents built one conversation entity out of the entry's *own* options. That entity is migrated into a real agent sub-entry, keeping its entity id, name and area, so automations naming it keep working. If the migration cannot complete it leaves the entry alone and the old entity stays — it is never removed with nothing to replace it.
 
 ---
 
-## 4. Conversation entity options
+## 4. Agent options
 
-These options live on **each sub-entry**:
+These options live on **each conversation agent**, and the form is the same whether you open it from Devices & Services or from the panel's **Agents** tab:
 
 | Option | Default | Effect |
 |---|---|---|
-| `model` | provider default | Override the chat model |
+| `model` | provider default | Override the chat model — a dropdown of the provider's chat models |
+| `model_user` | empty | Free-text model name for a model the provider's API doesn't advertise. Non-empty wins over the dropdown |
 | `temperature` | 0.1 | Sampling temperature |
 | `max_tokens` | provider default | Response cap |
 | `prompt` | system prompt template | Jinja2 system prompt — see §4.1 |
 | `llm_hass_api` | unset | Enable HA Assist API (device control via tool calling) |
 | `process_builtin_sentences` | true | Try HA's built-in intent parser first; fall back to LLM if no intent matched |
 | `chat_history` | true | Send multi-turn history (vs. just current message) |
-| `enable_history_tool` | false | Expose `get_state_history` LLM tool |
 | `dynamic_entity_context` *(v5.0.0+)* | **true** | Send a compact map of the home plus the entities the message is about, instead of every entity — see §9.11 |
 | `dynamic_context_preset` *(v5.0.0+)* | `optimal` | Which entities that map covers — see §9.11 |
 | `dynamic_context_on_assist` *(v5.0.0+)* | false | Also add the matched entities when the Assist API is on — see §9.11 |
-| `allowed_tools` *(v4.1.0+)* | all | Restrict which custom YAML / MCP tools this agent sees |
-| `enable_multi_agent_tools` *(v4.4.0+)* | false | Expose `ask_agents` + `critique_response` tools (only when ≥2 sub-entries exist) |
-| `verify_ssl` (GigaChat only) | false | TLS verify toggle for self-signed Sber certs |
-| `profanity` (GigaChat only) | false | Enable GigaChat's profanity filter |
+| `allowed_tools` *(v4.1.0+, reshaped in v5.4.0)* | all | The one list of everything this agent may call — built-in tools and your own — see §7.5 |
+
+That is the whole form. **`verify_ssl` and `profanity` are not on it** — see §4.2.
 
 ### 4.1. Custom system prompt
 
@@ -116,6 +126,23 @@ House is empty. Keep responses brief.
 ```
 
 `{{ ha_name }}` is provided automatically. All HA template functions (`states`, `state_attr`, `area_devices`, `area_name`, `now`, etc.) are available.
+
+### 4.2. Connection settings live on the hub *(v5.4.1+)*
+
+Two settings are properties of the **connection**, not of an agent, and they are edited on the config entry itself — **Settings > Devices & Services > SmartChain > Configure**, or the panel's **Settings** tab:
+
+| Setting | Provider | Default | Effect |
+|---|---|---|---|
+| `verify_ssl` | GigaChat only | false | Verify the TLS certificate. Sber's chain is self-signed, hence the default |
+| `profanity` | GigaChat only | false | Enable GigaChat's profanity filter |
+
+**Every other provider has no connection settings at all**, and both the Configure dialog and the Settings tab say so in a sentence rather than opening an empty form.
+
+> **They used to be on the agent form too, and that was a placebo.** Until v5.4.1 both were declared on the agent as well, with a default, so every agent save injected a value whether or not you had ever seen the field — and the client was built from the agent's copy, not the hub's. A hub set to `verify_ssl: false` therefore built its client with the agent's injected `true`. One setting, one place that owns it.
+>
+> **Nothing is lost on upgrade.** An agent that already stored a value has it lifted onto the entry when the entry has none of its own — the one case where the agent's copy was what the client was actually built with. Otherwise the agent's copy is discarded, and a log line at INFO says so when the two disagreed.
+>
+> Since v5.4.7 the GigaChat *embeddings* client reads the same switch. Turning `verify_ssl` on used to secure the conversation client and leave every embedding request to the same host unverified.
 
 ---
 
@@ -214,25 +241,28 @@ Fires `smartchain_entities_reindexed` with `{"stores": [<names>], "new": <int>, 
 
 ## 6. Built-in conversation tools
 
-Every conversation turn that involves the LLM may call these tools. Each is gated by an option or by repository state.
+Every conversation turn that involves the LLM may call these tools. Since v5.4.0 each is
+gated by **one** thing — the agent's `allowed_tools` list — plus, for some, a structural
+precondition it cannot work without. Expand an agent's tools cell in the panel's **Agents**
+tab to see the whole list, including what is off and why.
 
 | Tool | Enabled when | What it does |
 |---|---|---|
 | HA Assist API tools (lights, switches, climate…) | `llm_hass_api` set on subentry | Control devices via tool calls |
-| `get_state_history` | `enable_history_tool: true` | Read past device states from the recorder |
-| `ask_agent` | ≥ 2 sub-entries | Delegate the question to a specific sibling |
-| `ask_agents` *(v4.4.0+)* | `enable_multi_agent_tools: true` + ≥ 2 sub-entries | Parallel fan-out to several siblings (see §10) |
+| `get_state_history` | listed in `allowed_tools` | Read past device states from the recorder |
+| `ask_agent` | listed, **and** ≥ 2 conversation sub-entries on this entry | Delegate the question to a specific sibling |
+| `ask_agents` *(v4.4.0+)* | same | Parallel fan-out to several siblings (see §10) |
 | `critique_response` *(v4.4.0+)* | same | Ask a sibling to review a draft answer (see §10) |
-| `search_memory` *(v4.3.0+)* | at least one store in the `memory:` block | Semantic search over conversation + logbook embeddings (see §9) |
-| `search_entities` *(v5.0.0+)* | at least one store with a `source:` block | Find an entity by describing it, when the `entity_id` is unknown (see §9.10) |
-| Custom YAML tools | `tools:` block in YAML | User-declared tools (see §7) |
-| MCP tools | `mcp_servers:` block in YAML | Discovered automatically per server (see §8) |
+| `search_memory` *(v4.3.0+)* | listed, **and** at least one store configured | Semantic search over conversation + logbook embeddings (see §9) |
+| `search_entities` *(v5.0.0+)* | listed, **and** at least one store with a `source:` block | Find an entity by describing it, when the `entity_id` is unknown (see §9.10) |
+| Custom tools | listed, or covered by `"*"` | Your own tools, from the Tools tab or `tools.yaml` (see §7) |
+| MCP tools | listed, or covered by `"*"` | Discovered automatically per server (see §8) |
 
 The LLM decides on its own when to call each tool — you don't dispatch them directly. The tool result is returned to the model, which may produce a follow-up tool call or a final text answer.
 
 ### 6.1. `get_state_history` example
 
-Turn it on per sub-entry. Then:
+Tick `get_state_history` in the agent's **Tools** list (§7.5) — it is off on a migrated agent unless the old **State History Tool** switch was on. Then:
 
 > User: *"Was the front door opened in the last 2 hours?"*
 >
@@ -241,11 +271,87 @@ Turn it on per sub-entry. Then:
 
 ---
 
-## 7. Custom tools from YAML
+## 7. Custom tools
 
-Declare your own LLM-callable tools in `/config/smartchain/tools.yaml`. Each tool has a name, description, JSON-Schema parameters block, and an `action` describing what to do when the tool is called.
+A custom tool is an LLM-callable action you define: a name, a description, a
+JSON-Schema `parameters` block describing its arguments, and an `action` saying
+what to do when the model calls it. Four action types: `service`, `template`,
+`rest`, `script`. Arguments are validated against the JSON Schema before
+execution; templated strings inside the action are Jinja-rendered with the
+LLM-supplied arguments as the variable scope.
 
-Four action types: `service`, `template`, `rest`, `script`. Arguments are validated against the JSON Schema before execution; templated strings inside the action are Jinja-rendered with the LLM-supplied arguments as the variable scope.
+**There are two ways to write one, and they produce the same tool** — plus a
+catalogue of ready-made ones you do not have to write at all.
+
+### 7.0. Ready-made tools *(v5.4.6+)* — a set you switch on
+
+The **Tools** tab opens with a **Ready-made tools** block above your own tools.
+Each row is a real tool with a switch; flip it and the tool exists.
+
+| Tool | What it gives the model |
+|---|---|
+| `weather_forecast` | The forecast for the coming days or hours — Assist only reports the weather *now* |
+| `sun_times` | Sunrise, sunset, dawn and dusk |
+| `calendar_events` | Events from a calendar over a date range |
+| `todo_list_items` | Reads a to-do or shopping list back — Assist can only add to one |
+| `area_summary` | What is on in one room, in a single call |
+| `who_is_home` | Presence, without assembling it from entity names |
+| `look_at_camera` | Looks at a camera mid-conversation and describes what it sees |
+| `notify_device` | Sends a notification, so the agent can reach you rather than only answer |
+
+Each takes the entity as an *argument*, so one `weather_forecast` serves every
+weather entity in the house.
+
+Nothing about an installed preset stays special: it is a tool sub-entry, it
+appears in the list below with source **built here**, and Edit, disable and
+Delete all work on it. The switch goes on and stays on — removing it is Delete
+in the list below, where the button says what it does.
+
+The catalogue deliberately does **not** duplicate Home Assistant's own Assist
+API (turning things on and off, setting lights and climate, adding to lists) or
+our built-in tools (§6). Energy over a period, a sensor's min/max/mean and
+recent logbook events are absent for a different reason: they live in the
+recorder's statistics and the logbook, which are reachable only over the
+websocket API, and doing them properly means a built-in tool rather than a
+preset.
+
+A preset whose name is already taken — by one of your tools or by a connected
+MCP server — is refused with the reason, exactly as the form refuses it. A
+`tools.yaml` tool of the same name is *not* a conflict: installing shadows it,
+and the panel says so (§7.7).
+
+### 7.0.1. The Tools tab *(v5.3.0+)* — build one without YAML
+
+Open the SmartChain panel and pick **Tools**, or add a **Tool** sub-entry from
+Settings → Devices & Services. Either way you get a form:
+
+- **Name**, **what it does** and **enabled** are plain fields.
+- **What happens when the model calls it** is a picker, and the rest of the form
+  changes to match it. A `service` tool asks for an action and a target — both
+  pickers, not text boxes; a `script` tool asks for a script entity; a `rest`
+  tool asks for a method, URL, headers, body and timeout.
+- **Arguments** is a row per argument — name, type, description, required. This
+  is the JSON Schema, built for you.
+- For a schema rows cannot express (`anyOf`, nested objects, arrays), switch
+  **How the arguments are described** to `advanced` and write the JSON Schema
+  directly. It is validated before it is saved, and again against every call.
+
+A tool built here is stored by Home Assistant, not in a file. `tools.yaml` keeps
+working — see §7.7 for how the two sources combine.
+
+> **REST header values are write-only.** A header is where an `Authorization`
+> token goes, so once saved its value never travels back to the browser: the
+> form shows the header's name with an empty value, and leaving it empty keeps
+> what is stored. Type a new value to replace it; delete the row to remove it.
+
+> **A field it cannot store is refused, naming the field** *(v5.4.5+)*. Everything
+> the panel writes — a tool, a store, an agent, an embeddings binding — passes one
+> guard before it reaches storage. A value that carries its own source text is
+> normalised back to it (a template target becomes the string you typed); anything
+> else JSON cannot hold is rejected with the field named. Templated targets like
+> `entity_id: "{{ entity }}"` are therefore safe to save and re-save: before
+> v5.4.5, opening such a tool and pressing Save with nothing changed corrupted
+> Home Assistant's config storage for **every** integration on the system.
 
 ### 7.1. Minimal example — `service` action
 
@@ -340,20 +446,59 @@ Non-2xx responses become `"Error: HTTP <status>"`. Network failures and timeouts
 
 ### 7.5. Per-agent visibility
 
-By default every sub-entry sees every YAML tool. To restrict, set `allowed_tools` on a sub-entry:
+`allowed_tools` is the single control over what one agent may call. The agent form labels
+it **Tools**; it offers the six built-in tools (each labelled *built-in*) alongside every
+custom and MCP tool, and it renders whether or not you have any custom tools:
 
 ```yaml
-# In the SmartChain sub-entry options UI:
+# What the agent form's "Tools" control writes:
 allowed_tools:
-  - turn_on_light
-  - list_recent_motion
+  - "*"                # every custom tool
+  - search_memory      # a built-in needs its own name
+  - get_state_history
 ```
 
-Semantics: missing/`None` = all tools available; empty list `[]` = no custom tools; explicit list = only those names.
+Semantics: missing/`None` = no restriction; `"*"` = every *custom* tool (not built-ins);
+an explicit name = that tool, built-in or custom; empty list `[]` = nothing.
+
+A tool added *after* an agent was given an explicit list is not granted to it — that is
+deliberate, and since v5.4.0 it applies to built-ins as well.
+
+**A name the registry cannot resolve is still offered, labelled `(missing tool)`**
+*(v5.4.2+)*. Deleting a tool, switching one off, or reloading while an MCP server is
+unreachable leaves a name in some agent's list with nothing behind it. It is rendered
+anyway, so you can see which one and remove it — before v5.4.2 the form echoed back a
+value its own schema rejected, and *every* later save of that agent failed with
+`invalid_data: allowed_tools`, including edits that had nothing to do with tools.
+
+> **Upgrading from 5.3 or earlier:** `enable_history_tool` and `enable_multi_agent_tools`
+> were separate switches, and `allowed_tools` filtered custom tools only. Config entries
+> migrate automatically: each agent's built-ins are written into its list and the switches
+> are removed, so no agent gains or loses a tool.
+>
+> **Both switches defaulted to off, so on most installs the migrated list is
+> `["*", "ask_agent", "search_memory", "search_entities"]`** — `get_state_history`,
+> `ask_agents` and `critique_response` are *not* in it, exactly as they were not in effect
+> before. If you want them, tick them; see §10.1 for the multi-agent pair.
 
 ### 7.6. Reserved names
 
-`get_state_history` and `ask_agent` are reserved built-in tool names — using them in YAML drops the entry with an error logged at startup.
+All six built-in tool names are reserved: `get_state_history`, `ask_agent`, `ask_agents`, `critique_response`, `search_memory` and `search_entities`. Using one in `tools.yaml` drops the entry with an error logged at startup; using one in the Tools tab is refused while you are still looking at the name.
+
+> **Three of these were only reserved from v5.3.0.** Before that, a custom tool named `search_memory`, `ask_agents` or `critique_response` was registered alongside the built-in and appended last, so the model read the built-in's description while the call resolved to the custom tool. If you have such a tool, rename it — after upgrading it is skipped rather than silently winning.
+
+### 7.7. Two sources, one registry *(v5.3.0+)*
+
+Tools come from three places and land in one registry: the Tools tab (config sub-entries), `tools.yaml`, and connected MCP servers. The Tools tab lists all three and says which is which, because it can only edit the first.
+
+- **A name defined both in a sub-entry and in `tools.yaml` resolves in favour of the sub-entry**, for the same reason a memory store does: the sub-entry is the one the UI can edit. The shadowing is never silent — logged as a warning, reported by `smartchain/tool/list`, and shown on the tab.
+- **Import** turns the tools in `tools.yaml` into editable sub-entries. It leaves the file alone, so every imported tool then shadows its copy; delete the copies when you are satisfied. A file using `!secret` **anywhere** is refused outright: importing would have to resolve the secret and write the resolved value into `.storage` as plain text, quietly moving a credential out of `secrets.yaml`.
+- **Export** writes the sub-entry tools back out as YAML. REST header values are exported blank and the affected tools are named, for the same reason the form never shows them.
+- `mcp_servers:` and `memory:` are not importable and have no constructor here — MCP servers are configured in `tools.yaml`, memory stores on the Stores tab.
+
+**A broken `tools.yaml` no longer takes the rest down** *(v5.4.3+)*. A parse error used to disable every tool and every memory store, including the ones built in the UI that never went near the file. The registry now rebuilds from the last content the file successfully produced, keeps everything that came from sub-entries, and still reports the error — to the reload service, to every panel save, to the log, and as a standing banner on the Tools tab, because a toast can be missed.
+
+**Disabling an imported tool no longer wakes its `tools.yaml` twin** *(v5.4.3+)*. A switched-off sub-entry still claims its name against the file, so the row you turned off stays off. Within one source the rule is the opposite — a disabled entry does not reserve its name there, or replacing a switched-off tool would be dropped as a duplicate.
 
 ---
 
@@ -423,7 +568,12 @@ Setting it up is two steps: create an embeddings sub-entry (§9.1), then declare
 
 ### 9.1. Step 1 — create an embeddings sub-entry
 
-**Settings > Devices & Services > SmartChain > 3-dot menu > Add embeddings binding.**
+Two routes, one result:
+
+- **The panel's Embeddings tab**, which is the one to reach for. It lists every binding you have with its model and the stores bound to it, and warns before a rename or a delete would unbind one. The tab is hidden entirely when none of your configured providers can embed.
+- **Settings > Devices & Services > SmartChain > 3-dot menu > Add embeddings binding**, for the same form inside Home Assistant's own pages.
+
+**Do this before you touch the Stores tab.** A store must name an embeddings binding, and the field is a dropdown over the bindings that exist; with none there is no value that could be typed. The Stores tab holds **Save** and says so (§9.2) rather than letting you press it into a wall.
 
 The form asks for three fields, of which you fill in two:
 
@@ -450,9 +600,17 @@ Model lists are fetched live from the provider where possible and filtered by pu
 
 Recommended starting point: **Ollama + `nomic-embed-text`** — local, free, privacy-friendly. Cloud providers receive the full text of everything you embed.
 
-### 9.2. Step 2 — declare stores in `tools.yaml`
+### 9.2. Step 2 — declare stores
 
-A **store** binds one embeddings sub-entry to one vector backend and carries its own retention and ingest settings. The smallest working configuration is two lines:
+A **store** binds one embeddings sub-entry to one vector backend and carries its own retention and ingest settings. There are two ways to create one, and they build the same thing.
+
+**In the UI *(v5.2.0+)*, which is the recommended way.** **Settings > Devices & Services > SmartChain > Add memory store**, or the **Stores** tab of the SmartChain panel. Every option below is a field on that form, and the Stores tab additionally shows whether each configured store actually came up.
+
+> **Step 1 first.** A store must name an embeddings binding, and the field is a dropdown over the bindings that exist — with none, there is nothing to pick. The Stores tab says so above the form and holds **Save** until you have made one on the **Embeddings** tab *(v5.4.7+)*.
+
+Prefer the UI when the backend needs a credential. `backend.dsn` embeds a PostgreSQL password and `backend.api_key` is a qdrant token; written in `tools.yaml` they are handed to your browser whenever the panel's Tools tab opens that file. A store sub-entry keeps them in `.storage` and never serves them back — the form shows an empty field and "leave empty to keep the stored one".
+
+**In `tools.yaml`**, which keeps working unchanged. The smallest working configuration is two lines:
 
 ```yaml
 memory:
@@ -506,7 +664,15 @@ memory:
 | `ingest_logbook` | no | disabled | `enabled` (bool), `domains` (list), `poll_interval_minutes` (5–1440, default 60). |
 | `source` | no | absent | Turns the store into an entity index instead of a conversation store, see §9.10. Present means the three keys above are rejected. |
 
-Call `smartchain.reload_tools` after editing. Validation errors are raised there with a message naming the offending key, and the previous configuration stays live.
+Call `smartchain.reload_tools` after editing. Validation errors are raised there with a message naming the offending key, and the previous configuration stays live. A store created in the UI needs no reload — the command that writes it rebuilds the registry itself.
+
+> **Saving a store tells you whether it started** *(v5.4.7+)*. A store that failed to build used to be reported as a plain green "Saved" and only confessed in the log. The save now carries the same safe reason `smartchain/store/status` serves, and the tab says the store did not come up — including on an install where *every* store failed, which was previously the one case that got no reason at all.
+
+> **Writing a sub-entry no longer reloads the hub** *(v5.4.8+)*. Switching a tool on, saving a store or editing an embeddings binding rebuilds only the shared subsystems; the config entry is not reloaded, so no conversation entity goes offline and no client is rebuilt. Before v5.4.8, installing three ready-made tools cost three entry reloads, six `conversation.* → offline` transitions and six embedding-dimension probes, and an Assist request landing in one of those windows failed. Editing the entry itself — its credentials, its options, its agents — still reloads it, which is what those changes need.
+
+> **A store defined in both places resolves in favour of the sub-entry** *(v5.2.0+)*, because the sub-entry is the one the UI can edit; losing to a file the panel cannot safely rewrite would make the UI a read-only display of something it appears to control. The shadowing is never silent: it is logged as a warning, reported by `smartchain/store/status`, and shown on the Stores tab. Delete the block from `tools.yaml` once you have moved a store.
+
+> **A store form has no logbook-ingest switch.** `ingest_logbook` above still parses, but the poller reaches for `logbook._get_events` / `logbook.humanify`, which the installed Home Assistant no longer exposes — it is a runtime no-op today. Shipping a live toggle over that would advertise something the code cannot do, so the field exists in YAML only, and starts working again the day the fetcher does.
 
 > **`!secret` works in `tools.yaml`.** SmartChain reads the file through Home Assistant's YAML loader with a secrets store rooted at the configuration directory, so a `!secret` tag resolves from `<config>/smartchain/secrets.yaml` if present and otherwise from `<config>/secrets.yaml` — the same lookup HA uses for `configuration.yaml`. A pgvector `dsn` or a Qdrant `api_key` belongs there rather than in `tools.yaml`:
 >
@@ -972,12 +1138,18 @@ When you have **two or more conversation sub-entries** in a single SmartChain co
 
 ### 10.1. Enable
 
-On each sub-entry that should be allowed to *initiate* multi-agent calls:
+**There is no "Multi-Agent Tools" switch any more.** It was deleted in v5.4.0, when `allowed_tools` became the one control over an agent's whole tool inventory (§7.5). On each agent that should be allowed to *initiate* multi-agent calls:
 
-- Open the sub-entry options.
-- Toggle **Enable multi-agent tools** *(v4.4.0+, hidden when there's only one sub-entry)*.
+- Open the agent — the panel's **Agents** tab, or **Settings > Devices & Services > SmartChain > the agent > Reconfigure conversation agent**.
+- In **Tools**, tick `ask_agents` and `critique_response`. Both are labelled *built-in*.
 
-This adds `ask_agents` and `critique_response` to that agent's tool list. The single-delegation `ask_agent` tool is always available when siblings exist (no opt-in required).
+**On an existing agent both are off after upgrading, and that is not a regression.** The old switch defaulted to off, so the v5.4.0 migration wrote down what the agent actually had — which, unless you had turned that switch on, did not include either tool. Tick them to get them.
+
+The two are now separable: an agent may fan out to its siblings without also being allowed to ask one for a review. One switch used to hold both.
+
+`ask_agent`, the single delegation, needs its own list entry too. It is in every migrated agent's list, because before v5.4.0 it was granted unconditionally.
+
+All three additionally need a **second conversation agent on the same config entry**. Without one they show in the Agents tab's inventory as off, with the reason *needs a second agent on this provider* — a structural precondition, not a preference, so ticking them changes nothing until a sibling exists. An embeddings binding or a memory store is not a sibling: only conversation agents count.
 
 ### 10.2. `ask_agent` — single delegation
 
@@ -1056,11 +1228,24 @@ For downstream integrations, `smartchain.async_generate_structured()` is re-expo
 
 ---
 
-## 12. Sidebar panel — camera analysis
+## 12. Sidebar panel
 
-Click **SmartChain AI** in the HA sidebar to open the panel. Pick any camera entity, type a question, and the LLM returns a description. The result is mirrored to `sensor.smartchain_last_analysis` (proper SensorEntity since v4.0.2) and the `smartchain_image_analyzed` event for automation use.
+Click **SmartChain AI** in the HA sidebar. Administrators see six tabs, in this order; everyone else sees **Camera** only.
 
-The panel calls `smartchain.analyze_image` under the hood — same behaviour as the service.
+| Tab | What it is for |
+|---|---|
+| **Agents** | Create, edit, duplicate and delete conversation agents across every provider. The tools cell expands into that agent's whole inventory — built-ins and custom tools together, the ones that are off included, each with where it comes from and why it is off *(v5.4.0+)*. |
+| **Embeddings** | Embeddings bindings (§9.1). Hidden entirely when no configured provider can embed. Warns before a rename or delete that would unbind a store. |
+| **Stores** *(v5.2.0+)* | Memory and vector stores (§9.2), plus a health line per configured store — including the ones that still live in `tools.yaml` and cannot be edited here. |
+| **Settings** | The entry's connection settings. Most providers have none and the tab says so. |
+| **Tools** *(rebuilt in v5.3.0)* | A form-driven constructor for custom tools (§7.0), and a list of every registered tool with its source. The `tools.yaml` editor — with server-side validation, a backup and a rollback — is still there, demoted into an Import / Export block. |
+| **Camera** | Pick any camera entity, type a question, get a description. |
+
+**Embeddings is the one tab that can disappear.** It is hidden when no configured provider has an embeddings API at all — there would be nothing it could ever let you do. Stores is *not* hidden the same way: a store binds to an embeddings title that may live on a different config entry, and the tab is also where a store that failed to start says so.
+
+The **Camera** tab calls `smartchain.analyze_image` under the hood — same behaviour as the service. Its result is mirrored to `sensor.smartchain_last_analysis` (a proper SensorEntity since v4.0.2) and to the `smartchain_image_analyzed` event for automation use.
+
+Every form in the panel is rendered from a schema the backend serialises, so the panel itself declares no field names and a field added to a config flow appears there with no frontend change.
 
 ---
 
@@ -1087,10 +1272,26 @@ To reload skills, restart HA or reload the config entry.
 ### "No SmartChain agent available."
 The `smartchain.ask` service couldn't find any agent. Check **Settings > Devices & Services > SmartChain** — does it have at least one conversation sub-entry with `runtime_data` set?
 
+### "Multi-Agent Tools" / "State History Tool" is missing from the agent form
+Both switches were deleted in v5.4.0. The agent's **Tools** list replaced them and is now the only control — tick `get_state_history`, `ask_agents` and `critique_response` there. See §7.5 and §10.1.
+
+### "Verify SSL" / "Profanity" is missing from the agent form
+They moved to the connection in v5.4.1 — **Settings > Devices & Services > SmartChain > Configure**, or the panel's **Settings** tab. See §4.2.
+
+### The Configure dialog says this provider has no connection settings
+That is correct, not an error. Only GigaChat has any (§4.2). Model, prompt, temperature and tools belong to an agent — open the agent instead.
+
+### Saving an agent fails with `invalid_data: allowed_tools`
+Fixed in v5.4.2. The agent's list held a tool name the registry could not resolve — deleted, switched off, or on an MCP server that was unreachable at the last reload — and the form both rejected it and refused to render it. It is now offered labelled `(missing tool)`; untick it and save. On an older build, delete the tool's entry from the agent's stored `allowed_tools`.
+
+### The Stores form will not let me press Save
+No embeddings binding exists yet, so the store's `embeddings` dropdown has no options and no value could satisfy it. Create one on the **Embeddings** tab first (§9.1), then come back.
+
 ### Custom tools aren't showing up
-1. Check `/config/smartchain/tools.yaml` syntax: `python -c "import yaml; yaml.safe_load(open('/config/smartchain/tools.yaml'))"`.
+1. Check `/config/smartchain/tools.yaml` syntax: `python -c "import yaml; yaml.safe_load(open('/config/smartchain/tools.yaml'))"`. Since v5.4.3 a parse error is also shown as a standing banner on the Tools tab, and it no longer disables the tools and stores you built in the UI.
 2. Call `smartchain.reload_tools` — it raises `HomeAssistantError` on validation failures with a clear message.
 3. Check HA log for `Tool <name> uses a reserved built-in name; skipping` or `Duplicate tool name`.
+4. If the tool exists but no agent uses it, check the agent's **Tools** list (§7.5) — an agent with an explicit list is not given tools added afterwards. The Agents tab's tools cell says *not in this agent's allowed tools* for exactly this.
 
 ### MCP server unavailable
 - `stdio`: confirm the `command` binary (`npx`, `python`, etc.) is on the HA container's PATH; check log for the subprocess startup error.

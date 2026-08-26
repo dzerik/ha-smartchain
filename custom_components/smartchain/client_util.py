@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import re
 from collections.abc import Mapping
@@ -36,6 +37,11 @@ from .const import (
 )
 
 LOGGER = logging.getLogger(__name__)
+
+# Seconds any one provider's model listing may take. The aiohttp fetches carry
+# their own `ClientTimeout(total=10)`; this is the same bound for the one
+# provider whose SDK gives us no timeout parameter to set.
+MODEL_FETCH_TIMEOUT = 10
 
 # The four hand-written providers are literal; every OpenAI-compatible one
 # contributes its row's capabilities.
@@ -176,13 +182,18 @@ async def get_client(
         if not common_args.get("model"):
             common_args.pop("model", None)
         common_args["credentials"] = entry.data[CONF_API_KEY]
-        # Prefer per-subentry value (passed via common_args); fall back to legacy entry.options.
-        verify_ssl = common_args.pop(
-            CONF_VERIFY_SSL, entry.options.get(CONF_VERIFY_SSL, DEFAULT_VERIFY_SSL)
-        )
-        profanity = common_args.pop(
-            CONF_PROFANITY, entry.options.get(CONF_PROFANITY, DEFAULT_PROFANITY)
-        )
+        # The connection owns these two, so `entry.options` is the only place
+        # they are read from. Until v5.4.1 a value in `common_args` — which
+        # `_resolve_client_args` copied out of the agent's data, and which
+        # `subentry_schema` injected into every agent save by way of a
+        # voluptuous `default=` — won instead, which made the hub's own
+        # connection form a placebo. The `pop` stays so that a stale key
+        # reaching this far is discarded rather than handed to GigaChat under
+        # a name it does not know.
+        common_args.pop(CONF_VERIFY_SSL, None)
+        common_args.pop(CONF_PROFANITY, None)
+        verify_ssl = entry.options.get(CONF_VERIFY_SSL, DEFAULT_VERIFY_SSL)
+        profanity = entry.options.get(CONF_PROFANITY, DEFAULT_PROFANITY)
         common_args["verify_ssl_certs"] = verify_ssl
         common_args["profanity_check"] = profanity
         # The field is `auto_upload_attachments`. It was `auto_upload_images`
@@ -266,16 +277,24 @@ def is_embedding_model(engine: str, name: str) -> bool:
     return False
 
 
-async def async_fetch_models(
-    hass: HomeAssistant,
-    engine: str,
-    data: dict,
-    purpose: str = CAPABILITY_CHAT,
-) -> list[str]:
-    """Fetch available models from provider API, filtered by purpose.
+class ModelFetchError(Exception):
+    """A model list could not be fetched from the provider.
 
-    Returns a list of model names with an empty string first (the 'custom'
-    option). Falls back to the static list for `purpose` on any error.
+    Raised only when a caller asks for `strict=True`. It exists so that "the
+    provider said these are its models" and "we could not ask, so here is a
+    list we shipped months ago" stop being the same value. A caller that
+    cannot tell them apart will cache the second as though it were the first,
+    which is how one network blip became permanent until a restart.
+    """
+
+
+def static_models(engine: str, purpose: str = CAPABILITY_CHAT) -> list[str]:
+    """The shipped list for `engine`, used when the provider cannot be asked.
+
+    A copy, never the constant itself: callers extend the list they get back
+    (with a stored model the provider has not listed, for instance), and
+    mutating `MODELS_GIGACHAT` in place would leak that into every later
+    caller.
     """
     from .const import (
         ENGINE_EMBEDDING_MODELS,
@@ -283,12 +302,27 @@ async def async_fetch_models(
         UNIQUE_ID,
     )
 
+    table = ENGINE_EMBEDDING_MODELS if purpose == CAPABILITY_EMBEDDINGS else ENGINE_MODELS
+    return list(table.get(UNIQUE_ID.get(engine, ""), [""]))
+
+
+async def async_fetch_models(
+    hass: HomeAssistant,
+    engine: str,
+    data: dict,
+    purpose: str = CAPABILITY_CHAT,
+    strict: bool = False,
+) -> list[str]:
+    """Fetch available models from provider API, filtered by purpose.
+
+    Returns a list of model names with an empty string first (the 'custom'
+    option). Falls back to the static list for `purpose` on any error — unless
+    `strict`, in which case the failure is raised as `ModelFetchError` and the
+    caller decides what a non-answer is worth. Anything that caches the result,
+    or shows it as the provider's catalogue, wants `strict=True`.
+    """
     want_embeddings = purpose == CAPABILITY_EMBEDDINGS
-    static = (
-        ENGINE_EMBEDDING_MODELS.get(UNIQUE_ID.get(engine, ""), [""])
-        if want_embeddings
-        else ENGINE_MODELS.get(UNIQUE_ID.get(engine, ""), [""])
-    )
+    static = static_models(engine, purpose)
 
     try:
         if engine in OPENAI_COMPATIBLE:
@@ -313,8 +347,13 @@ async def async_fetch_models(
         if models:
             return [""] + models
         raise ValueError("Empty model list")
-    except Exception:
-        LOGGER.debug("Failed to fetch %s models for %s, using static list", purpose, engine)
+    except Exception as err:
+        # WARNING, with the error: this is the moment the user stops being
+        # shown their provider's real catalogue, and a debug line nobody has
+        # enabled is not a trace anyone can act on.
+        LOGGER.warning("Could not fetch %s models for %s: %s", purpose, engine, err)
+        if strict:
+            raise ModelFetchError(f"Could not fetch {purpose} models for {engine}") from err
         return static
 
 
@@ -375,7 +414,60 @@ async def _fetch_anthropic_models(hass: HomeAssistant, data: dict) -> list[str]:
 
 
 async def _fetch_gigachat_models(hass: HomeAssistant, data: dict) -> list[str]:
-    """Fetch models from GigaChat API via SDK."""
-    client = GigaChat(credentials=data[CONF_API_KEY], verify_ssl_certs=False)
-    result = await hass.async_add_executor_job(client.get_models)
+    """Fetch models from GigaChat API via SDK.
+
+    `verify_ssl_certs` comes from the hub's own Verify SSL switch rather than
+    being pinned to `False` — v5.4.7 routed the chat client through that switch
+    and left this one behind, so the setting was a placebo for anyone whose
+    network requires certificate checking.
+
+    The call is bounded twice, because one bound is not enough and the two stop
+    different things.
+
+    `asyncio.timeout` bounds *the caller*. It does work — the awaiting
+    coroutine is cancelled on schedule and `agent/schema` answers within
+    `MODEL_FETCH_TIMEOUT` — but that is all it does. `async_add_executor_job` is
+    `loop.run_in_executor`, and cancelling the asyncio future cannot cancel a
+    `concurrent.futures` future whose thread has already started. So until
+    v5.4.11 a provider that accepted the connection and never answered left a
+    Home Assistant worker thread blocked in `get_models` for as long as it
+    liked, long after the panel had been told the fetch failed. That pool is
+    shared and finite; enough abandoned fetches starve it, and the symptom then
+    is nothing to do with model lists.
+
+    `timeout=` is what actually stops that. langchain-gigachat threads it into
+    the SDK's `Settings.timeout`, which becomes the `httpx.Timeout` on the
+    request, so the blocking call returns on its own and the thread is
+    reclaimed. It is the inner bound of the two — a shade under the outer one
+    would be indistinguishable in practice, so they are simply the same number
+    and whichever fires first is correct.
+    """
+    verify_ssl = data.get(CONF_VERIFY_SSL, DEFAULT_VERIFY_SSL)
+    client = GigaChat(
+        credentials=data[CONF_API_KEY],
+        verify_ssl_certs=verify_ssl,
+        timeout=MODEL_FETCH_TIMEOUT,
+    )
+    async with asyncio.timeout(MODEL_FETCH_TIMEOUT):
+        result = await hass.async_add_executor_job(client.get_models)
     return sorted(m.id_ for m in result.data)
+
+
+def connection_data(entry: ConfigEntry) -> dict[str, Any]:
+    """Everything a model fetch needs to know about a connection.
+
+    The credential lives in `entry.data`, but the hub's own switches — Verify
+    SSL, profanity — live in `entry.options`. A fetch handed only `entry.data`
+    is a fetch those switches do not reach, which is precisely how GigaChat's
+    model listing kept ignoring Verify SSL. Only the keys the connection form
+    declares are carried over, so a legacy entry's leftover agent options
+    (prompt, model, temperature) stay out of it.
+    """
+    from .config_flow import CONNECTION_KEYS
+
+    merged = dict(entry.data)
+    engine = merged.get(CONF_ENGINE, ID_GIGACHAT)
+    for key in CONNECTION_KEYS.get(engine, ()):
+        if key in entry.options:
+            merged[key] = entry.options[key]
+    return merged

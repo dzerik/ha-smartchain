@@ -312,7 +312,12 @@ async def test_allowed_tools_picker_lists_the_sentinel_first(hass, hass_ws_clien
     """
     import re
 
-    from custom_components.smartchain.const import ALL_TOOLS_SENTINEL, DOMAIN, TOOL_NAME_PATTERN
+    from custom_components.smartchain.const import (
+        ALL_TOOLS_SENTINEL,
+        BUILTIN_TOOL_NAMES,
+        DOMAIN,
+        TOOL_NAME_PATTERN,
+    )
     from custom_components.smartchain.tools.model import CustomTool
     from custom_components.smartchain.tools.model import TemplateAction as _Template
 
@@ -342,6 +347,40 @@ async def test_allowed_tools_picker_lists_the_sentinel_first(hass, hass_ws_clien
 
     assert options[0]["value"] == ALL_TOOLS_SENTINEL
     assert options[0]["label"]
-    assert [o["value"] for o in options[1:]] == ["ping"]
+    # Then the six built-ins, then the custom tools. A built-in carries a label
+    # that says so — the list is the only place a user sees the whole
+    # inventory, and a name alone would not say where it came from.
+    assert [o["value"] for o in options[1:]] == [*BUILTIN_TOOL_NAMES, "ping"]
+    assert all(o["label"] != o["value"] for o in options[1 : 1 + len(BUILTIN_TOOL_NAMES)])
+    assert options[-1]["label"] == "ping"
     # The sentinel cannot collide with any real tool name.
     assert not re.match(TOOL_NAME_PATTERN, ALL_TOOLS_SENTINEL)
+
+
+async def test_allowed_tools_picker_renders_with_no_custom_tools(hass, hass_ws_client, entry):
+    """The field must exist on a fresh install.
+
+    Until v5.4.0 it was gated on `len(registry) > 0`, so a user who had never
+    written a `tools.yaml` had never seen it — which, with the built-ins each
+    governed elsewhere, left no screen at all that listed an agent's tools.
+    """
+    from custom_components.smartchain.const import ALL_TOOLS_SENTINEL, BUILTIN_TOOL_NAMES, DOMAIN
+
+    assert len(hass.data[DOMAIN]["tools"]) == 0
+
+    client = await hass_ws_client(hass)
+    with patch(
+        "custom_components.smartchain.websocket_api.async_fetch_models",
+        return_value=["", "gpt-4.1-mini"],
+    ):
+        await client.send_json_auto_id(
+            {"type": "smartchain/agent/schema", "entry_id": entry.entry_id}
+        )
+        msg = await client.receive_json()
+
+    assert msg["success"], msg
+    field = next(f for f in msg["result"]["schema"] if f["name"] == "allowed_tools")
+    assert [o["value"] for o in field["selector"]["select"]["options"]] == [
+        ALL_TOOLS_SENTINEL,
+        *BUILTIN_TOOL_NAMES,
+    ]

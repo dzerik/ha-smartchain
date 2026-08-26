@@ -7,13 +7,41 @@ await import(`./config-form.js${_v ? `?v=${_v}` : ""}`);
 
 const AGENT_COMMANDS = { schema: "smartchain/agent/schema", save: "smartchain/agent/save" };
 
+// `source` values from tools/inventory.py. A built-in has to read as a
+// different kind of thing from a tool the user wrote, or the list answers
+// "which tools" without answering "which of these did I make".
+const TOOL_SOURCE_LABELS = {
+  assist: "Assist API",
+  builtin: "built-in",
+  yaml: "tools.yaml",
+  subentry: "built here",
+  mcp: "MCP",
+};
+
+// `reason` values from tools/inventory.py — why a tool the agent could have is
+// not bound right now. A list of only the live tools would say what is on but
+// never what is missing and why.
+const TOOL_REASON_LABELS = {
+  not_allowed: "not in this agent's allowed tools",
+  no_siblings: "needs a second agent on this provider",
+  no_memory_store: "needs a memory store",
+  no_entity_store: "needs an entity store",
+  assist_api: "tools come from Home Assistant's own exposed entities",
+};
+
 /**
  * <sc-agents-tab> — every agent on one screen, with create, edit,
  * duplicate and delete.
  *
  * Home Assistant's own pages can do all of this too; what they cannot do is
- * show every agent's provider, model and tool count at once, or copy a tuned
- * agent in one click. That overview is why this tab exists.
+ * show every agent's provider, model and tools at once, or copy a tuned agent
+ * in one click. That overview is why this tab exists.
+ *
+ * The tools cell expands into the agent's whole inventory — built-ins and
+ * custom tools together, the ones that are off included, each saying why. It
+ * is the only screen that answers "what can this agent actually do"; before
+ * v5.4.0 the answer was spread across a picker that often did not render and
+ * two switches elsewhere in the form.
  *
  * The overview itself is fetched once by the shell and handed down via
  * `.entries` — this tab only asks for a fresh copy, by dispatching
@@ -126,9 +154,10 @@ export class ScAgentsTab extends HTMLElement {
                 <li class="sc-agent-row">
                   <span class="sc-agent-name">${escapeHtml(agent.title)}</span>
                   <span class="sc-agent-model">${escapeHtml(agent.model || "—")}</span>
-                  <span class="sc-agent-tools">${
-                    agent.tool_count === null ? "all tools" : `${agent.tool_count} tools`
-                  }</span>
+                  <details class="sc-agent-tools" data-entry="${escapeHtml(entry.entry_id)}" data-sub="${escapeHtml(agent.subentry_id)}">
+                    <summary>${agent.tool_count} of ${agent.tool_total} tools</summary>
+                    <div class="sc-tool-inventory">Loading&hellip;</div>
+                  </details>
                   <span class="sc-agent-actions">
                     <button data-act="edit" data-entry="${escapeHtml(entry.entry_id)}" data-sub="${escapeHtml(agent.subentry_id)}">Edit</button>
                     <button data-act="copy" data-entry="${escapeHtml(entry.entry_id)}" data-sub="${escapeHtml(agent.subentry_id)}">Duplicate</button>
@@ -153,6 +182,51 @@ export class ScAgentsTab extends HTMLElement {
     root.querySelectorAll("[data-act]").forEach((button) =>
       button.addEventListener("click", () => this._act(button.dataset))
     );
+
+    root.querySelectorAll("details.sc-agent-tools").forEach((details) =>
+      // Fetched on first open rather than with the overview: one round trip
+      // per agent on every panel load would pay for a list almost nobody has
+      // expanded. `_loaded` makes reopening free.
+      details.addEventListener("toggle", () => {
+        if (!details.open || details._loaded) return;
+        details._loaded = true;
+        this._loadInventory(details);
+      })
+    );
+  }
+
+  async _loadInventory(details) {
+    const box = details.querySelector(".sc-tool-inventory");
+    try {
+      const result = await callWS(this._hass, "smartchain/agent/tools", {
+        entry_id: details.dataset.entry,
+        subentry_id: details.dataset.sub,
+      });
+      box.innerHTML = result.tools.length
+        ? `<ul class="sc-tool-inventory-list">${result.tools
+            .map(
+              (tool) => `
+              <li class="${tool.enabled ? "sc-tool-on" : "sc-tool-off"}">
+                <code>${escapeHtml(tool.name)}</code>
+                <span class="sc-tool-source">${escapeHtml(
+                  TOOL_SOURCE_LABELS[tool.source] || tool.source
+                )}</span>
+                ${
+                  tool.reason
+                    ? `<span class="sc-tool-reason">${escapeHtml(
+                        TOOL_REASON_LABELS[tool.reason] || tool.reason
+                      )}</span>`
+                    : ""
+                }
+              </li>`
+            )
+            .join("")}</ul>`
+        : `<p class="sc-empty">This agent has no tools available.</p>`;
+    } catch (err) {
+      // Let a retry happen: a failed load must not leave "Loading…" forever.
+      details._loaded = false;
+      box.textContent = err.message || "Could not read this agent's tools";
+    }
   }
 
   async _act({ act, entry: entryId, sub: subentryId }) {

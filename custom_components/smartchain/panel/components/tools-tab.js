@@ -1,18 +1,27 @@
 import { callWS, escapeHtml, showToast } from "../services.js";
+// Same cache-busting query this module was loaded with — importing
+// config-form.js both with and without `?v=` would instantiate it twice and
+// the second customElements.define would throw.
+const _v = new URL(import.meta.url).searchParams.get("v") || "";
+await import(`./config-form.js${_v ? `?v=${_v}` : ""}`);
+
+const TOOL_COMMANDS = {
+  schema: "smartchain/tool/schema",
+  save: "smartchain/tool/save",
+};
 
 /**
  * Shown via the `<textarea>`'s `placeholder` attribute — native browser
  * behaviour, not a value: it renders only while the field is empty, is never
  * part of `.value`, and disappears the moment the user types a single
  * character. It can therefore never end up on disk, accidentally or
- * otherwise — Save stays disabled until the textarea differs from the
- * loaded baseline, and an untouched empty editor has nothing to save. It is
- * a small, complete, valid tool — see tools/schema.py for the fields this
- * mirrors.
+ * otherwise — Save stays disabled until the textarea differs from the loaded
+ * baseline, and an untouched empty editor has nothing to save.
  */
-const TOOLS_PLACEHOLDER = `# tools.yaml — custom tools this agent can call.
-# This is only a placeholder shown on an empty file; start typing to
-# replace it. See "Syntax reference" below for every action type.
+const TOOLS_PLACEHOLDER = `# tools.yaml — the file form of what the constructor above builds.
+# You do not need this file: tools built above are stored by Home Assistant.
+# It stays supported for tools written before the constructor existed, for
+# mcp_servers:, and for memory: stores. See "Syntax reference" below.
 #
 # tools:
 #   - name: turn_on_porch_light
@@ -31,8 +40,8 @@ const TOOLS_PLACEHOLDER = `# tools.yaml — custom tools this agent can call.
  * Static reference markup for the collapsed <details> help panel. Every
  * example here was checked against tools/schema.py and the executors in
  * tools/actions/ — not written from memory — so keep it that way when this
- * drifts: a syntax reference that disagrees with the validator is worse
- * than no reference at all, because the user cannot tell which one is wrong.
+ * drifts: a syntax reference that disagrees with the validator is worse than
+ * no reference at all, because the user cannot tell which one is wrong.
  *
  * Entirely static, authored text — never interpolates file content or any
  * other runtime value, so it does not need escapeHtml().
@@ -45,7 +54,7 @@ const TOOLS_HELP_HTML = `
       <section>
         <h4>Top-level blocks</h4>
         <p>All three are optional; a file with none of them is valid (and empty).</p>
-        <pre><code>tools:         # custom LLM tools — the bulk of this file
+        <pre><code>tools:         # custom LLM tools — also buildable above, without YAML
 mcp_servers:   # remote MCP servers; their tools are added automatically
 memory:        # long-term memory and/or entity indexing</code></pre>
       </section>
@@ -55,8 +64,9 @@ memory:        # long-term memory and/or entity indexing</code></pre>
         <p>Every entry under <code>tools:</code> needs <code>name</code>, <code>description</code>,
         <code>parameters</code> (a JSON Schema <code>object</code> describing the call's arguments)
         and <code>action</code>. <code>name</code> is lowercase letters, digits and underscores,
-        starting with a letter or underscore — and can't be <code>get_state_history</code>,
-        <code>ask_agent</code> or <code>search_entities</code>, reserved for built-in tools.
+        starting with a letter or underscore — and can't be one of the six built-in tool names:
+        <code>get_state_history</code>, <code>ask_agent</code>, <code>ask_agents</code>,
+        <code>critique_response</code>, <code>search_memory</code> or <code>search_entities</code>.
         There are four action types you write by hand: <code>service</code>, <code>template</code>,
         <code>rest</code>, <code>script</code> — plus <code>mcp</code>, which is never hand-written
         (see below).</p>
@@ -126,9 +136,9 @@ memory:        # long-term memory and/or entity indexing</code></pre>
 
       <section>
         <h4><code>mcp</code> — tools from a connected MCP server</h4>
-        <p>Not written as an <code>action</code> by hand. Add a server under
-        <code>mcp_servers:</code> instead, and every tool it exposes is registered
-        automatically, named <code>&lt;prefix or server name&gt;__&lt;tool name&gt;</code>:</p>
+        <p>Not written as an <code>action</code> by hand, and not buildable above either.
+        Add a server under <code>mcp_servers:</code> instead, and every tool it exposes is
+        registered automatically, named <code>&lt;prefix or server name&gt;__&lt;tool name&gt;</code>:</p>
         <pre><code>mcp_servers:
   - name: files
     transport: stdio            # stdio, sse or http
@@ -154,7 +164,10 @@ memory:        # long-term memory and/or entity indexing</code></pre>
         <code>secrets.yaml</code>, e.g. <code>api_key: !secret weather_api_key</code>.
         This editor always shows the reference itself, never the resolved value —
         Home Assistant only resolves a secret when it loads the file, not when
-        this panel reads it back to display it.</p>
+        this panel reads it back to display it. Importing a file that uses
+        <code>!secret</code> is refused for the same reason: importing would have to
+        resolve it, and the resolved value would be written into Home Assistant's
+        storage as plain text.</p>
       </section>
 
       <section>
@@ -163,79 +176,113 @@ memory:        # long-term memory and/or entity indexing</code></pre>
   stores:
     - name: home_notes
       embeddings: My OpenAI Embeddings   # an Embeddings subentry's title</code></pre>
+        <p>Stores are also buildable in the Stores tab, which is the better place —
+        a pgvector connection string written here is a password in a text box.</p>
       </section>
 
       <section>
         <h4>Restricting tools per agent</h4>
         <p>Each agent has its own "Allowed tools" setting (in that agent's options,
-        not in this file). Leave it unset to allow every tool registered here,
-        including MCP tools by their prefixed name; set it to restrict the agent
-        to just the names listed.</p>
+        not in this file), and since v5.4.0 it is the single control over
+        everything that agent can call. It lists the six built-in tools
+        (<code>get_state_history</code>, <code>ask_agent</code>, <code>ask_agents</code>,
+        <code>critique_response</code>, <code>search_memory</code>,
+        <code>search_entities</code>) alongside your own, so what an agent can do is
+        readable in one place — expand the tools cell in the Agents tab to see it.</p>
+        <p>"All tools" means every <em>custom</em> tool, including MCP tools by their
+        prefixed name; a built-in is included only when its own name is ticked.
+        Selecting nothing leaves the agent with no tools at all.</p>
       </section>
 
     </div>
   </details>
 `;
 
+const SOURCE_LABELS = {
+  subentry: "built here",
+  yaml: "tools.yaml",
+  mcp: "MCP server",
+};
+
 /**
- * <sc-tools-tab> — an editor for tools.yaml.
+ * Why a preset could not be installed. Each reason is a different problem and
+ * gets its own sentence, the same way `_importFailureMessage` does — the
+ * backend sends a key precisely so that the wording lives here, next to the
+ * user, rather than being assembled in Python.
+ */
+const PRESET_FAILURE = {
+  name_taken: "A tool of that name already exists. Rename or delete it first.",
+  reserved_name: "That name belongs to a built-in tool.",
+  mcp_name_taken: "A connected MCP server already publishes a tool of that name.",
+  invalid_name: "That preset's name is not a valid tool name.",
+  unstorable: "That preset could not be stored. The detail is in the Home Assistant log.",
+};
+
+/**
+ * <sc-tools-tab> — a constructor for custom tools, plus tools.yaml import/export.
  *
- * Raw text in, raw text out: the textarea holds exactly the bytes on disk,
- * never a parsed-and-re-serialised form, so a `!secret` reference round-trips
- * as a reference. No syntax highlighting, no third-party editor component —
- * the panel has no build step and one isn't worth adding for this.
+ * A tool used to exist only as an entry in tools.yaml, so building one meant
+ * remembering a schema. It is now a config subentry built through a form: the
+ * backend serialises the whole constructor (`smartchain/tool/schema`) and
+ * <sc-config-form> renders it, exactly as the agents, embeddings and stores
+ * tabs do. **No field name of the tool form appears in this file** — including
+ * the two that reshape the form, which arrive as `reactive` from the same
+ * command.
  *
- * `tools/get` may report `exists: false` (no file at all — the normal
- * first-run state on this install right now, not an error — the user starts
- * typing into an empty editor) or `exists: true` with an `error` (the file is
- * there but unreadable, e.g. permissions or non-UTF-8 bytes); either way the
- * editor stays usable so a broken file can be overwritten outright.
+ * The YAML editor is still here, demoted into "Import / Export": tools.yaml
+ * remains a supported source (and the only one for `mcp_servers:`), it is just
+ * no longer the only way to write a tool.
  *
- * The DOM node created for the `<textarea>` in `_render()` is never replaced
- * or recreated for the lifetime of this element. Home Assistant calls
- * `set hass` on every state change in the house; `_paint()` (which sets the
- * textarea's `.value`) is only ever invoked from an explicit, user-triggered
- * `reload()` — never from a `hass` tick — so nothing can repaint over text
- * the user is in the middle of typing. This is the same defect class that
- * made the Create/Edit forms unusable before it was fixed: found only by
- * running the code, never by reading it.
+ * Home Assistant calls `set hass` on every state change in the house. The
+ * `<textarea>` node created in `_render()` is never replaced for the lifetime
+ * of this element, and `_paintEditor()` (which sets its `.value`) is only ever
+ * invoked from an explicit, user-triggered `reload()` — never from a `hass`
+ * tick — so nothing can repaint over text the user is in the middle of typing.
+ * `_paintList()` rewrites a different container entirely, and refuses to run at
+ * all while a tool form is open.
  *
- * Properties: .hass
+ * Properties: .hass, .entries
  */
 export class ScToolsTab extends HTMLElement {
   constructor() {
     super();
     this._hass = null;
     this._rendered = false;
+    this._entries = [];
+    this._rawEntries = null;
+    this._list = null; // {tools, shadowed_yaml} from tool/list
+    this._presets = null; // [{name, title, blurb, action_type, installed}]
+    this._editing = null; // {entryId, subentryId|null}
+
     this._loaded = false; // becomes true once the first tools/get resolves
     this._busy = false;
-
-    this._state = null; // {path, text, exists, error, hash} from tools/get
-    this._baseline = ""; // text as last loaded/saved — Save disables when the
-    // textarea matches this
+    this._state = null; // {path, text, exists, error, hash, backup_exists}
+    this._baseline = ""; // text as last loaded/saved — Save disables when equal
     this._baseHash = null; // hash to send with the next save
-
-    // The backend exposes no "does a backup exist" query — a rollback is
-    // discoverable only by attempting it and reading `reason: "no_backup"`.
-    // This flag is therefore a local estimate, not a fact read from disk: it
-    // starts false (so a fresh page load never offers a rollback it cannot
-    // back up) and only becomes true when *this* session just created a
-    // backup by saving over a pre-existing file, or after a reload_failed
-    // restore that still leaves a backup as the source of that restore. It
-    // goes false again the moment that backup is consumed (a successful
-    // rollback, or a reload_failed restore, both of which move `.bak` onto
-    // the target). A backup that predates this page load — from an earlier
-    // session, a restart — will not surface Rollback until the user saves
-    // again in this session. Flagged in the task report as a real gap
-    // between the design's "appears only when a backup exists" and what the
-    // websocket API can actually tell the panel.
-    this._backupAvailable = false;
   }
 
   set hass(val) {
     const first = !this._hass;
     this._hass = val;
-    if (this._rendered && first) this.reload();
+    const form = this.querySelector("sc-config-form");
+    if (form) form.hass = val;
+    if (this._rendered && first) {
+      this.reload();
+      this._loadList();
+    }
+  }
+
+  set entries(val) {
+    // Home Assistant pushes `hass` on every state change; the shell must not
+    // turn that into a repaint. The overview array is a new object only when
+    // it has actually been refetched.
+    if (val === this._rawEntries) return;
+    this._rawEntries = val;
+    this._entries = val || [];
+    if (!this._rendered) return;
+    // Never rebuild out from under a form the user might be filling in.
+    if (this._editing) return;
+    this._paintList();
   }
 
   connectedCallback() {
@@ -243,15 +290,468 @@ export class ScToolsTab extends HTMLElement {
       this._render();
       this._rendered = true;
     }
-    if (this._hass && !this._loaded) this.reload();
+    this._paintList();
+    if (this._hass && !this._loaded) {
+      this.reload();
+      this._loadList();
+    }
   }
+
+  _requestRefresh() {
+    this.dispatchEvent(new CustomEvent("sc-overview-refresh", { bubbles: true, composed: true }));
+  }
+
+  async _loadList() {
+    if (!this._hass) return;
+    try {
+      this._list = await callWS(this._hass, "smartchain/tool/list");
+    } catch (err) {
+      // A missing list costs the list, not the tab — the YAML editor below
+      // still works, which is the escape hatch when something is wrong.
+      showToast(err.message || "Could not read the tool list", "error");
+      this._list = null;
+    }
+    try {
+      const result = await callWS(this._hass, "smartchain/tool/presets");
+      this._presets = (result && result.presets) || [];
+    } catch {
+      // Losing the catalogue must not cost the list beneath it, which is the
+      // half the user's own tools live in. The block simply does not render.
+      this._presets = null;
+    }
+    if (this._rendered && !this._editing) this._paintList();
+  }
+
+  // ---- shell ------------------------------------------------------------
+
+  _render() {
+    this.innerHTML = `
+      <div class="sc-tools">
+        <div class="sc-tools-constructor"></div>
+        <details class="sc-tools-help sc-tools-io">
+          <summary>Import / Export — tools.yaml</summary>
+          <div class="sc-tools-help-body">
+            <p>tools.yaml is still read at startup and is the only place
+            <code>mcp_servers:</code> can be configured. Import turns the tools in it
+            into editable entries above; export writes the entries above back out as
+            YAML, with any REST header values blanked.</p>
+            <div class="sc-row">
+              <mwc-button id="sc-tools-import">Import from tools.yaml</mwc-button>
+              <mwc-button id="sc-tools-export">Export to YAML</mwc-button>
+            </div>
+            <textarea class="sc-tools-editor sc-tools-export sc-hidden" readonly
+              spellcheck="false"></textarea>
+            <header class="sc-tools-head">
+              <span class="sc-tools-path"></span>
+              <span class="sc-tools-spacer"></span>
+              <mwc-button id="sc-tools-validate">Validate</mwc-button>
+              <mwc-button id="sc-tools-rollback" class="sc-hidden">Rollback</mwc-button>
+              <mwc-button id="sc-tools-save" raised disabled>Save</mwc-button>
+            </header>
+            <div class="sc-tools-banner sc-hidden"></div>
+            <textarea
+              class="sc-tools-editor"
+              spellcheck="false"
+              autocomplete="off"
+              autocapitalize="off"
+              placeholder="${escapeHtml(TOOLS_PLACEHOLDER)}"
+            ></textarea>
+            ${TOOLS_HELP_HTML}
+          </div>
+        </details>
+      </div>
+    `;
+
+    // Cache references once — these nodes live for the lifetime of the tab.
+    this._els = {
+      constructor: this.querySelector(".sc-tools-constructor"),
+      path: this.querySelector(".sc-tools-path"),
+      banner: this.querySelector(".sc-tools-banner"),
+      editor: this.querySelector(".sc-tools-editor:not(.sc-tools-export)"),
+      exportBox: this.querySelector(".sc-tools-export"),
+      validateBtn: this.querySelector("#sc-tools-validate"),
+      saveBtn: this.querySelector("#sc-tools-save"),
+      rollbackBtn: this.querySelector("#sc-tools-rollback"),
+      importBtn: this.querySelector("#sc-tools-import"),
+      exportBtn: this.querySelector("#sc-tools-export"),
+    };
+
+    this._els.editor.addEventListener("input", () => this._updateSaveState());
+    this._els.validateBtn.addEventListener("click", () => this._validate());
+    this._els.saveBtn.addEventListener("click", () => this._save());
+    this._els.rollbackBtn.addEventListener("click", () => this._rollback());
+    this._els.importBtn.addEventListener("click", () => this._import());
+    this._els.exportBtn.addEventListener("click", () => this._export());
+  }
+
+  // ---- the constructor --------------------------------------------------
+
+  _paintList() {
+    const root = this._els && this._els.constructor;
+    if (!root) return;
+
+    if (this._editing) {
+      this._paintForm(root);
+      return;
+    }
+
+    if (!this._entries.length) {
+      root.innerHTML = `
+        <p class="sc-empty">
+          No SmartChain providers are configured yet.
+          Add one in Settings &rarr; Devices &amp; Services.
+        </p>`;
+      return;
+    }
+
+    const tools = (this._list && this._list.tools) || [];
+    const shadowed = (this._list && this._list.shadowed_yaml) || [];
+    // The list below is healthy-looking even when tools.yaml is broken — the
+    // file's tools are simply absent while everything built here still works.
+    // Say it in the tab, not only in a toast the user may never have seen.
+    const yamlError = (this._list && this._list.yaml_error) || null;
+
+    root.innerHTML = `
+      ${this._presetsHtml()}
+      <section class="sc-entry">
+        <header class="sc-entry-head">
+          <span class="sc-entry-title">Tools</span>
+          <span class="sc-entry-engine">${tools.length} registered</span>
+          ${this._addControlHtml()}
+        </header>
+        ${
+          yamlError
+            ? `<p class="sc-tools-banner sc-tools-error">tools.yaml could not be loaded, so the tools
+                 below still reflect the last version that did. Everything built here is
+                 unaffected. ${escapeHtml(yamlError)}</p>`
+            : ""
+        }
+        ${
+          tools.length
+            ? `<ul class="sc-embed-list">${tools.map((tool) => this._toolHtml(tool)).join("")}</ul>`
+            : `<p class="sc-empty">No custom tools yet. Add one — the form asks for a name,
+                 what it does, and what it should do when the model calls it.</p>`
+        }
+        ${
+          shadowed.length
+            ? `<p class="sc-empty">Also defined in tools.yaml and ignored in favour of the tool
+                 built here: ${escapeHtml(shadowed.join(", "))}. Delete it from tools.yaml to
+                 silence this.</p>`
+            : ""
+        }
+      </section>`;
+
+    const add = root.querySelector(".sc-add");
+    if (add) {
+      add.addEventListener("click", () => {
+        this._editing = { entryId: this._chosenEntryId(), subentryId: null };
+        this._paintList();
+      });
+    }
+    root.querySelectorAll("[data-act]").forEach((button) =>
+      button.addEventListener("click", () => this._act(button.dataset))
+    );
+    root.querySelectorAll("[data-preset]").forEach((toggle) =>
+      toggle.addEventListener("change", () => this._installPreset(toggle))
+    );
+  }
+
+  /**
+   * The ready-made catalogue, above the user's own tools.
+   *
+   * A switch rather than a button because that is the promise: these are tools
+   * you turn on, not tools you fill in a form for. An installed preset's switch
+   * stays on and goes disabled — turning it back off would have to mean delete,
+   * and by then the tool is an ordinary one the user may have edited, so the
+   * decision belongs in the list below where Delete says what it does.
+   *
+   * `title` and `blurb` arrive translated from `tool/presets`; nothing here
+   * spells either of them, and an untranslated preset still renders because the
+   * backend falls back to the tool's own name.
+   */
+  _presetsHtml() {
+    const presets = this._presets || [];
+    if (!presets.length) return "";
+    const added = presets.filter((preset) => preset.installed).length;
+    return `
+      <section class="sc-entry sc-presets">
+        <header class="sc-entry-head">
+          <span class="sc-entry-title">Ready-made tools</span>
+          <span class="sc-entry-engine">${added} of ${presets.length} added</span>
+        </header>
+        <p class="sc-empty">Switch one on and it becomes an ordinary tool below —
+          editable, disableable, deletable. These cover what Assist and the built-in
+          tools do not.</p>
+        <ul class="sc-embed-list">
+          ${presets.map((preset) => this._presetHtml(preset)).join("")}
+        </ul>
+      </section>`;
+  }
+
+  _presetHtml(preset) {
+    return `
+      <li class="sc-embed-row sc-preset-row">
+        <span class="sc-embed-name">${escapeHtml(preset.title || preset.name)}</span>
+        <span class="sc-embed-model">${escapeHtml(preset.blurb || "")}</span>
+        <span class="sc-embed-actions">
+          <ha-switch
+            data-preset="${escapeHtml(preset.name)}"
+            ${preset.installed ? "checked disabled" : ""}
+            title="${escapeHtml(preset.installed ? `${preset.name} — already in the list below` : `Add ${preset.name}`)}"
+          ></ha-switch>
+        </span>
+      </li>`;
+  }
+
+  async _installPreset(toggle) {
+    const name = toggle.dataset.preset;
+    const entryId = this._chosenEntryId();
+    if (!entryId) {
+      toggle.checked = false;
+      showToast("Configure a provider first — a tool has to live somewhere.", "error");
+      return;
+    }
+    // A switch reports its new position immediately; the write has not
+    // happened yet. Lock it so a second click cannot start a second install,
+    // and let the repaint below decide what it finally shows.
+    toggle.disabled = true;
+
+    let result;
+    try {
+      result = await callWS(this._hass, "smartchain/tool/preset/install", {
+        entry_id: entryId,
+        preset: name,
+      });
+    } catch (err) {
+      toggle.checked = false;
+      toggle.disabled = false;
+      showToast(err.message || "That did not work", "error");
+      return;
+    }
+
+    if (!result.ok) {
+      toggle.checked = false;
+      toggle.disabled = false;
+      showToast(
+        PRESET_FAILURE[result.reason] || `Could not add ${name} (${result.reason}).`,
+        "error"
+      );
+      return;
+    }
+
+    if (result.reload_error) {
+      showToast(`Added ${name}, but the reload failed: ${result.reload_error}`, "warning");
+    } else if (result.shadows_yaml) {
+      showToast(`Added ${name}. A tool of this name in tools.yaml is now ignored.`, "warning");
+    } else {
+      showToast(`Added ${name}`, "success");
+    }
+    this._requestRefresh();
+    this._loadList();
+  }
+
+  /**
+   * Which config entry hosts a new tool. Functionally arbitrary — the tool
+   * registry is global and every agent draws from it — so the picker appears
+   * only when there is more than one entry to be arbitrary about.
+   */
+  _addControlHtml() {
+    if (this._entries.length === 1) {
+      return `<button class="sc-add">+ Tool</button>`;
+    }
+    return `
+      <select class="sc-select sc-tools-owner" title="Which provider stores this tool. Tools are shared by every agent, so this is bookkeeping only.">
+        ${this._entries
+          .map((entry) => `<option value="${escapeHtml(entry.entry_id)}">${escapeHtml(entry.title)}</option>`)
+          .join("")}
+      </select>
+      <button class="sc-add">+ Tool</button>`;
+  }
+
+  _chosenEntryId() {
+    const picker = this.querySelector(".sc-tools-owner");
+    if (picker) return picker.value;
+    return this._entries.length ? this._entries[0].entry_id : null;
+  }
+
+  _toolHtml(tool) {
+    const source = SOURCE_LABELS[tool.source] || tool.source;
+    const editable = tool.source === "subentry";
+    const state = tool.enabled ? "" : " · disabled";
+    return `
+      <li class="sc-embed-row">
+        <span class="sc-embed-name">${escapeHtml(tool.name)}${tool.enabled ? "" : " ⚠"}</span>
+        <span class="sc-embed-model">${escapeHtml(
+          `${tool.action_type || "?"} · ${source}${state}`
+        )}</span>
+        <span class="sc-embed-actions">
+          ${
+            editable
+              ? `<button data-act="edit" data-entry="${escapeHtml(tool.entry_id)}" data-sub="${escapeHtml(tool.subentry_id)}">Edit</button>
+                 <button data-act="del" data-entry="${escapeHtml(tool.entry_id)}" data-sub="${escapeHtml(tool.subentry_id)}">Delete</button>`
+              : ""
+          }
+        </span>
+      </li>`;
+  }
+
+  _paintForm(root) {
+    root.innerHTML = `<sc-config-form></sc-config-form>`;
+    const form = root.querySelector("sc-config-form");
+    form.hass = this._hass;
+    form.commands = TOOL_COMMANDS;
+    // A tool form declares no model, so "Refresh models" would refresh nothing
+    // it shows.
+    form.showRefresh = false;
+    // subentryId before entryId: config-form starts loading the moment
+    // hass/commands/entryId are all set, so an Edit form's subentryId must
+    // already be in place by then — otherwise it would load create-mode
+    // defaults and silently discard the existing tool.
+    if (this._editing.subentryId) form.subentryId = this._editing.subentryId;
+    form.entryId = this._editing.entryId;
+
+    form.addEventListener("sc-saved", (ev) => {
+      const detail = ev.detail || {};
+      if (detail.reload_error) {
+        showToast(`Saved, but the reload failed: ${detail.reload_error}`, "warning");
+      } else if (detail.shadows_yaml) {
+        showToast("Saved. A tool of this name in tools.yaml is now ignored.", "warning");
+      }
+      this._editing = null;
+      this._paintList();
+      this._requestRefresh();
+      this._loadList();
+    });
+    form.addEventListener("sc-cancelled", () => {
+      this._editing = null;
+      this._paintList();
+    });
+  }
+
+  async _act({ act, entry: entryId, sub: subentryId }) {
+    if (act === "edit") {
+      this._editing = { entryId, subentryId };
+      this._paintList();
+      return;
+    }
+
+    const tool = ((this._list && this._list.tools) || []).find(
+      (candidate) => candidate.subentry_id === subentryId
+    );
+    const label = tool ? tool.name : "this tool";
+    if (!confirm(`Delete "${label}"? Any agent restricted to it loses it immediately.`)) return;
+
+    try {
+      const result = await callWS(this._hass, "smartchain/tool/delete", {
+        entry_id: entryId,
+        subentry_id: subentryId,
+      });
+      if (result && result.reload_error) {
+        showToast(`Deleted, but the reload failed: ${result.reload_error}`, "warning");
+      } else {
+        showToast("Tool deleted", "success");
+      }
+    } catch (err) {
+      showToast(err.message || "That did not work", "error");
+    }
+    this._requestRefresh();
+    this._loadList();
+  }
+
+  // ---- import / export --------------------------------------------------
+
+  async _import() {
+    const entryId = this._chosenEntryId();
+    if (!entryId) {
+      showToast("Configure a provider first — an imported tool has to live somewhere.", "error");
+      return;
+    }
+    if (
+      !confirm(
+        "Import every tool in tools.yaml as an editable tool?\n\n" +
+          "tools.yaml is left exactly as it is — an imported tool shadows its copy " +
+          "in the file until you delete that copy yourself."
+      )
+    ) {
+      return;
+    }
+
+    this._setBusy(true);
+    let result;
+    try {
+      result = await callWS(this._hass, "smartchain/tools/import", { entry_id: entryId });
+    } catch (err) {
+      showToast(err.message || "Could not import tools.yaml", "error");
+      this._setBusy(false);
+      return;
+    }
+    this._setBusy(false);
+
+    if (!result.ok) {
+      showToast(this._importFailureMessage(result), "error");
+      return;
+    }
+    const imported = result.imported || [];
+    const skipped = result.skipped || [];
+    showToast(
+      `Imported ${imported.length} tool(s)` +
+        (skipped.length ? `; skipped ${skipped.join(", ")} (name already in use or reserved)` : ""),
+      imported.length ? "success" : "info"
+    );
+    this._requestRefresh();
+    this._loadList();
+  }
+
+  /**
+   * Each refusal describes a different problem, so each gets its own sentence.
+   */
+  _importFailureMessage(result) {
+    switch (result.reason) {
+      case "no_file":
+        return "There is no tools.yaml to import.";
+      case "secrets_present":
+        return (
+          "tools.yaml uses !secret, so it cannot be imported: importing would have to " +
+          "resolve the secret and store the resolved value as plain text. Replace those " +
+          "references with values entered in the form above, or keep those tools in the file."
+        );
+      case "invalid":
+        return `tools.yaml is invalid: ${result.error}`;
+      default:
+        return `Could not import tools.yaml (${result.reason}).`;
+    }
+  }
+
+  async _export() {
+    let result;
+    try {
+      result = await callWS(this._hass, "smartchain/tools/export");
+    } catch (err) {
+      showToast(err.message || "Could not export the tools", "error");
+      return;
+    }
+    const { exportBox } = this._els;
+    exportBox.value = result.text || "# No tools have been built here yet.\n";
+    exportBox.classList.remove("sc-hidden");
+    if ((result.redacted || []).length) {
+      showToast(
+        `Exported ${result.count} tool(s). REST header values were blanked for: ` +
+          `${result.redacted.join(", ")} — fill them in before importing this elsewhere.`,
+        "warning"
+      );
+    } else {
+      showToast(`Exported ${result.count} tool(s)`, "success");
+    }
+  }
+
+  // ---- the tools.yaml editor -------------------------------------------
 
   /**
    * Fetch the file from disk and overwrite the editor with it.
    *
    * Only ever called where overwriting the textarea is the explicit intent:
-   * the first load, a user-confirmed "reload after stale" and a refresh
-   * after a successful rollback. Never call this from a `hass` tick.
+   * the first load, a user-confirmed "reload after stale" and a refresh after
+   * a successful rollback. Never call this from a `hass` tick.
    */
   async reload() {
     this._setBusy(true);
@@ -266,61 +766,27 @@ export class ScToolsTab extends HTMLElement {
     } finally {
       this._setBusy(false);
     }
-    this._paint();
-  }
-
-  _render() {
-    this.innerHTML = `
-      <div class="sc-tools">
-        <header class="sc-tools-head">
-          <span class="sc-tools-path"></span>
-          <span class="sc-tools-spacer"></span>
-          <mwc-button id="sc-tools-validate">Validate</mwc-button>
-          <mwc-button id="sc-tools-rollback" class="sc-hidden">Rollback</mwc-button>
-          <mwc-button id="sc-tools-save" raised disabled>Save</mwc-button>
-        </header>
-        <div class="sc-tools-banner sc-hidden"></div>
-        ${TOOLS_HELP_HTML}
-        <textarea
-          class="sc-tools-editor"
-          spellcheck="false"
-          autocomplete="off"
-          autocapitalize="off"
-          placeholder="${escapeHtml(TOOLS_PLACEHOLDER)}"
-        ></textarea>
-      </div>
-    `;
-
-    // Cache references once — these nodes live for the lifetime of the tab.
-    this._els = {
-      path: this.querySelector(".sc-tools-path"),
-      banner: this.querySelector(".sc-tools-banner"),
-      editor: this.querySelector(".sc-tools-editor"),
-      validateBtn: this.querySelector("#sc-tools-validate"),
-      saveBtn: this.querySelector("#sc-tools-save"),
-      rollbackBtn: this.querySelector("#sc-tools-rollback"),
-    };
-
-    this._els.editor.addEventListener("input", () => this._updateSaveState());
-    this._els.validateBtn.addEventListener("click", () => this._validate());
-    this._els.saveBtn.addEventListener("click", () => this._save());
-    this._els.rollbackBtn.addEventListener("click", () => this._rollback());
+    this._paintEditor();
   }
 
   /**
-   * Repaint everything that isn't the user's unsaved keystrokes: the path,
-   * the error/empty banner, and — deliberately — the textarea's `.value`,
-   * which is only safe here because every caller of `_paint()` already
-   * decided overwriting is correct (see `reload()`'s doc comment). The file
-   * text is set as a `.value` assignment, never interpolated into
-   * `innerHTML`, so it never touches the escaping surface at all.
+   * Repaint everything that isn't the user's unsaved keystrokes: the path, the
+   * error/empty banner, and — deliberately — the textarea's `.value`, which is
+   * only safe here because every caller already decided overwriting is correct
+   * (see `reload()`). The file text is set as a `.value` assignment, never
+   * interpolated into `innerHTML`, so it never touches the escaping surface.
    */
-  _paint() {
+  _paintEditor() {
     const { path, banner, editor } = this._els || {};
     if (!path || !banner || !editor) return;
 
     editor.value = this._baseline;
     this._updateSaveState();
+    // Whether a backup exists is a fact the backend reports, not a guess this
+    // session has to make: `tools/get` computes `backup_exists` from the disk
+    // so a backup left by an earlier session, or by a restart, still surfaces
+    // the Rollback button.
+    this._updateRollbackVisibility();
 
     if (!this._state) {
       path.textContent = "";
@@ -339,7 +805,7 @@ export class ScToolsTab extends HTMLElement {
 
     if (!this._state.exists) {
       banner.className = "sc-tools-banner sc-tools-info";
-      banner.innerHTML = `<ha-icon icon="mdi:information"></ha-icon> No tools.yaml yet at this path — that is the normal state until custom tools are configured. Type below and Save to create it.`;
+      banner.innerHTML = `<ha-icon icon="mdi:information"></ha-icon> No tools.yaml at this path — which is fine, and normal: tools built above do not need one. Type here and Save to create it.`;
       return;
     }
 
@@ -347,11 +813,16 @@ export class ScToolsTab extends HTMLElement {
     banner.innerHTML = "";
   }
 
+  _backupAvailable() {
+    return !!(this._state && this._state.backup_exists);
+  }
+
   _setBusy(busy) {
     this._busy = busy;
     if (!this._els) return;
     this._els.validateBtn.toggleAttribute("disabled", busy);
     this._els.rollbackBtn.toggleAttribute("disabled", busy);
+    this._els.importBtn.toggleAttribute("disabled", busy);
     this._updateSaveState();
   }
 
@@ -365,13 +836,13 @@ export class ScToolsTab extends HTMLElement {
   _updateRollbackVisibility() {
     const { rollbackBtn } = this._els || {};
     if (!rollbackBtn) return;
-    rollbackBtn.classList.toggle("sc-hidden", !this._backupAvailable);
+    rollbackBtn.classList.toggle("sc-hidden", !this._backupAvailable());
   }
 
   async _validate() {
-    // Validates the file as it currently sits on disk — the websocket
-    // command takes no text, so this checks what was last saved, not
-    // whatever is still unsaved in the textarea. Never mutates the editor.
+    // Validates the file as it currently sits on disk — the websocket command
+    // takes no text, so this checks what was last saved, not whatever is still
+    // unsaved in the textarea. Never mutates the editor.
     this._setBusy(true);
     try {
       const result = await callWS(this._hass, "smartchain/tools/validate");
@@ -390,10 +861,6 @@ export class ScToolsTab extends HTMLElement {
   async _save() {
     const { editor } = this._els;
     const text = editor.value;
-    // The file that existed (or didn't) immediately before this save — used
-    // below to decide whether this save could possibly have created a
-    // backup. Captured before any state mutation.
-    const hadFileBefore = !!(this._state && this._state.exists && !this._state.error);
 
     this._setBusy(true);
     let result;
@@ -414,8 +881,17 @@ export class ScToolsTab extends HTMLElement {
       // textarea itself is untouched, since it already holds exactly this.
       this._baseline = text;
       this._baseHash = result.hash;
-      this._state = { ...(this._state || {}), text, exists: true, error: null, hash: result.hash };
-      if (hadFileBefore) this._backupAvailable = true;
+      this._state = {
+        ...(this._state || {}),
+        text,
+        exists: true,
+        error: null,
+        hash: result.hash,
+        // A successful save over an existing file always leaves a backup;
+        // a first-ever save has nothing to back up. Either way the next
+        // `tools/get` re-reads the truth from disk.
+        backup_exists: this._state ? !!this._state.exists : false,
+      };
       this._updateRollbackVisibility();
       this._updateSaveState();
       // Refresh the banner (clears any stale "no file yet" notice) without
@@ -424,6 +900,7 @@ export class ScToolsTab extends HTMLElement {
       banner.className = "sc-tools-banner sc-hidden";
       banner.innerHTML = "";
       showToast("tools.yaml saved", "success");
+      this._loadList();
       return;
     }
 
@@ -458,10 +935,10 @@ export class ScToolsTab extends HTMLElement {
         showToast(`Could not write tools.yaml: ${result.error}`, "error");
         return;
       case "reload_failed":
-        // The write succeeded and validated, but the running integration
-        // could not adopt it, so the backend restored the previous file —
-        // consuming whatever backup made that possible.
-        this._backupAvailable = false;
+        // The write succeeded and validated, but the running integration could
+        // not adopt it, so the backend restored the previous file — consuming
+        // whatever backup made that possible.
+        if (this._state) this._state.backup_exists = false;
         this._updateRollbackVisibility();
         showToast(
           `tools.yaml was valid but could not be loaded (${result.error}). ` +
@@ -476,7 +953,7 @@ export class ScToolsTab extends HTMLElement {
   }
 
   async _rollback() {
-    if (!this._backupAvailable) return;
+    if (!this._backupAvailable()) return;
     const proceed = confirm(
       "Roll back tools.yaml to the last backup?\n\n" +
         "This discards what is currently on disk and replaces this editor's " +
@@ -497,14 +974,13 @@ export class ScToolsTab extends HTMLElement {
 
     if (!result.ok) {
       if (result.reason === "no_backup") {
-        this._backupAvailable = false;
+        if (this._state) this._state.backup_exists = false;
         this._updateRollbackVisibility();
         showToast("No backup to restore.", "info");
         return;
       }
-      // reload_failed — the restore itself succeeded (the .bak is now on
-      // disk at the target) but the integration could not adopt it.
-      this._backupAvailable = false;
+      // reload_failed — the restore itself succeeded (the .bak is now on disk
+      // at the target) but the integration could not adopt it.
       this._updateRollbackVisibility();
       showToast(
         `Rollback restored the file on disk, but the integration could not load it (${result.error}).`,
@@ -513,12 +989,13 @@ export class ScToolsTab extends HTMLElement {
       return;
     }
 
-    this._backupAvailable = false;
     showToast("Rolled back to the previous tools.yaml", "success");
     // A rollback is explicit, confirmed consent to discard the editor's
     // contents too (see the confirm() text above) — reload() to show the
-    // restored text is the intended outcome, not a stray repaint.
+    // restored text is the intended outcome, not a stray repaint. It also
+    // re-reads `backup_exists`, which the swap has just changed.
     await this.reload();
+    this._loadList();
   }
 }
 
