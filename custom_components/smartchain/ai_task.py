@@ -10,6 +10,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import MAX_TOOL_ITERATIONS, SUBENTRY_TYPE_CONVERSATION
 from .conversation import (
+    EMPTY_RESPONSE_NATIVE,
     _async_langchain_stream,
     _chatlog_to_langchain,
     _ha_tool_to_dict,
@@ -98,10 +99,20 @@ class SmartChainAITaskEntity(ai_task.AITaskEntity):
             if not chat_log.unresponded_tool_results:
                 break
 
-        if not isinstance(chat_log.content[-1], conversation.AssistantContent):
+        last = chat_log.content[-1]
+        if not isinstance(last, conversation.AssistantContent):
             raise HomeAssistantError("Last content in chat log is not an AssistantContent")
 
-        text = chat_log.content[-1].content or ""
+        if last.native == EMPTY_RESPONSE_NATIVE:
+            # The stream closes every turn with an assistant message, so the
+            # check above no longer catches a model that answered with nothing;
+            # the marker is what "nothing" looks like now. A conversation could
+            # ask the person to try again, but the result of a task goes
+            # straight into an automation that cannot ask anyone anything, so
+            # an empty string here is a silent wrong answer.
+            raise HomeAssistantError("AI Task got no usable response from the model")
+
+        text = last.content or ""
 
         if task.structure:
             from json import JSONDecodeError

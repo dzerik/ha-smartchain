@@ -896,7 +896,7 @@ def _chunk_text(content: Any) -> str:
     return ""
 
 
-def _tool_args_finished(raw: str) -> bool:
+def _tool_args_finished(raw: Any) -> bool:
     """Say whether a raw argument slice is a whole JSON object.
 
     langchain parses the accumulated slice with a *partial* JSON parser, so a
@@ -906,7 +906,21 @@ def _tool_args_finished(raw: str) -> bool:
 
     An empty slice is not truncation: providers send `args=""` (and `"{}"`) for
     a tool that takes no arguments at all.
+
+    Whole JSON is not enough — it has to be an object. Arguments are keyword
+    arguments, so `42` or `"light.kitchen"` is a call nobody can execute.
+
+    Arguments that are not text at all never went through the partial-JSON
+    parser, so the one signal this function reads does not exist for them.
+    `ToolCallChunk.args` is typed `str | None`, but the accumulated message is
+    whatever the client library built, and a provider that hands over already
+    structured arguments would otherwise raise `AttributeError` here — inside
+    the generator, i.e. killing the turn. Refusing what cannot be inspected
+    would disable tool calling for such a provider entirely; accepting it is
+    what every release before this check did.
     """
+    if not isinstance(raw, str):
+        return True
     text = raw.strip()
     if not text:
         return True
@@ -917,18 +931,24 @@ def _tool_args_finished(raw: str) -> bool:
     return isinstance(parsed, dict)
 
 
-def _finished_tool_calls(accumulated: Any) -> list[dict[str, Any]]:
+def _finished_tool_calls(accumulated: Any, *, chunk_dropped: bool = False) -> list[dict[str, Any]]:
     """Return the accumulated tool calls whose arguments actually arrived.
 
     A call whose arguments never finished is dropped, not repaired: Home
     Assistant runs a tool the moment it sees the delta, and running
     `HassTurnOn` with `{}` acts on whatever the schema defaults to.
+
+    `chunk_dropped` says a chunk of this stream failed to accumulate. It
+    changes nothing about the verdict and everything about the report: the
+    slice may be short because *we* threw away the chunk holding its closing
+    brace, and a lost action blamed on the model sends whoever reads the log
+    after the wrong culprit.
     """
     tool_calls = list(getattr(accumulated, "tool_calls", None) or [])
     if not tool_calls:
         return []
 
-    raw_args: dict[str, str] = {}
+    raw_args: dict[str, Any] = {}
     for chunk in getattr(accumulated, "tool_call_chunks", None) or []:
         call_id = chunk.get("id")
         if call_id:
@@ -942,12 +962,26 @@ def _finished_tool_calls(accumulated: Any) -> list[dict[str, Any]]:
             continue
         # The arguments themselves are never logged: they carry whatever the
         # user just said, and the failure is described fully by their length.
-        LOGGER.warning(
-            "Discarding tool call %s: the model stopped before its arguments"
-            " were complete (%d raw characters)",
-            tool_call.get("name") or "<unnamed>",
-            len(raw),
-        )
+        # Only a `str` can be discarded — `_tool_args_finished` passes
+        # everything else — so `raw` has a length here.
+        name = tool_call.get("name") or "<unnamed>"
+        size = len(raw)
+        if chunk_dropped:
+            LOGGER.error(
+                "Discarding tool call %s: a chunk of this stream could not be"
+                " accumulated, so the arguments left behind are incomplete"
+                " (%d raw characters). The model may well have sent the whole"
+                " call — this action is lost on our side, not on its side",
+                name,
+                size,
+            )
+        else:
+            LOGGER.warning(
+                "Discarding tool call %s: the model stopped before its arguments"
+                " were complete (%d raw characters)",
+                name,
+                size,
+            )
     return finished
 
 
@@ -973,6 +1007,7 @@ async def _async_langchain_stream(
     _external = external_tool_names | {HISTORY_TOOL_NAME, DELEGATE_TOOL_NAME}
     first = True
     substantive = False
+    chunk_dropped = False
     accumulated: Any = None
     async for chunk in client.astream(messages):
         try:
@@ -981,6 +1016,7 @@ async def _async_langchain_stream(
             # `merge_dicts` refuses a metadata key that arrived as two types.
             # Part of the answer is already on the user's screen, so keep the
             # stream running on what was accumulated before the clash.
+            chunk_dropped = True
             LOGGER.warning("Stream chunk could not be accumulated, ignoring it: %s", err)
         delta: dict[str, Any] = {}
         if first:
@@ -993,7 +1029,7 @@ async def _async_langchain_stream(
         if delta:
             yield delta
 
-    if tool_calls := _finished_tool_calls(accumulated):
+    if tool_calls := _finished_tool_calls(accumulated, chunk_dropped=chunk_dropped):
         delta = {"role": "assistant"} if first else {}
         delta["tool_calls"] = [
             llm.ToolInput(

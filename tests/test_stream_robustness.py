@@ -10,6 +10,12 @@ ways for a broken stream to reach HA intact:
 * two chunks disagree about the type of one metadata key and ``__add__``
   raises ``TypeError`` in the middle of the turn.
 
+The two guards added for the first and the last of those meet in a fourth case:
+the chunk that could not be accumulated was the one carrying the closing brace,
+so the arguments look truncated and the call is dropped — a lost action that
+the model did nothing wrong to earn. What the log says about it is the only way
+anyone finds out, so the wording is asserted here.
+
 The last test in this file is the only one that runs our generator through the
 real ``ChatLog.async_add_delta_content_stream``: the guarantee being defended
 ("HA fires a tool call the moment it sees the delta") is HA's behaviour, not
@@ -31,7 +37,10 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import llm
 from langchain_core.messages import AIMessageChunk
 
-from custom_components.smartchain.conversation import _async_langchain_stream
+from custom_components.smartchain.conversation import (
+    _async_langchain_stream,
+    _tool_args_finished,
+)
 
 TOOL_NAME = "HassTurnOn"
 
@@ -228,6 +237,163 @@ async def test_tool_call_still_emitted_after_an_unmergeable_chunk() -> None:
     calls = _tool_inputs(await _collect(_client(*chunks)))
 
     assert [c.tool_args for c in calls] == [{"entity_id": "light.kitchen"}]
+
+
+# --- S2: the dropped chunk was the one that finished the arguments --------------
+
+
+def _discard_records(caplog) -> list[logging.LogRecord]:
+    """Every log line reporting that a tool call was thrown away."""
+    return [r for r in caplog.records if "Discarding tool call" in r.getMessage()]
+
+
+async def test_dropped_chunk_that_costs_a_tool_call_is_reported_as_such(caplog) -> None:
+    """Two safeguards in a row lose an action; the log must name the real cause.
+
+    The unmergeable chunk carried the closing brace of the arguments, so what
+    survives accumulation is a truncated slice and the call is dropped. The
+    model sent a whole call — saying it "stopped before its arguments were
+    complete" would send whoever reads the log after the wrong provider.
+    """
+    chunks = (
+        AIMessageChunk(
+            content="",
+            tool_call_chunks=[
+                {
+                    "id": "call_1",
+                    "name": TOOL_NAME,
+                    "args": '{"entity_id": ',
+                    "index": 0,
+                    "type": "tool_call_chunk",
+                }
+            ],
+            response_metadata={"usage": {"in": 1}},
+        ),
+        AIMessageChunk(
+            content="",
+            tool_call_chunks=[
+                {
+                    "id": None,
+                    "name": None,
+                    "args": '"light.kitchen"}',
+                    "index": 0,
+                    "type": "tool_call_chunk",
+                }
+            ],
+            response_metadata={"usage": "none"},
+        ),
+    )
+    with caplog.at_level(logging.WARNING):
+        deltas = await _collect(_client(*chunks))
+
+    assert _tool_inputs(deltas) == [], "half-assembled arguments reached HA"
+    records = _discard_records(caplog)
+    assert len(records) == 1, f"the lost call is not in the log: {caplog.text}"
+    message = records[0].getMessage()
+    assert "could not be accumulated" in message, (
+        f"the log blames the model for our own dropped chunk: {message}"
+    )
+    assert "the model stopped" not in message
+    assert records[0].levelno >= logging.ERROR, (
+        "a silently lost action is not a warning about the model"
+    )
+    assert "light.kitchen" not in caplog.text, "argument content leaked into the log"
+
+
+async def test_a_model_truncation_is_still_reported_as_a_model_truncation(caplog) -> None:
+    """The other message must stay distinguishable, or neither is diagnostic."""
+    with caplog.at_level(logging.WARNING):
+        await _collect(_client(_chunk('{"entity_id": ')))
+
+    records = _discard_records(caplog)
+    assert len(records) == 1
+    assert "the model stopped" in records[0].getMessage()
+    assert "could not be accumulated" not in records[0].getMessage()
+
+
+# --- S3/S4: what a raw argument slice is allowed to be ---------------------------
+
+
+@pytest.mark.parametrize("raw", ["42", '"light.kitchen"', "[1, 2]", "true"])
+def test_whole_json_that_is_not_an_object_is_not_finished_arguments(raw: str) -> None:
+    """Arguments are keyword arguments; a bare scalar or list is not a call.
+
+    Whole JSON is not the promise — a whole JSON *object* is. Without this the
+    check degrades to "json.loads did not raise", and `args="42"` would be
+    handed to a tool as if the model had described its parameters.
+    """
+    assert _tool_args_finished(raw) is False
+
+
+def test_arguments_that_never_were_text_count_as_finished() -> None:
+    """A provider may hand over arguments already parsed.
+
+    `ToolCallChunk.args` is typed `str | None`, but the accumulated message is
+    whatever the client library builds, and this function reads it through
+    `getattr`. Structured arguments never passed the partial-JSON parser, so
+    the truncation signal this function reads does not exist for them — and
+    refusing everything unreadable would disable tool calling for that provider
+    outright, which is worse than the pre-check behaviour it would replace.
+    """
+    assert _tool_args_finished({"entity_id": "light.hall"}) is True
+
+
+class _ProviderChunk:
+    """A chunk from a client that is not langchain's own `AIMessageChunk`.
+
+    `AIMessageChunk` can never carry these shapes: `init_tool_calls` parses
+    every raw slice and routes anything that is not a dict — a scalar, or an
+    `args` that is not text at all — into `invalid_tool_calls`, out of sight of
+    our code. `_finished_tool_calls` reads the accumulated message through
+    `getattr`, i.e. it takes any object, so these are the shapes it must
+    survive rather than shapes langchain produces.
+    """
+
+    def __init__(self, tool_calls: list[dict], tool_call_chunks: list[dict]) -> None:
+        """Hold the two lists the stream reads and nothing else."""
+        self.content = ""
+        self.tool_calls = tool_calls
+        self.tool_call_chunks = tool_call_chunks
+
+
+async def test_non_text_arguments_do_not_break_the_turn() -> None:
+    """A dict in `args` used to raise `AttributeError` inside the generator.
+
+    It escapes into `async_add_delta_content_stream`, so the whole turn dies —
+    on a call that was complete.
+    """
+    args = {"entity_id": "light.hall"}
+    chunk = _ProviderChunk(
+        tool_calls=[{"id": "call_1", "name": TOOL_NAME, "args": args}],
+        tool_call_chunks=[
+            {"id": "call_1", "name": TOOL_NAME, "args": args, "index": 0, "type": "tool_call_chunk"}
+        ],
+    )
+
+    calls = _tool_inputs(await _collect(_client(chunk)))
+
+    assert [c.tool_args for c in calls] == [args]
+
+
+async def test_scalar_raw_arguments_are_dropped_by_the_stream(caplog) -> None:
+    """The predicate's verdict has to reach the delta, not just be returned."""
+    chunk = _ProviderChunk(
+        tool_calls=[{"id": "call_1", "name": TOOL_NAME, "args": {}}],
+        tool_call_chunks=[
+            {
+                "id": "call_1",
+                "name": TOOL_NAME,
+                "args": '"light.kitchen"',
+                "index": 0,
+                "type": "tool_call_chunk",
+            }
+        ],
+    )
+    with caplog.at_level(logging.WARNING):
+        deltas = await _collect(_client(chunk))
+
+    assert _tool_inputs(deltas) == []
+    assert len(_discard_records(caplog)) == 1
 
 
 # --- A6: the generator against the real ChatLog ---------------------------------

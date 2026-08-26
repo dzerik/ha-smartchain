@@ -159,7 +159,7 @@ data:
   entity_id: conversation.smartchain_main   # optional — routes to a specific agent
 ```
 
-Returns `{"response": "<text>"}`. If `entity_id` is omitted the first available agent is used. Provider-side auth errors return a generic message (full detail in the HA log) — your API keys never leak into the response.
+Returns `{"response": "<text>"}`. If `entity_id` is omitted the first available agent is used. If it is **given** and resolves to no loaded agent, the call raises `HomeAssistantError` *(v5.4.13+; before that it silently used a different agent)* — see §14. Provider-side auth errors return a generic message (full detail in the HA log) — your API keys never leak into the response.
 
 ### 5.2. `smartchain.analyze_image`
 
@@ -170,7 +170,7 @@ service: smartchain.analyze_image
 data:
   camera_entity_id: camera.front_door
   message: "Who is at the door? Describe in 1-2 sentences."
-  entity_id: conversation.smartchain_vision   # optional — agent to use
+  entity_id: conversation.smartchain_vision   # optional — agent to use (raises if it resolves to none, §14)
   notify_entity: notify.mobile_app_phone      # optional — also send via notify
 ```
 
@@ -1270,7 +1270,25 @@ To reload skills, restart HA or reload the config entry.
 ## 14. Troubleshooting
 
 ### "No SmartChain agent available."
-The `smartchain.ask` service couldn't find any agent. Check **Settings > Devices & Services > SmartChain** — does it have at least one conversation sub-entry with `runtime_data` set?
+`smartchain.ask` / `smartchain.analyze_image` was called **without** `entity_id` — "any agent will do" — and no agent was available. This is a normal service *response*, not an error: the automation carries on with that text.
+
+No agent is available when no hub is loaded, or when no loaded hub has an agent. Check **Settings > Devices & Services > SmartChain**: is the hub loaded (not disabled, not "Failed to set up"), and does it have at least one **agent** sub-entry? A hub with no agents is a valid state (§3) — and an empty one.
+
+### The service now raises "No SmartChain agent behind `<entity_id>`"
+Since v5.4.13 this is what `smartchain.ask` and `smartchain.analyze_image` do when you **did** pass an `entity_id` and it resolves to no loaded agent. The full message is:
+
+> No SmartChain agent behind `<entity_id>` — it is unknown, not a SmartChain agent, or its hub is not loaded. Fix the entity_id or omit it to use any available agent.
+
+It is a `HomeAssistantError`, so the call fails and the automation stops there. **This is deliberate, and it is a behaviour change** — an automation that worked before the upgrade can fail now. Before v5.4.13 an `entity_id` that resolved to nothing fell through to "the first agent of the first hub": your call naming a GigaChat agent was answered by, say, an OpenAI one — different provider, different model, different system prompt, and nothing anywhere in the response to say a substitution had happened. A mistyped entity_id, a disabled hub and a hub that failed to set up all landed there silently.
+
+Three things produce it:
+- **The entity_id is unknown.** A typo — or the agent was renamed, which changes its entity_id, because the entity_id is derived from the agent's title.
+- **The entity_id belongs to something else.** Any entity that is not SmartChain's — another conversation agent, a script, anything.
+- **The entity exists but its hub is not loaded.** Disabled, failed to set up, or being reloaded at that moment.
+
+Fix the entity_id, or drop it entirely if you meant "any agent". Either of an agent's two entities resolves: its `conversation.*` entity and, when AI Task is enabled, its `ai_task.*` one.
+
+Downstream integrations calling `async_generate_structured` (§11) see the same miss as the `RuntimeError` that helper's contract promises, naming the `agent_id`.
 
 ### "Multi-Agent Tools" / "State History Tool" is missing from the agent form
 Both switches were deleted in v5.4.0. The agent's **Tools** list replaced them and is now the only control — tick `get_state_history`, `ask_agents` and `critique_response` there. See §7.5 and §10.1.

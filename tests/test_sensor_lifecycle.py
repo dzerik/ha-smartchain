@@ -18,6 +18,7 @@ from homeassistant.helpers.dispatcher import async_dispatcher_send
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components import smartchain
+from custom_components.smartchain import sensor as sensor_platform
 from custom_components.smartchain.const import (
     CONF_API_KEY,
     CONF_ENGINE,
@@ -226,6 +227,83 @@ async def test_sensor_is_released_when_only_another_platform_fails_to_unload(
         await hass.async_block_till_done()
 
     _assert_sensor_alive(hass, "after the surviving hub reloaded")
+
+
+async def test_a_failed_rehome_hands_the_slot_back_to_the_next_hub(
+    hass: HomeAssistant, mock_llm_client, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A rehome that blows up must not leave the singleton unclaimable.
+
+    `async_rehome_sensor` re-forwards the sensor platform to a surviving hub,
+    and `async_setup_entry` claims the slot for that hub *before* the entity
+    reaches the state machine. If the forward then fails, the claim is standing
+    for an entry that has no entity: every other hub now skips the registration
+    and `sensor.smartchain_last_analysis` is gone for the rest of the run, no
+    matter how many times anything reloads. The docstring's promise — "hand the
+    slot back so the next reload of any hub can retry" — is what makes the next
+    hub to come up able to register it, and it has to hand it back under the id
+    that actually took it, not under the id of the entry that was leaving.
+    """
+    first = await _setup_entry(hass, mock_llm_client, "GigaChat")
+    second = await _setup_entry(hass, mock_llm_client, "GigaChat-2")
+    _assert_sensor_alive(hass, "with two entries")
+
+    real_forward = hass.config_entries.async_forward_entry_setups
+
+    async def _fail_after_the_platform_claimed(entry, platforms):
+        """Let the real platform setup claim the slot, then fail the forward.
+
+        The claim is taken by the integration's own code, not fabricated here:
+        the real forward runs and only the entity itself is made unbuildable, so
+        the slot ends up held for an entry that has no entity — the exact window
+        the release in the `except` branch covers.
+        """
+        if entry.entry_id != second.entry_id or Platform.SENSOR not in platforms:
+            await real_forward(entry, platforms)
+            return
+        with patch.object(
+            sensor_platform,
+            "SmartChainLastAnalysisSensor",
+            side_effect=RuntimeError("the entity could not be built"),
+        ):
+            await real_forward(entry, platforms)
+        raise RuntimeError("the forwarded setup failed")
+
+    caplog.clear()
+    with patch.object(
+        hass.config_entries,
+        "async_forward_entry_setups",
+        side_effect=_fail_after_the_platform_claimed,
+    ):
+        assert await hass.config_entries.async_unload(first.entry_id)
+        await hass.async_block_till_done()
+
+    assert "Could not move the SmartChain Last Analysis sensor" in caplog.text
+    stranded = hass.states.get(SENSOR_ENTITY_ID)
+    assert stranded is None or stranded.attributes.get("restored"), (
+        "the move did not actually fail — there is still a live entity"
+    )
+
+    # The next hub to come up must be able to register the sensor again.
+    caplog.clear()
+    with patch(
+        "custom_components.smartchain.get_client",
+        new_callable=AsyncMock,
+        return_value=mock_llm_client,
+    ):
+        await hass.config_entries.async_setup(first.entry_id)
+        await hass.async_block_till_done()
+
+    _assert_sensor_alive(hass, "after a hub came back up following a failed move")
+    ent_reg = er.async_get(hass)
+    owned = [
+        ent
+        for ent in ent_reg.entities.values()
+        if ent.platform == DOMAIN and ent.domain == "sensor"
+    ]
+    assert len(owned) == 1
+    assert owned[0].config_entry_id == first.entry_id
+    assert "does not generate unique IDs" not in caplog.text
 
 
 def test_sensor_platform_is_not_imported_at_module_scope() -> None:

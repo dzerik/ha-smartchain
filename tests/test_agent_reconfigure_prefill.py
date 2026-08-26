@@ -20,6 +20,7 @@ The third test is the one that matters — it walks the schema, so the next fiel
 added without a suggested value is caught before a user finds it.
 """
 
+import logging
 from typing import Any
 from unittest.mock import patch
 
@@ -109,6 +110,15 @@ def _offered_apis(result: dict[str, Any]) -> list[str]:
     )
     field = next(item for item in fields if item["name"] == CONF_LLM_HASS_API)
     return [option["value"] for option in field["selector"]["select"]["options"]]
+
+
+def _announcements(caplog: pytest.LogCaptureFixture, api_id: str) -> list[int]:
+    """The levels this integration logged the given API id at."""
+    return [
+        record.levelno
+        for record in caplog.records
+        if api_id in record.getMessage() and record.name.startswith("custom_components")
+    ]
 
 
 def _entry(hass: HomeAssistant, data: dict[str, Any]) -> MockConfigEntry:
@@ -245,11 +255,17 @@ async def test_prefill_drops_an_api_that_is_no_longer_registered(
     """
     entry = _entry(hass, {**STORED_AGENT, CONF_LLM_HASS_API: [llm.LLM_API_ASSIST, GHOST_API]})
 
+    caplog.clear()
     result = await _open_reconfigure(hass, entry)
 
     assert GHOST_API not in _offered_apis(result)
     assert _rendered_form(result)[CONF_LLM_HASS_API] == [llm.LLM_API_ASSIST]
-    assert GHOST_API in caplog.text
+    # At WARNING, and asserted as such. Home Assistant's own default level is
+    # INFO, so an announcement demoted to DEBUG is not a quieter announcement —
+    # it is no announcement at all on every real installation, while this test
+    # would go on passing because the test harness captures DEBUG. Discarding a
+    # value the user stored is the one thing here that may not be silent.
+    assert _announcements(caplog, GHOST_API) == [logging.WARNING]
 
 
 async def test_saving_the_form_lets_go_of_the_dropped_api(hass: HomeAssistant) -> None:
@@ -297,6 +313,38 @@ async def test_an_agent_that_never_had_an_api_gets_no_suggestion(hass: HomeAssis
     result = await _open_reconfigure(hass, entry)
 
     assert CONF_LLM_HASS_API not in _rendered_form(result)
+
+
+async def test_a_bare_string_selection_is_one_id_and_not_six_letters(
+    hass: HomeAssistant, caplog: pytest.LogCaptureFixture
+) -> None:
+    """`llm_hass_api` is stored as a plain string by a large share of agents.
+
+    Home Assistant's own conversation integrations wrote it that way for years,
+    `tools.inventory._configured_llm_apis` still handles the `str` case
+    explicitly, and `tests/test_init.py` has entries carrying `"assist"`. A
+    filter that iterates the stored value without checking its type iterates
+    the *characters*: `'a'`, `'s'`, `'s'`, … None of them is a registered API
+    id, so every one is discarded as a ghost, the form opens with an empty
+    picker, and the first save takes the agent's Assist API away — which is
+    precisely the loss this prefill was written to prevent, reintroduced by its
+    own fix. Nothing was dropped here, so nothing may be announced either.
+    """
+    entry = _entry(hass, {**STORED_AGENT, CONF_LLM_HASS_API: llm.LLM_API_ASSIST})
+
+    caplog.clear()
+    result = await _open_reconfigure(hass, entry)
+
+    assert _rendered_form(result)[CONF_LLM_HASS_API] == [llm.LLM_API_ASSIST]
+    assert _announcements(caplog, llm.LLM_API_ASSIST) == []
+
+    payload = _rendered_form(result)
+    payload[CONF_TEMPERATURE] = 0.2
+    result = await _submit(hass, result["flow_id"], payload)
+    assert result["type"] is FlowResultType.ABORT
+
+    data = entry.subentries[_subentry_id(entry)].data
+    assert data[CONF_LLM_HASS_API] == [llm.LLM_API_ASSIST]
 
 
 async def test_reconfigure_touches_only_the_edited_field(hass: HomeAssistant) -> None:

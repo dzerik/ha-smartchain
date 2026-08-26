@@ -342,6 +342,37 @@ async def async_flow_error_text(
     return texts.get(key) or fallback
 
 
+def _prefill(schema: vol.Schema, served: Mapping[str, Any]) -> dict[str, Any]:
+    """The values a Home Assistant dialog would render, for the keys we serve.
+
+    `description={"suggested_value": …}` is how a config-flow form tells the
+    frontend what to put in a field, and it is not always the stored value:
+    `subentry_schema` filters `llm_hass_api` against the live API registry and
+    expands a legacy `allowed_tools`. The panel builds its own form from the
+    serialised schema but takes its values from `data`, so anything the schema
+    decided on the way out was decided for one front only — and the two fronts
+    then disagreed about the same agent. Reading the decision back out of the
+    schema keeps it written once, in the flow, where the reasoning for it lives.
+
+    Only keys already in `served` are answered, so this cannot introduce a
+    field the caller pruned or invent a value for one storage never had, and a
+    suggestion of `None` — which `_live_llm_apis` returns to mean "no selection
+    to offer" — is left out rather than sent as a value.
+    """
+    prefill: dict[str, Any] = {}
+    for key in schema.schema:
+        name = str(key.schema)
+        if name not in served:
+            continue
+        description = getattr(key, "description", None)
+        if not isinstance(description, Mapping):
+            continue
+        suggested = description.get("suggested_value")
+        if suggested is not None:
+            prefill[name] = suggested
+    return prefill
+
+
 @websocket_api.require_admin
 @websocket_api.websocket_command(
     {
@@ -385,6 +416,15 @@ async def ws_agent_schema(
     # correct as the schema changes.
     declared = {str(key.schema) for key in schema.schema}
     served = {name: value for name, value in defaults.items() if name in declared}
+    # Same argument one step further in. Pruning undeclared *keys* is not enough
+    # when the schema also rewrites a declared *value*: `subentry_schema` filters
+    # the stored `llm_hass_api` against `llm.async_get_apis` before suggesting
+    # it, so the dialog never proposes an id whose integration is gone — while
+    # this command, reading `subentry.data` directly, went on proposing it. The
+    # picker's options are filtered either way, so the panel rendered a value its
+    # own select could not hold and the next save came back `invalid_data` on a
+    # field the user had never touched.
+    served.update(_prefill(schema, served))
 
     connection.send_result(
         msg["id"],

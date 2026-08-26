@@ -562,10 +562,28 @@ def _live_llm_apis(
     it. Dropping it silently would repeat, one level up, exactly the bug this
     prefill was added to fix: a save that quietly rewrites a field nobody
     touched. The user still decides — the form shows what survived and writes it
-    only when they press save.
+    only when they press save. WARNING and not DEBUG on purpose: Home Assistant
+    logs at INFO by default, so a demoted line is not a quieter announcement but
+    no announcement at all, and this one is a user's stored value going away.
+
+    The answer is a decision about a *form*, not about this flow, so both forms
+    have to reach it. The SmartChain panel builds its fields from the serialised
+    schema but takes its values from `ws_agent_schema`, which read
+    `subentry.data` directly and therefore went on offering exactly what this
+    function exists to withhold — the panel proposed a ghost its own picker had
+    no option for, and the next save came back `invalid_data`. `_prefill` in
+    `websocket_api` now reads this suggestion back out of the schema, so the
+    sentence the message below states is true of the panel as well.
 
     ``None`` in, ``None`` out: an agent that never chose an API must not be
     handed a suggested empty list, which is a value where there was none.
+
+    `stored` is a string on a large share of real agents — Home Assistant's own
+    conversation integrations wrote a single id that way, and
+    `tools.inventory._configured_llm_apis` still reads that shape. Iterating it
+    without the `isinstance` check iterates its characters, none of which is a
+    registered id, so every agent holding a bare `"assist"` would have it
+    discarded here as a ghost.
     """
     if not stored:
         return None
@@ -577,7 +595,8 @@ def _live_llm_apis(
     if dropped:
         LOGGER.warning(
             "Agent on %s has LLM API(s) %s that no integration registers any more; "
-            "they are not offered in the form and saving it will let them go",
+            "neither the Home Assistant dialog nor the SmartChain panel offers "
+            "them, and saving either form will let them go",
             unique_id,
             ", ".join(dropped),
         )

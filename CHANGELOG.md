@@ -11,6 +11,180 @@ project follows [Semantic Versioning](https://semver.org/).
 > **Note:** the `5.4.0` section below is a roll-up: it covers `5.4.0` through
 > `5.4.7`, which were developed on one branch and are not separated here.
 
+## [5.4.14] - unreleased
+
+### Fixed
+- **The panel offered an Assist API the dialog had already thrown away.** `5.4.13`
+  taught `subentry_schema` to drop an `llm_hass_api` whose integration is gone,
+  but that decision lived only in the schema's `suggested_value`, and
+  `ws_agent_schema` served `data` straight from `subentry.data` — so the panel
+  still showed the ghost, and saving the form it had just been handed came back
+  `invalid_data`. The filter was not copied a third time: `_prefill` reads the
+  decision back out of the built schema, so panel and dialog cannot disagree
+  about what a form contains. A selection stored as a bare string is one id
+  again, not six letters.
+- **An AI Task that got nothing back reported success.** Closing the
+  thinking-only stream with a native delta (`5.4.13`) meant `chat_log` always
+  ended in `AssistantContent`, which is exactly what `_async_generate_data`
+  checked to decide the model had answered. An automation asking for structured
+  data now gets `HomeAssistantError` naming the real cause instead of a parse
+  failure two steps downstream — keyed off the marker our own stream sets, not
+  off empty text, which is the model's prerogative.
+- **A tool call lost to an unmergeable chunk read like a truncated one.** Both
+  end with the action not running; only one of them is the model's doing. The
+  log now says which.
+
+### Changed
+- `docs/USAGE.md` §14 and `docs/USAGE-ru.md` §14 describe what the services
+  actually do with an `entity_id`: absent means any available agent, present but
+  unresolvable is now an error rather than a silent hand-off to whichever
+  provider happened to be first.
+
+## [5.4.13] - unreleased
+
+### Fixed
+- **An argument the model never finished writing was executed anyway.** `5.4.12`
+  closed this for a stream that ended mid-call, and only for that. A model that
+  hits `max_tokens` in the middle of the arguments still ran the tool: LangChain
+  parses the fragment with a partial-JSON parser that answers `{}` to `{"a": `
+  and silently closes the quote on `{"entity_id": "light.bedroom`, so
+  `light.bedroom` — or whatever prefix happened to arrive — was executed as if
+  the model had asked for it. `invalid_tool_calls` stays empty through all of
+  this; the only surviving trace of the cut is the raw argument string in
+  `tool_call_chunks`, so that is what is now checked. `_tool_args_finished`
+  requires a whole JSON object from it; `""` and `"{}"` pass as a tool with no
+  arguments. A dropped call is logged by name and argument *length* — never the
+  arguments themselves, which are model-controlled text that may quote the
+  conversation.
+- **A stream of nothing but thinking blocks killed the turn.** Reasoning models
+  can emit a whole response as thinking deltas and no assistant content;
+  `async_get_result_from_chat_log` then raised `HomeAssistantError` from outside
+  the `try`, so the user got a traceback rather than an answer. Such a stream is
+  now closed with a native delta, and the call is wrapped like the branches
+  beside it. In the same pass, a chunk that will not merge (`merge_dicts` over a
+  key holding two different types) no longer takes the turn down: it is skipped
+  and the stream continues on what has accumulated.
+- **A named `entity_id` that resolved to nothing was answered by a different
+  provider.** A regression of `5.4.12`: `smartchain.ask`, `smartchain.analyze_image`
+  and `async_generate_structured` fell through to "first client of the first
+  entry" whenever the `entity_id` they were given did not resolve — a typo, a
+  disabled hub, a hub that failed to set up. The caller asked GigaChat and was
+  answered by OpenAI, with a different model and a different system prompt and
+  nothing in the response to say so. "Not given" and "given but not found" are
+  now two different cases: the first still picks any available agent, the second
+  raises `HomeAssistantError` naming the entity_id. `async_generate_structured`
+  reports it as the `RuntimeError` its docstring promises. Documented in
+  §14 of both user guides.
+- **The Last Analysis sensor went down with whichever hub happened to own it.**
+  `5.4.12` made ownership of the singleton named; this adds the other half.
+  Releasing the slot no longer waits on the *combined* answer of
+  `async_unload_platforms`, so one stuck platform can no longer leave the slot
+  held by an entry that no longer has the entity. And when the owner is unloaded
+  for good rather than reloaded — one hub of several removed or disabled — the
+  sensor is re-forwarded to a hub that is still up instead of sitting at
+  `unavailable, restored=True` while another hub goes on answering
+  `analyze_image`. If that move fails the slot is handed back, so the next hub
+  to come up can retry.
+- **The agent form's `llm_hass_api` prefill offered APIs that no longer exist.**
+  An API whose integration had been removed was still suggested as a stored
+  value, which the form then refused. The ghost is dropped with a WARNING and
+  the live entries are kept.
+
+## [5.4.12] - unreleased
+
+### Fixed
+- **A tool call arriving in pieces reached Home Assistant empty.**
+  `_async_langchain_stream` accumulated the deltas but never the *message*: each
+  chunk was converted on its own, so arguments a provider split across several
+  chunks were lost, and the closing chunk contributed a phantom call with an
+  empty name. Chunks are now added into one `AIMessageChunk`, only text goes out
+  as a delta, and `tool_calls` are formed once when the stream ends. The same
+  change fixes Anthropic's list-shaped content: `_chunk_text` folds the blocks
+  into a string on `isinstance` rather than through `.text`, which is a method in
+  `langchain-core` 0.3 and a property in 1.x.
+- **`chat_history: false` truncated the current turn, not the previous ones.**
+  `messages` was rebuilt inside the `MAX_TOOL_ITERATIONS` loop, dropping the
+  `tool_calls` and tool results of the turn in progress — so the model kept
+  re-asking and the action was executed up to ten times. `_current_turn_content`
+  returns the system message plus everything from the last `UserContent`, and
+  both branches now go through one `_chatlog_to_langchain`.
+- **One reload of a hub left the Last Analysis sensor `unavailable` until Home
+  Assistant restarted.** Nothing ever cleared the `last_analysis_sensor_added`
+  flag, and the sensor lives on the *platform* of the entry that registered it,
+  so the unload half of a reload took the entity down while the flag stayed set
+  and the setup half returned early. Every options and agent edit in the UI ends
+  in a reload, so this was a routine edit silently killing
+  `sensor.smartchain_last_analysis` and every automation reading it. Ownership is
+  now recorded by entry_id and released when that entry unloads.
+- **A disabled or failed hub took the services down with it.** `_find_client`
+  iterated unloaded entries too and read `runtime_data` as a plain attribute —
+  which Home Assistant *deletes* on unload, so the read raised `AttributeError`
+  rather than yielding nothing, and `smartchain.ask`, `smartchain.analyze_image`
+  and `async_generate_structured` all failed while a healthy hub sat right behind
+  it in the list.
+- **Reconfiguring an agent silently erased `llm_hass_api`.** It was the one field
+  in the form built without a `suggested_value`, so the form opened with it empty
+  and saving wrote that emptiness back.
+
+## [5.4.11] - unreleased
+
+> **Note:** this is the release that closes the branch whose work is described in
+> the `5.1.0`–`5.4.10` sections above. Listed here is only what is new in the
+> release itself.
+
+### Changed
+- **`gigachat` floor raised to `>=0.2.3,<0.3`.** `GigaChat-3-Ultra` is documented
+  by Sber only at `https://api.giga.chat/`, and the GigaChat connection form
+  offers no base-URL field. Checked rather than assumed: the SDK's
+  `Settings.base_url` already defaults to `https://api.giga.chat/v1` — the
+  address that replaced `gigachat.devices.sberbank.ru` on 2026-07-17 — so
+  `get_client` builds against the right endpoint with no field at all. But that
+  is a dependency default and the old `>=0.2.0` floor did not guarantee it:
+  0.2.0 and 0.2.1 default to the legacy address, so the floor permitted an
+  install on which the first entry in our own model list failed every message.
+  The floor is the fix, not a base-URL field — which would be a question every
+  user has to answer correctly to reach a model Sber documents as current.
+  Constraining the SDK drags `langchain-gigachat` along for free; adding a floor
+  there too would force `langchain-core>=1` onto every resolution split and make
+  the lock unsolvable. A test asserts the resolved install's default endpoint, so
+  a future resolution cannot quietly reintroduce the old one.
+
+### Fixed
+- **The 10 s bound on the model fetch returned the caller and leaked the
+  thread.** `asyncio.timeout` does answer on schedule — measured through the real
+  path, a 40 s hang returns in 10.0 s. What it cannot do is cancel a
+  `run_in_executor` future whose thread has already started, so the worker stayed
+  blocked in `get_models` for the provider's full 40 s, long after the panel had
+  been told the fetch failed, out of a pool that is shared and finite. The fetch
+  now also passes `timeout=` into the SDK, where it becomes the request's
+  `httpx.Timeout` and actually ends the call. The reason this went unnoticed is
+  recorded too: the test had substituted the executor hop with
+  `await asyncio.sleep(30)`, which is cancellable, and so answered "yes" to a
+  question the real path answers differently. It now makes a genuinely blocking
+  call on a genuinely separate thread, and releases it rather than leaking it.
+- **Renaming an embeddings binding made it unsavable.** `embeddings_subentry_schema`
+  never unioned the stored model into its own dropdown — the fix `5.4.10` applied
+  to `subentry_schema` was not carried across. It bites harder here, because
+  `_resolve_embeddings_model` collapses a Custom Model name into `model`: a user
+  who created a binding on `Embeddings-2` and later merely renamed it was
+  refused, on a healthy network, over a field they never touched.
+- **`EMBEDDING_MODELS_GIGACHAT` was stale the way `MODELS_GIGACHAT` had been.**
+  Sber documents `Embeddings-2` and `Embeddings-3B-2025-09` and we shipped
+  neither, which is what made typing into Custom Model the ordinary path rather
+  than the exotic one. Both are added; `GigaEmbedding` stays, because these lists
+  never drop a name somebody may have stored.
+- **The embeddings form still reported the bare `invalid_data: model`** that this
+  release had just removed one file over. `_describe_agent_invalid` becomes
+  `_describe_model_invalid` with the translation scope as a parameter, so both
+  forms refuse in a sentence.
+- **The panel's model cache survived a change to the connection it was fetched
+  over.** Verify SSL began feeding that fetch in `5.4.10`, so without this the
+  switch looked broken rather than merely stale. The cache is keyed on
+  `connection_data(entry)` rather than on any write, so an agent save does not
+  throw it away, and it is seeded at setup so the first write of a session is
+  compared against something. Deliberately not cleared on unload: an agent save
+  reloads the entry, and clearing there would defeat the cache entirely.
+
 ## [5.4.10] - unreleased
 
 ### Fixed
