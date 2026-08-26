@@ -13,6 +13,7 @@ from homeassistant import config_entries
 from homeassistant.config_entries import (
     ConfigEntry,
     ConfigFlowResult,
+    ConfigSubentry,
     ConfigSubentryFlow,
     SubentryFlowResult,
 )
@@ -112,6 +113,7 @@ from .const import (
     TOOL_SCRIPT_PATTERN,
     UNIQUE_ID,
 )
+from .storable import UNSTORABLE_TEXT, UnstorableValue, ensure_storable
 from .tools.inventory import materialise_allowed_tools
 
 LOGGER = logging.getLogger(__name__)
@@ -382,7 +384,53 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         return types
 
 
-class ConversationSubentryFlow(ConfigSubentryFlow):
+class StorableSubentryFlow(ConfigSubentryFlow):
+    """The base class every subentry flow here extends, for one reason.
+
+    Home Assistant's own dialogs write through `async_create_entry` and
+    `async_update_and_abort`, and what they hand over is whatever the step's
+    `data_schema` produced — including a `Template` object, which
+    `selector.TargetSelector` makes out of `entity_id: "{{ entity }}"`. That
+    object is not JSON, and a config entry that holds one takes down every
+    later write of `core.config_entries` for every integration on the system
+    (see `storable`).
+
+    Overriding the two write methods rather than adding a call to each of the
+    seven step handlers is the point: a subentry flow added next year inherits
+    the guard by existing, and cannot forget it. The panel's websocket
+    equivalent is `websocket_api._write_subentry`, for the same reason.
+
+    Normalisation is silent because it is not a change: a `Template` is
+    rewritten to the source text it was built from, which is what the user
+    typed. The refusal — a value with no textual form — is a raise here rather
+    than a form error because no schema in this integration can produce one;
+    the paths that *can* be reached by a person refuse them by name instead
+    (`build_tool_subentry_data`, `ensure_storable` in every save command).
+    """
+
+    @callback
+    def async_create_entry(self, *, data: Mapping[str, Any], **kwargs: Any) -> SubentryFlowResult:
+        """Create the subentry, with its data guaranteed to survive JSON."""
+        return super().async_create_entry(data=ensure_storable(data), **kwargs)
+
+    @callback
+    def async_update_and_abort(
+        self, entry: ConfigEntry, subentry: ConfigSubentry, **kwargs: Any
+    ) -> SubentryFlowResult:
+        """Update the subentry, with its data guaranteed to survive JSON.
+
+        Both `data` (replace) and `data_updates` (merge) are guarded; either
+        may be absent, and `UNDEFINED` must be passed through untouched rather
+        than turned into an empty dict, which would erase the subentry.
+        """
+        for key in ("data", "data_updates"):
+            value = kwargs.get(key)
+            if isinstance(value, Mapping):
+                kwargs[key] = ensure_storable(value)
+        return super().async_update_and_abort(entry, subentry, **kwargs)
+
+
+class ConversationSubentryFlow(StorableSubentryFlow):
     """Handle subentry flow for adding/modifying a conversation agent."""
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> SubentryFlowResult:
@@ -717,7 +765,7 @@ def embeddings_subentry_schema(
     )
 
 
-class EmbeddingsSubentryFlow(ConfigSubentryFlow):
+class EmbeddingsSubentryFlow(StorableSubentryFlow):
     """Handle adding or reconfiguring an embeddings binding."""
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> SubentryFlowResult:
@@ -1063,7 +1111,7 @@ def merge_store_secrets(
     return out
 
 
-class MemoryStoreSubentryFlow(ConfigSubentryFlow):
+class MemoryStoreSubentryFlow(StorableSubentryFlow):
     """Add or reconfigure a memory store from Home Assistant's own dialog.
 
     Two steps rather than one: which fields a store needs depends on the
@@ -1219,6 +1267,7 @@ TOOL_ERROR_TEXT: dict[str, str] = {
         "the action is not valid for its type. Check the Home Assistant log for the "
         "detail — it is withheld here because an action can carry a credential"
     ),
+    "unstorable": UNSTORABLE_TEXT,
 }
 
 # Which extra fields each action type declares, in the order the form shows
@@ -1619,7 +1668,20 @@ def build_tool_subentry_data(
     composition happens once, on the way in, where a failure can still be shown
     to the person who caused it, rather than on every registry rebuild where it
     could only be logged.
+
+    The JSON guard runs here rather than at the two call sites because this is
+    what both of them share: the panel's `smartchain/tool/save` and Home
+    Assistant's own tool dialog compose through this one function, and only one
+    of them can be reached from `websocket_api`. `target` is the field that
+    needs it — see `storable` — and it needs it before `compose_tool_action`,
+    which would otherwise bury a `Template` inside the `action` block where a
+    refusal could no longer name a field the user can see.
     """
+    try:
+        form = ensure_storable(form)
+    except UnstorableValue as err:
+        return None, (str(err.path[0]), "unstorable")
+
     name = str(form.get("name") or "").strip()
     error = validate_tool_name(hass, name, subentry_id=subentry_id)
     if error is not None:
@@ -1780,7 +1842,7 @@ def tool_form_defaults(subentry: Any, *, redact: bool = True) -> dict[str, Any]:
     return redact_tool_secrets(defaults) if redact else defaults
 
 
-class ToolSubentryFlow(ConfigSubentryFlow):
+class ToolSubentryFlow(StorableSubentryFlow):
     """Build or edit a custom tool from Home Assistant's own dialog.
 
     Two steps rather than one, for the same reason the memory-store flow has

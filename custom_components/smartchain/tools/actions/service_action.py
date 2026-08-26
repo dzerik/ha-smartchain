@@ -10,7 +10,22 @@ from ..model import ServiceAction
 
 
 def _render_value(value: Any, hass: HomeAssistant, args: dict[str, Any]) -> Any:
-    """Render Jinja in string values; recurse into dicts and lists."""
+    """Render Jinja in string values; recurse into dicts and lists.
+
+    A `Template` object is rendered as itself rather than falling through to
+    the `return value` below. It should not get this far — nothing this
+    integration writes into a subentry survives the guard in `storable` as an
+    object — but the fallthrough was the quiet half of that bug: an
+    unrendered `Template` passed straight into
+    `hass.services.async_call(target=…)`, so the model's argument never
+    reached the service and the call did nothing visible. A tool that silently
+    targets nothing is worse than one that raises, and this costs one branch.
+    """
+    if isinstance(value, template_helper.Template):
+        # Its source text, rendered against *this* `hass` — the same line the
+        # `str` branch below takes — rather than trusting whichever hass the
+        # object happens to have been constructed with.
+        return template_helper.Template(value.template, hass).async_render(args, parse_result=False)
     if isinstance(value, str):
         if "{{" not in value and "{%" not in value:
             return value

@@ -10,6 +10,7 @@ import hashlib
 import logging
 import os
 import shutil
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -44,6 +45,7 @@ from .const import (
     TOOL_PARAMS_MODE_SIMPLE,
     UNIQUE_ID,
 )
+from .storable import UNSTORABLE_TEXT, UnstorableValue, ensure_storable
 from .tools.loader import LoaderError, load_tools_file
 from .tools.memory.registry import MemoryRegistry
 from .tools.subentry_source import SOURCE_SUBENTRY, SOURCE_YAML
@@ -184,6 +186,39 @@ async def async_field_descriptions(
     )
 
 
+# Said only when the translation file has nothing to say — an English sentence
+# rather than a key, because the bare key is exactly what a new user used to
+# be shown. The rule is about both fields, so it names both.
+MODEL_REQUIRED_FALLBACK = "select a model from the list, or type a custom model name"
+MODEL_REQUIRED_FIELDS = (CONF_CHAT_MODEL, CONF_CHAT_MODEL_USER)
+
+
+async def async_flow_error_text(
+    hass: HomeAssistant,
+    key: str,
+    category: str,
+    *,
+    fallback: str,
+    subentry_type: str | None = None,
+) -> str:
+    """The `error.<key>` sentence a config flow would show, for the panel.
+
+    A config flow renders `errors={"base": key}` through `strings.json`, so
+    every rule already has a translated sentence written for it. The panel has
+    no translation layer of its own, and the websocket commands that enforce
+    the *same* rules were sending the bare key instead — which is why a new
+    user's first Save toasted `model_required` at them. This reads the sentence
+    that already exists, in the user's own language, rather than adding a
+    second English-only copy of it to Python.
+
+    Same walk as `async_field_labels`, same `subentry_type` scoping, and for
+    the same reason: `conversation` and `embeddings` both define
+    `model_required`, and they are not the same sentence.
+    """
+    texts = await _async_field_texts(hass, category, ".error.", subentry_type=subentry_type)
+    return texts.get(key) or fallback
+
+
 @websocket_api.require_admin
 @websocket_api.websocket_command(
     {
@@ -282,6 +317,28 @@ async def ws_agent_tools(
     )
 
 
+def invalid_data(fields: Iterable[str], detail: str | None = None) -> str:
+    """The one shape every save command reports a rejected field in.
+
+    `invalid_data: <field>[, <field>…][ — <human text>]`. The field list is
+    what lets `<sc-config-form>` attach the message to the control the user is
+    looking at instead of toasting it; the optional text after the em dash is
+    what makes the message worth attaching. Both halves are optional in
+    practice — a failure with no identifiable field degrades to a bare
+    `invalid_data` — and the separator is an em dash precisely because a field
+    name can never contain one, so the split is unambiguous on the panel side.
+
+    Written down here, once, because three files used to spell it out
+    independently and one of them (`normalize_model_input`'s "model_required")
+    did not spell it at all — which is how a new user's very first Save came to
+    toast a machine key.
+    """
+    joined = ", ".join(fields)
+    if not joined:
+        return f"invalid_data — {detail}" if detail else "invalid_data"
+    return f"invalid_data: {joined} — {detail}" if detail else f"invalid_data: {joined}"
+
+
 def _describe_invalid(err: vol.Invalid) -> str:
     """A validation message that names the offending field.
 
@@ -290,13 +347,48 @@ def _describe_invalid(err: vol.Invalid) -> str:
     validators, includes the value that failed. Only the field name and a
     short reason travel here, so the message stays safe regardless of how
     voluptuous chooses to render itself.
+
+    `UnstorableValue` is the single exception, and it is a type rather than a
+    string comparison: its message is a module constant built from nothing the
+    client sent, so carrying it through is provably safe in a way that reading
+    an arbitrary `vol.Invalid`'s message would not be.
     """
-    fields = sorted(
-        {str(sub.path[0]) for sub in getattr(err, "errors", [err]) if getattr(sub, "path", None)}
-    )
-    if not fields:
-        return "invalid_data"
-    return f"invalid_data: {', '.join(fields)}"
+    suberrors = getattr(err, "errors", None) or [err]
+    fields = sorted({str(sub.path[0]) for sub in suberrors if getattr(sub, "path", None)})
+    detail = UNSTORABLE_TEXT if any(isinstance(sub, UnstorableValue) for sub in suberrors) else None
+    return invalid_data(fields, detail)
+
+
+def _write_subentry(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    subentry: ConfigSubentry | None,
+    *,
+    subentry_type: str,
+    data: Mapping[str, Any],
+    title: str,
+) -> str:
+    """Create or update one subentry, and return its id.
+
+    Every subentry this integration writes goes through here, so the
+    JSON-serialisability guard is structural rather than a line someone has to
+    remember at each of the six call sites. That matters more than the
+    deduplication: a value orjson cannot encode does not corrupt *this*
+    subentry, it kills every subsequent write of `core.config_entries` for
+    every integration on the system (see `storable`), and the failure surfaces
+    as a `TypeError` in a delayed-write task that nobody sees.
+
+    Raises `vol.Invalid` — the same exception the schema raises, carrying the
+    same `path` — so a caller's existing `except vol.Invalid` branch reports it
+    with no new error handling.
+    """
+    stored = ensure_storable(data)
+    if subentry is None:
+        new = ConfigSubentry(data=stored, subentry_type=subentry_type, title=title, unique_id=None)
+        hass.config_entries.async_add_subentry(entry, new)
+        return new.subentry_id
+    hass.config_entries.async_update_subentry(entry, subentry, data=stored, title=title)
+    return subentry.subentry_id
 
 
 @websocket_api.require_admin
@@ -335,14 +427,24 @@ async def ws_agent_save(
     schema = subentry_schema(hass, entry.unique_id, defaults, models=models)
 
     try:
-        data = dict(schema(dict(msg["data"])))
+        data = ensure_storable(schema(dict(msg["data"])))
     except vol.Invalid as err:
         connection.send_error(msg["id"], "invalid_data", _describe_invalid(err))
         return
 
     error = normalize_model_input(data)
     if error:
-        connection.send_error(msg["id"], "invalid_data", error)
+        # Named fields and a sentence, not a bare key: this is the very first
+        # Save a new user performs — `DEFAULT_CHAT_MODEL` is "" so "+ Agent"
+        # opens with nothing selected — and it used to toast "model_required".
+        text = await async_flow_error_text(
+            hass,
+            error,
+            "config_subentries",
+            fallback=MODEL_REQUIRED_FALLBACK,
+            subentry_type=SUBENTRY_TYPE_CONVERSATION,
+        )
+        connection.send_error(msg["id"], "invalid_data", invalid_data(MODEL_REQUIRED_FIELDS, text))
         return
 
     # Keep what this schema does not declare. `ws_agent_schema` strips undeclared
@@ -359,20 +461,19 @@ async def ws_agent_save(
     )
     data = {**preserved, **data}
 
-    title = agent_title(data)
-    if subentry is None:
-        new = ConfigSubentry(
-            data=data,
+    try:
+        result_id = _write_subentry(
+            hass,
+            entry,
+            subentry,
             subentry_type=SUBENTRY_TYPE_CONVERSATION,
-            title=title,
-            unique_id=None,
+            data=data,
+            title=agent_title(data),
         )
-        hass.config_entries.async_add_subentry(entry, new)
-        connection.send_result(msg["id"], {"subentry_id": new.subentry_id})
+    except vol.Invalid as err:
+        connection.send_error(msg["id"], "invalid_data", _describe_invalid(err))
         return
-
-    hass.config_entries.async_update_subentry(entry, subentry, data=data, title=title)
-    connection.send_result(msg["id"], {"subentry_id": subentry.subentry_id})
+    connection.send_result(msg["id"], {"subentry_id": result_id})
 
 
 @websocket_api.require_admin
@@ -467,7 +568,10 @@ async def ws_settings_save(
         return
 
     try:
-        data = dict(schema(dict(msg["data"])))
+        # `entry.options` reaches storage through the same
+        # `as_storage_fragment` a subentry does, so the connection form is
+        # guarded on the same terms — see `storable`.
+        data = ensure_storable(schema(dict(msg["data"])))
     except vol.Invalid as err:
         connection.send_error(msg["id"], "invalid_data", _describe_invalid(err))
         return
@@ -529,15 +633,23 @@ async def ws_agent_duplicate(
         return
     entry, subentry = resolved
 
-    copy = ConfigSubentry(
-        data=dict(subentry.data),
-        subentry_type=SUBENTRY_TYPE_CONVERSATION,
-        # A copy sharing the original's title is indistinguishable in a list.
-        title=_unique_copy_title(entry, subentry.title),
-        unique_id=None,
-    )
-    hass.config_entries.async_add_subentry(entry, copy)
-    connection.send_result(msg["id"], {"subentry_id": copy.subentry_id})
+    try:
+        copy_id = _write_subentry(
+            hass,
+            entry,
+            None,
+            subentry_type=SUBENTRY_TYPE_CONVERSATION,
+            data=dict(subentry.data),
+            # A copy sharing the original's title is indistinguishable in a list.
+            title=_unique_copy_title(entry, subentry.title),
+        )
+    except vol.Invalid as err:
+        # Only reachable if the *original* already holds something unstorable,
+        # in which case duplicating it would spread the damage rather than
+        # start it.
+        connection.send_error(msg["id"], "invalid_data", _describe_invalid(err))
+        return
+    connection.send_result(msg["id"], {"subentry_id": copy_id})
 
 
 @websocket_api.require_admin
@@ -839,14 +951,24 @@ async def ws_embeddings_save(
     schema = embeddings_subentry_schema(models, defaults)
 
     try:
-        data = dict(schema(dict(msg["data"])))
+        data = ensure_storable(schema(dict(msg["data"])))
     except vol.Invalid as err:
         connection.send_error(msg["id"], "invalid_data", _describe_invalid(err))
         return
 
     model = _resolve_embeddings_model(data)
     if not model:
-        connection.send_error(msg["id"], "invalid_data", "model_required")
+        # Same rule, same fields and the same reason for spelling it out as in
+        # `ws_agent_save` — but this subentry type's own sentence, which is not
+        # the conversation one.
+        text = await async_flow_error_text(
+            hass,
+            "model_required",
+            "config_subentries",
+            fallback=MODEL_REQUIRED_FALLBACK,
+            subentry_type=SUBENTRY_TYPE_EMBEDDINGS,
+        )
+        connection.send_error(msg["id"], "invalid_data", invalid_data(MODEL_REQUIRED_FIELDS, text))
         return
 
     title = data["name"]
@@ -862,34 +984,28 @@ async def ws_embeddings_save(
             connection.send_error(
                 msg["id"],
                 "invalid_data",
-                f"invalid_data: name (already used by {taken_by})",
+                invalid_data(["name"], f"already used by {taken_by}"),
             )
             return
 
-    stored = {"model": model, "model_user": data.get("model_user", "")}
-
-    if subentry is None:
-        new = ConfigSubentry(
-            data=stored,
+    try:
+        result_id = _write_subentry(
+            hass,
+            entry,
+            subentry,
             subentry_type=SUBENTRY_TYPE_EMBEDDINGS,
+            data={"model": model, "model_user": data.get("model_user", "")},
             title=title,
-            unique_id=None,
         )
-        hass.config_entries.async_add_subentry(entry, new)
-        # A store binds to this title, and nothing rebuilds the memory registry
-        # on its own — without this the new binding did nothing until
-        # `smartchain.reload_tools` or a restart, with no error to explain why.
-        reload_error = await _rebuild_after_subentry_write(hass)
-        connection.send_result(
-            msg["id"], {"subentry_id": new.subentry_id, "reload_error": reload_error}
-        )
+    except vol.Invalid as err:
+        connection.send_error(msg["id"], "invalid_data", _describe_invalid(err))
         return
 
-    hass.config_entries.async_update_subentry(entry, subentry, data=stored, title=title)
+    # A store binds to this title, and nothing rebuilds the memory registry on
+    # its own — without this a new binding did nothing until
+    # `smartchain.reload_tools` or a restart, with no error to explain why.
     reload_error = await _rebuild_after_subentry_write(hass)
-    connection.send_result(
-        msg["id"], {"subentry_id": subentry.subentry_id, "reload_error": reload_error}
-    )
+    connection.send_result(msg["id"], {"subentry_id": result_id, "reload_error": reload_error})
 
 
 def _resolve_embeddings(
@@ -1131,7 +1247,7 @@ async def ws_store_save(
     schema = memory_store_subentry_schema(hass, shape)
 
     try:
-        data = dict(schema(submitted))
+        data = ensure_storable(schema(submitted))
     except vol.Invalid as err:
         connection.send_error(msg["id"], "invalid_data", _describe_invalid(err))
         return
@@ -1143,24 +1259,24 @@ async def ws_store_save(
     if error is not None:
         field, key = error
         connection.send_error(
-            msg["id"], "invalid_data", f"invalid_data: {field} — {STORE_ERROR_TEXT[key]}"
+            msg["id"], "invalid_data", invalid_data([field], STORE_ERROR_TEXT[key])
         )
         return
 
     title = str(data.pop("name")).strip()
 
-    if subentry is None:
-        new = ConfigSubentry(
-            data=data,
+    try:
+        result_id = _write_subentry(
+            hass,
+            entry,
+            subentry,
             subentry_type=SUBENTRY_TYPE_MEMORY_STORE,
+            data=data,
             title=title,
-            unique_id=None,
         )
-        hass.config_entries.async_add_subentry(entry, new)
-        result_id = new.subentry_id
-    else:
-        hass.config_entries.async_update_subentry(entry, subentry, data=data, title=title)
-        result_id = subentry.subentry_id
+    except vol.Invalid as err:
+        connection.send_error(msg["id"], "invalid_data", _describe_invalid(err))
+        return
 
     reload_error = await _rebuild_after_subentry_write(hass)
     connection.send_result(
@@ -1869,7 +1985,14 @@ async def ws_tool_save(
     schema = tool_subentry_schema(hass, shape)
 
     try:
-        form = dict(schema(submitted))
+        # `target` is the field this exists for: `selector.TargetSelector`
+        # hands back a `Template` object for `entity_id: "{{ entity }}"` — the
+        # shape docs/USAGE.md §7.1 teaches and the importer stores as a plain
+        # string — and writing that object into the subentry breaks every
+        # later write of `core.config_entries`, for every integration. Run
+        # before `build_tool_subentry_data` so a refusal names the form field
+        # the user can see rather than the composed `action` block.
+        form = ensure_storable(schema(submitted))
     except vol.Invalid as err:
         connection.send_error(msg["id"], "invalid_data", _describe_invalid(err))
         return
@@ -1879,24 +2002,24 @@ async def ws_tool_save(
     if error is not None:
         field, key = error
         connection.send_error(
-            msg["id"], "invalid_data", f"invalid_data: {field} — {TOOL_ERROR_TEXT[key]}"
+            msg["id"], "invalid_data", invalid_data([field], TOOL_ERROR_TEXT[key])
         )
         return
 
     title = str(form["name"]).strip()
 
-    if subentry is None:
-        new = ConfigSubentry(
-            data=data,
+    try:
+        result_id = _write_subentry(
+            hass,
+            entry,
+            subentry,
             subentry_type=SUBENTRY_TYPE_TOOL,
+            data=data,
             title=title,
-            unique_id=None,
         )
-        hass.config_entries.async_add_subentry(entry, new)
-        result_id = new.subentry_id
-    else:
-        hass.config_entries.async_update_subentry(entry, subentry, data=data, title=title)
-        result_id = subentry.subentry_id
+    except vol.Invalid as err:
+        connection.send_error(msg["id"], "invalid_data", _describe_invalid(err))
+        return
 
     reload_error = await _rebuild_after_subentry_write(hass)
     connection.send_result(
@@ -2107,12 +2230,21 @@ async def ws_tools_import(
             "enabled": True,
             "params_mode": _params_mode_for(tool.parameters),
         }
-        hass.config_entries.async_add_subentry(
-            entry,
-            ConfigSubentry(
-                data=data, subentry_type=SUBENTRY_TYPE_TOOL, title=tool.name, unique_id=None
-            ),
-        )
+        try:
+            _write_subentry(
+                hass,
+                entry,
+                None,
+                subentry_type=SUBENTRY_TYPE_TOOL,
+                data=data,
+                title=tool.name,
+            )
+        except vol.Invalid:
+            # One tool that cannot be stored must not abort an import of
+            # twenty, and it must not be reported by echoing its value — an
+            # action can hold a bearer token. It joins the skipped list.
+            skipped.append(tool.name)
+            continue
         imported.append(tool.name)
 
     reload_error = await _rebuild_after_subentry_write(hass)

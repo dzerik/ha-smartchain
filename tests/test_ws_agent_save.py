@@ -10,6 +10,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from custom_components.smartchain.const import (
     CONF_API_KEY,
     CONF_CHAT_MODEL,
+    CONF_CHAT_MODEL_USER,
     CONF_ENGINE,
     CONF_PROMPT,
     DOMAIN,
@@ -97,7 +98,14 @@ async def test_save_updates_an_existing_agent(hass, hass_ws_client, entry):
 
 
 async def test_save_rejects_input_with_no_model(hass, hass_ws_client, entry):
-    """Validation parity: what the flow rejects, this must reject the same way."""
+    """Validation parity: what the flow rejects, this must reject the same way.
+
+    And it must say so the way a person can act on. `DEFAULT_CHAT_MODEL` is "",
+    so "+ Agent" opens with nothing selected and this is the very first Save a
+    new user ever performs — it used to answer with the bare key
+    "model_required", which the panel could not attach to a field and toasted
+    verbatim.
+    """
     client = await hass_ws_client(hass)
     await client.send_json_auto_id(
         {
@@ -109,7 +117,13 @@ async def test_save_rejects_input_with_no_model(hass, hass_ws_client, entry):
     msg = await client.receive_json()
     assert not msg["success"]
     assert msg["error"]["code"] == "invalid_data"
-    assert "model_required" in msg["error"]["message"]
+    message = msg["error"]["message"]
+    assert message.startswith("invalid_data: "), message
+    fields, _, text = message.removeprefix("invalid_data: ").partition(" — ")
+    assert [name.strip() for name in fields.split(",")] == [CONF_CHAT_MODEL, CONF_CHAT_MODEL_USER]
+    # The sentence the config flow shows for this rule, not its key.
+    assert text == "Either Model or Custom Model required"
+    assert "model_required" not in message
     assert len(entry.subentries) == 1, "a rejected save must create nothing"
 
 

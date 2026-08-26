@@ -37,8 +37,9 @@ import { callWS, showToast } from "../services.js";
  *   sc-saved       — detail: the save-command result.
  *   sc-save-error  — detail: {message, fields}. `fields` is whichever
  *                    declared schema field names the backend's
- *                    "invalid_data: <fields>" message named, generically
- *                    parsed — never a hardcoded field.
+ *                    "invalid_data: <fields> — <reason>" message named, and
+ *                    `message` is that reason on its own — both generically
+ *                    parsed, never a hardcoded field. See `_parseError`.
  *   sc-cancelled   — the Cancel button was pressed.
  */
 export class ScConfigForm extends HTMLElement {
@@ -183,8 +184,9 @@ export class ScConfigForm extends HTMLElement {
     } catch (err) {
       // The backend never puts a credential in a message, so this is safe
       // to show as-is.
-      const message = err.message || "Could not save";
-      const fields = this._matchingFields(message);
+      const raw = err.message || "Could not save";
+      const { fields, text } = this._parseError(raw);
+      const message = text || raw;
       if (fields.length) {
         this._fieldErrors = Object.fromEntries(fields.map((f) => [f, message]));
         this._apply();
@@ -204,20 +206,33 @@ export class ScConfigForm extends HTMLElement {
 
   /**
    * Every save command reports a validation failure the same way:
-   * "invalid_data: field_one, field_two". This is a generic protocol
-   * convention shared by agent/save, settings/save and embeddings/save —
-   * not a SmartChain field name — so parsing it here, and checking the
-   * result against whichever fields *this* schema happens to declare, adds
-   * no per-field knowledge to this component.
+   * "invalid_data: field_one, field_two — human readable reason". This is a
+   * generic protocol convention shared by every save command — not a
+   * SmartChain field name — so parsing it here, and checking the result
+   * against whichever fields *this* schema happens to declare, adds no
+   * per-field knowledge to this component.
+   *
+   * Both halves after the code are optional. Older commands sent only the
+   * field list, and a failure with no identifiable field sends neither; the
+   * em dash separates them because a field name can never contain one, which
+   * is what makes a reason containing commas safe to carry.
+   *
+   * Returning the reason separately, rather than showing the whole message,
+   * is the difference between a `model` field labelled "select a model from
+   * the list, or type a custom model name" and one labelled
+   * "invalid_data: model, model_user — select a model…".
    */
-  _matchingFields(message) {
-    const match = /^invalid_data: (.+)$/.exec(message || "");
-    if (!match || !Array.isArray(this._schema)) return [];
+  _parseError(message) {
+    const match = /^invalid_data(?::\s*([^—]*?))?\s*(?:—\s*([\s\S]*))?$/.exec(message || "");
+    if (!match) return { fields: [], text: null };
+    const text = (match[2] || "").trim() || null;
+    if (!Array.isArray(this._schema)) return { fields: [], text };
     const declared = new Set(this._schema.map((field) => field.name));
-    return match[1]
+    const fields = (match[1] || "")
       .split(",")
       .map((name) => name.trim())
       .filter((name) => declared.has(name));
+    return { fields, text };
   }
 
   /**

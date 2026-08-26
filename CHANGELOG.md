@@ -40,6 +40,37 @@ project follows [Semantic Versioning](https://semver.org/).
   siblings without also being allowed to ask one for a review.
 
 ### Fixed
+- **Saving a tool whose target was a template broke Home Assistant's config
+  storage — for every integration on the system.** `docs/USAGE.md` §7.1 teaches
+  `target: {entity_id: "{{ entity }}"}`, and importing such a tool worked. But
+  opening it in the Tools tab and pressing Save handed the string to
+  `selector.TargetSelector`, which turns it into a `Template` *object*, and that
+  object went into the subentry. From then on every write of
+  `core.config_entries` raised `TypeError` inside a delayed-write task that
+  discards its buffer and reports nothing — so the file stopped being updated
+  for every integration, and a restart read back whatever had last been written:
+  the tool gone, and anything configured after it gone with it.
+  Every subentry write — tools, stores, agents, embeddings — and the entry's own
+  options now pass through one guard (`storable.py`). A value that carries its
+  own source text is normalised back to it (a `Template` becomes the string that
+  was typed, exactly as Home Assistant's `TemplateSelector` already does);
+  anything else JSON cannot hold is refused, naming the field, rather than
+  written. Both the panel's websocket commands and Home Assistant's own subentry
+  dialogs are covered, the latter by a shared base class so a flow added later
+  cannot forget.
+- **A `Template` reaching a service action did nothing, silently.**
+  `_render_value` templated `str`, `dict` and `list` and passed anything else
+  through untouched, so the object went straight into
+  `hass.services.async_call(target=…)` and the model's argument never reached
+  the service. It is now rendered.
+- **The first Save a new user performs said `model_required`.**
+  `DEFAULT_CHAT_MODEL` is empty, so **Agents → + Agent** opens with no model
+  selected; saving answered with a bare machine key that the panel could not
+  attach to a field and toasted verbatim. Every save command now reports a
+  rejected field as `invalid_data: <fields> — <reason>`, the panel attaches the
+  reason to the control, and the reason for this one is the sentence the config
+  flow has always shown, read from the translation files in the user's own
+  language.
 - **`allowed_tools` did not do what it said.** Every built-in was appended
   unconditionally and only custom tools were filtered, so an agent "restricted
   to one custom tool" still received `search_memory`, `search_entities`,

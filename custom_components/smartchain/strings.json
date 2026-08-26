@@ -352,7 +352,8 @@
         "url_required": "The rest action needs a URL.",
         "script_required": "Pick the script this tool runs.",
         "invalid_script": "A script action targets a script.* entity.",
-        "invalid_action": "The action is not valid for its type. The detail is in the Home Assistant log — it is withheld here because an action can carry a credential."
+        "invalid_action": "The action is not valid for its type. The detail is in the Home Assistant log — it is withheld here because an action can carry a credential.",
+        "unstorable": "The value in this field can not be saved. Remove it, or retype it as plain text."
       }
     }
   }
