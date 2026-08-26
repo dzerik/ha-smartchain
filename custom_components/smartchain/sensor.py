@@ -19,6 +19,27 @@ LOGGER = logging.getLogger(__name__)
 # extra attribute that downstream automations may need in full.
 _MAX_FULL_RESPONSE_LEN = 4096
 
+# `hass.data[DOMAIN]` key holding the entry_id of whichever config entry
+# registered the singleton sensor. `async_unload_entry` clears it — and only
+# for that entry_id. See `async_setup_entry` below for why it is an owner and
+# not a bare boolean.
+SENSOR_OWNER_KEY = "last_analysis_sensor_owner"
+
+
+@callback
+def async_release_sensor_owner(hass: HomeAssistant, entry_id: str) -> None:
+    """Give up the singleton when its owning entry unloads.
+
+    Called from `async_unload_entry`. The entry_id test is the whole point: with
+    several hubs installed, unloading a *non-owner* must leave the owner's
+    entity — which is still live — owning the slot, or the non-owner would try
+    to add a second sensor on its way back in and Home Assistant would reject
+    it as a duplicate unique_id.
+    """
+    domain_data = hass.data.get(DOMAIN)
+    if domain_data is not None and domain_data.get(SENSOR_OWNER_KEY) == entry_id:
+        domain_data.pop(SENSOR_OWNER_KEY, None)
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -28,14 +49,22 @@ async def async_setup_entry(
     """Set up the Last Analysis sensor once per HA instance.
 
     The sensor is a domain-wide singleton (one Last Analysis across all config
-    entries) — the first entry to be set up registers it; subsequent entries
-    skip the add. The flag lives in hass.data so a full HA reboot re-runs the
-    registration.
+    entries) — the first entry to be set up registers it and becomes its owner;
+    subsequent entries skip the add.
+
+    What is recorded is the owner's entry_id, not a "registered" boolean. The
+    boolean only ever considered a full HA reboot, and the sensor lives on the
+    owning entry's *platform*: unloading that entry takes the entity down while
+    the flag stayed set, so the `async_setup_entry` half of a reload returned
+    early and the sensor stayed `unavailable` until Home Assistant restarted.
+    Every options and agent edit in the UI ends in `async_reload`, so this was
+    a routine edit silently killing `sensor.smartchain_last_analysis` and every
+    automation reading it.
     """
     domain_data = hass.data.setdefault(DOMAIN, {})
-    if domain_data.get("last_analysis_sensor_added"):
+    if domain_data.get(SENSOR_OWNER_KEY) is not None:
         return
-    domain_data["last_analysis_sensor_added"] = True
+    domain_data[SENSOR_OWNER_KEY] = entry.entry_id
     async_add_entities([SmartChainLastAnalysisSensor()])
 
 

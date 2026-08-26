@@ -29,6 +29,7 @@ from langchain_core.messages import HumanMessage
 
 from .client_util import get_client
 from .helpers import async_generate_structured  # re-exported for downstream integrations
+from .sensor import async_release_sensor_owner
 from .tools import ToolRegistry
 from .tools.loader import LoaderError, LoaderResult, load_tools_file
 from .tools.mcp import MCPManager
@@ -647,12 +648,34 @@ _GENERIC_LLM_ERROR = "LLM request failed; see Home Assistant logs for details."
 _GENERIC_CAMERA_ERROR = "Failed to read camera image; see Home Assistant logs for details."
 
 
+def _entry_clients(entry: ConfigEntry):
+    """What an entry currently holds in `runtime_data`, or None if it holds nothing.
+
+    `runtime_data` is declared on `ConfigEntry` as an annotation with no value,
+    so it exists only between our `async_setup_entry` assigning it and Home
+    Assistant deleting it on a successful unload. `getattr` with a default is
+    the only safe read outside that window — an unloaded, disabled or
+    never-set-up entry answers a plain attribute access with AttributeError.
+    """
+    return getattr(entry, "runtime_data", None)
+
+
 def _find_client(hass: HomeAssistant, entity_id: str | None = None):
     """Find a SmartChain LLM client, optionally routed by entity_id.
 
     Routing uses entity_registry to resolve `entity_id` -> `unique_id`, which is
     the only stable mapping back to a subentry / config entry (entity_id is
     derived from the title slug, not the unique_id).
+
+    Both passes read `runtime_data` through `_entry_clients`, never as a plain
+    attribute: `async_entries` hands back unloaded, disabled and failed entries
+    too, and `ConfigEntry.runtime_data` is a bare annotation that Home Assistant
+    *deletes* again on unload. Touching it directly on such an entry raises
+    AttributeError instead of yielding None — so one hub that was disabled or
+    failed to set up took `smartchain.ask`, `analyze_image` and the public
+    `async_generate_structured` down with it while a healthy hub sat right
+    behind it in the list, and the "No SmartChain agent available." answer
+    could never be reached at all.
     """
     if entity_id:
         ent_reg = er.async_get(hass)
@@ -660,23 +683,25 @@ def _find_client(hass: HomeAssistant, entity_id: str | None = None):
         if ent_entry and ent_entry.platform == DOMAIN and ent_entry.unique_id:
             unique_id = ent_entry.unique_id
             for entry in hass.config_entries.async_entries(DOMAIN):
-                if entry.runtime_data is None:
+                runtime_data = _entry_clients(entry)
+                if runtime_data is None:
                     continue
-                if isinstance(entry.runtime_data, dict):
-                    for sub_id, client in entry.runtime_data.items():
+                if isinstance(runtime_data, dict):
+                    for sub_id, client in runtime_data.items():
                         if unique_id == f"{entry.entry_id}_{sub_id}":
                             return client
                 elif unique_id == entry.entry_id:
-                    return entry.runtime_data
+                    return runtime_data
 
     for entry in hass.config_entries.async_entries(DOMAIN):
-        if entry.runtime_data is None:
+        runtime_data = _entry_clients(entry)
+        if runtime_data is None:
             continue
-        if isinstance(entry.runtime_data, dict):
-            for _sub_id, c in entry.runtime_data.items():
+        if isinstance(runtime_data, dict):
+            for _sub_id, c in runtime_data.items():
                 return c
         else:
-            return entry.runtime_data
+            return runtime_data
     return None
 
 
@@ -1295,4 +1320,13 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # a reload of the only config entry must not leave memory, MCP and the
         # entity skeleton cache dead for the rest of the HA run.
         domain_data["subsystems_stopped"] = True
-    return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    if unloaded:
+        # The Last Analysis sensor is a domain-wide singleton living on the
+        # platform of whichever entry registered it, so unloading that entry
+        # takes the entity with it. Release the claim here — and only when the
+        # platforms really went down — so the `async_setup_entry` half of a
+        # reload registers it again instead of returning early and leaving
+        # `sensor.smartchain_last_analysis` unavailable until an HA restart.
+        async_release_sensor_owner(hass, entry.entry_id)
+    return unloaded

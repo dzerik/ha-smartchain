@@ -20,6 +20,7 @@ from homeassistant.components.conversation import (
 from homeassistant.components.conversation.chat_log import (
     AssistantContent,
     Attachment,
+    Content,
     SystemContent,
     ToolResultContent,
     UserContent,
@@ -409,20 +410,15 @@ class SmartChainConversationEntity(ConversationEntity):
 
         for _iteration in range(MAX_TOOL_ITERATIONS):
             chat_history_enabled = options.get(CONF_CHAT_HISTORY, DEFAULT_CHAT_HISTORY)
-            if chat_history_enabled:
-                # _chatlog_to_langchain may read attachment files and run TurboJPEG —
-                # both blocking. Offload to executor when attachments are present.
-                if any(isinstance(c, UserContent) and c.attachments for c in chat_log.content):
-                    messages = await self.hass.async_add_executor_job(
-                        _chatlog_to_langchain, chat_log
-                    )
-                else:
-                    messages = _chatlog_to_langchain(chat_log)
+            turn = chat_log.content if chat_history_enabled else _current_turn_content(chat_log)
+            # _chatlog_to_langchain may read attachment files and run TurboJPEG —
+            # both blocking. Offload to executor when attachments are present.
+            if any(isinstance(c, UserContent) and c.attachments for c in turn):
+                messages = await self.hass.async_add_executor_job(
+                    _chatlog_to_langchain, chat_log, turn
+                )
             else:
-                messages = [
-                    SystemMessage(content=chat_log.content[0].content),
-                    HumanMessage(content=user_input.text),
-                ]
+                messages = _chatlog_to_langchain(chat_log, turn)
 
             try:
                 _extra_external: frozenset[str] = (
@@ -627,10 +623,40 @@ def _attachment_to_base64(attachment: Attachment) -> str | None:
     return f"data:{mime};base64,{encoded}"
 
 
-def _chatlog_to_langchain(chat_log: ChatLog) -> list[BaseMessage]:
-    """Convert ChatLog content to LangChain message list."""
+def _current_turn_content(chat_log: ChatLog) -> list[Content]:
+    """Return the system message plus everything belonging to the turn in flight.
+
+    `chat_history: false` promises to withhold *previous* turns. The turn being
+    handled right now is not history: drop its assistant tool calls and its
+    tool results and the model is shown, on the next pass of the tool loop, the
+    very question whose answer it has already fetched — so it asks for the same
+    tool again, and `unresponded_tool_results` never lets the loop break. That
+    is one light toggled MAX_TOOL_ITERATIONS times.
+
+    The turn starts at the last user message. `llm_input_provided_index` cannot
+    serve as the boundary: it is only set on the Assist path, and it is set to
+    the length of the log *after* the user message was appended, so it points
+    past the message that opens the turn.
+    """
+    start = 1
+    for index in range(len(chat_log.content) - 1, 0, -1):
+        if isinstance(chat_log.content[index], UserContent):
+            start = index
+            break
+    return [chat_log.content[0], *chat_log.content[start:]]
+
+
+def _chatlog_to_langchain(
+    chat_log: ChatLog, content_list: list[Content] | None = None
+) -> list[BaseMessage]:
+    """Convert ChatLog content to LangChain message list.
+
+    `content_list` narrows the conversion to a slice of the log — the current
+    turn — so that trimming history and building messages stay the same code
+    path, attachments and tool results included.
+    """
     messages: list[BaseMessage] = []
-    for content in chat_log.content:
+    for content in chat_log.content if content_list is None else content_list:
         if isinstance(content, SystemContent):
             messages.append(SystemMessage(content=content.content))
         elif isinstance(content, UserContent):
@@ -820,35 +846,74 @@ async def _handle_critique_tool_calls(
             )
 
 
+def _chunk_text(content: Any) -> str:
+    """Return the plain text of a chunk's content.
+
+    Anthropic streams content as a list of blocks once tools are bound, and HA
+    concatenates the content delta with `+=`, so anything but a string raises
+    TypeError mid-stream. `.text` would do this for us, but the supported
+    langchain-core range spans a version where it is a (now deprecated) method
+    and one where it is a property, so we walk the blocks ourselves.
+    """
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict) and block.get("type") == "text":
+                text = block.get("text")
+                if isinstance(text, str):
+                    parts.append(text)
+        return "".join(parts)
+    return ""
+
+
 async def _async_langchain_stream(
     client: Any,
     messages: list[BaseMessage],
     external_tool_names: frozenset[str] = frozenset(),
 ) -> AsyncIterable[dict[str, Any]]:
-    """Convert LangChain astream chunks to HA delta dicts."""
+    """Convert LangChain astream chunks to HA delta dicts.
+
+    Chunks are accumulated because a tool call arrives sliced: the first chunk
+    carries name and id, the rest carry fragments of the JSON arguments. Each
+    chunk on its own re-derives `tool_calls` from its own fragment only, which
+    yields an empty argument dict plus a nameless phantom call — and HA fires a
+    tool call the instant it sees one. Only the summed message holds the whole
+    call, so tool calls are emitted once, after the stream ends.
+    """
     _external = external_tool_names | {HISTORY_TOOL_NAME, DELEGATE_TOOL_NAME}
     first = True
+    accumulated: Any = None
     async for chunk in client.astream(messages):
+        accumulated = chunk if accumulated is None else accumulated + chunk
         delta: dict[str, Any] = {}
         if first:
             delta["role"] = "assistant"
             first = False
-        if chunk.content:
-            delta["content"] = chunk.content
-
-        if chunk.tool_calls:
-            delta["tool_calls"] = [
-                llm.ToolInput(
-                    tool_name=tc["name"],
-                    tool_args=tc["args"],
-                    id=tc["id"],
-                    external=(tc["name"] in _external),
-                )
-                for tc in chunk.tool_calls
-            ]
+        if text := _chunk_text(chunk.content):
+            delta["content"] = text
 
         if delta:
             yield delta
+
+    tool_calls = getattr(accumulated, "tool_calls", None)
+    if not tool_calls:
+        return
+
+    delta = {"role": "assistant"} if first else {}
+    delta["tool_calls"] = [
+        llm.ToolInput(
+            tool_name=tc["name"],
+            tool_args=tc["args"],
+            id=tc["id"],
+            external=(tc["name"] in _external),
+        )
+        for tc in tool_calls
+    ]
+    yield delta
 
 
 def _collect_multi_agent_tool_names(

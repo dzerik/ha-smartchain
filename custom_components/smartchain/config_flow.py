@@ -588,6 +588,17 @@ def subentry_schema(
             ): str,
             vol.Optional(
                 CONF_LLM_HASS_API,
+                # Every other field here carries one; this one did not, so the
+                # form opened with the picker blank, the key never came back in
+                # `user_input`, and `_validate_and_update` — which preserves
+                # only keys the schema does *not* declare — wrote the agent
+                # without it. Editing the temperature was enough to strip the
+                # agent's Assist API, after which `_async_handle_message` takes
+                # the `use_builtin and not llm_hass_api` branch and the sentence
+                # goes to Home Assistant's own agent. No default is set on
+                # purpose: an empty selection must stay clearable, and
+                # `normalize_model_input` drops it.
+                description={"suggested_value": options.get(CONF_LLM_HASS_API)},
             ): selector.SelectSelector(
                 selector.SelectSelectorConfig(
                     options=hass_apis,

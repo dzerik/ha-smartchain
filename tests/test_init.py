@@ -463,11 +463,12 @@ async def test_async_langchain_stream_with_tool_calls() -> None:
     async for delta in _async_langchain_stream(client, []):
         deltas.append(delta)
 
-    assert len(deltas) == 1
+    # Tool calls are emitted once the stream is complete, so the role delta
+    # that opens the message comes first and the call follows it.
     assert deltas[0]["role"] == "assistant"
-    assert "tool_calls" in deltas[0]
-    assert len(deltas[0]["tool_calls"]) == 1
-    tc = deltas[0]["tool_calls"][0]
+    assert "tool_calls" in deltas[-1]
+    assert len(deltas[-1]["tool_calls"]) == 1
+    tc = deltas[-1]["tool_calls"][0]
     assert isinstance(tc, llm.ToolInput)
     assert tc.tool_name == "HassTurnOn"
     assert tc.tool_args == {"entity_id": "light.kitchen"}
