@@ -10,23 +10,18 @@ from homeassistant.data_entry_flow import FlowResultType
 from httpx import ConnectError
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from custom_components.smartchain.config_flow import subentry_schema
 from custom_components.smartchain.const import (
     CONF_API_KEY,
     CONF_BASE_URL,
     CONF_CHAT_MODEL,
-    CONF_CHAT_MODEL_USER,
     CONF_ENGINE,
     CONF_FOLDER_ID,
-    CONF_LLM_HASS_API,
-    CONF_PROCESS_BUILTIN_SENTENCES,
     CONF_PROFANITY,
     CONF_PROMPT,
     CONF_SKIP_VALIDATION,
-    CONF_TEMPERATURE,
     CONF_VERIFY_SSL,
     DEFAULT_OLLAMA_BASE_URL,
-    DEFAULT_PROMPT,
-    DEFAULT_TEMPERATURE,
     DOMAIN,
     ID_ANTHROPIC,
     ID_DEEPSEEK,
@@ -394,10 +389,38 @@ async def test_options_flow_shows_settings(
     assert result["step_id"] == "settings"
 
 
-async def test_options_flow_submit_with_model(
+async def test_options_flow_offers_only_connection_settings(
     hass: HomeAssistant, mock_gigachat_options_entry, mock_llm_client
 ) -> None:
-    """Test options flow creates entry when model is selected."""
+    """The options step is the connection, not an agent.
+
+    Checked against `subentry_schema` rather than a hand-written list of field
+    names: a field added to the agent form later must not be able to leak back
+    into the connection form without failing here.
+    """
+    with patch(
+        "custom_components.smartchain.get_client",
+        new_callable=AsyncMock,
+        return_value=mock_llm_client,
+    ):
+        await hass.config_entries.async_setup(mock_gigachat_options_entry.entry_id)
+        await hass.async_block_till_done()
+
+    result = await _options_flow_select_settings(hass, mock_gigachat_options_entry.entry_id)
+    offered = {str(key.schema) for key in result["data_schema"].schema}
+    assert offered == {CONF_VERIFY_SSL, CONF_PROFANITY}
+
+    agent_fields = {
+        str(key.schema) for key in subentry_schema(hass, "GigaChat", {}, models=["GigaChat"]).schema
+    }
+    assert offered & agent_fields == {CONF_VERIFY_SSL, CONF_PROFANITY}
+    assert not (agent_fields - {CONF_VERIFY_SSL, CONF_PROFANITY}) & offered
+
+
+async def test_options_flow_saves_connection_settings(
+    hass: HomeAssistant, mock_gigachat_options_entry, mock_llm_client
+) -> None:
+    """The two GigaChat connection switches round-trip into entry.options."""
     with patch(
         "custom_components.smartchain.get_client",
         new_callable=AsyncMock,
@@ -409,105 +432,53 @@ async def test_options_flow_submit_with_model(
     result = await _options_flow_select_settings(hass, mock_gigachat_options_entry.entry_id)
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
-        {
-            CONF_CHAT_MODEL: "GigaChat",
-            CONF_PROMPT: DEFAULT_PROMPT,
-            CONF_TEMPERATURE: DEFAULT_TEMPERATURE,
-            CONF_PROCESS_BUILTIN_SENTENCES: True,
-        },
-    )
-    assert result["type"] is FlowResultType.CREATE_ENTRY
-    assert result["data"][CONF_CHAT_MODEL] == "GigaChat"
-
-
-async def test_options_flow_model_required_error(
-    hass: HomeAssistant, mock_gigachat_options_entry, mock_llm_client
-) -> None:
-    """Test options flow shows error when no model selected."""
-    with patch(
-        "custom_components.smartchain.get_client",
-        new_callable=AsyncMock,
-        return_value=mock_llm_client,
-    ):
-        await hass.config_entries.async_setup(mock_gigachat_options_entry.entry_id)
-        await hass.async_block_till_done()
-
-    result = await _options_flow_select_settings(hass, mock_gigachat_options_entry.entry_id)
-    result = await hass.config_entries.options.async_configure(
-        result["flow_id"],
-        {
-            CONF_CHAT_MODEL: "",
-            CONF_CHAT_MODEL_USER: "",
-            CONF_PROMPT: DEFAULT_PROMPT,
-            CONF_TEMPERATURE: DEFAULT_TEMPERATURE,
-            CONF_PROCESS_BUILTIN_SENTENCES: True,
-        },
-    )
-    assert result["type"] is FlowResultType.FORM
-    assert result["errors"] == {"base": "model_required"}
-
-
-async def test_options_flow_custom_model_user(
-    hass: HomeAssistant, mock_gigachat_options_entry, mock_llm_client
-) -> None:
-    """Test options flow accepts custom model_user even without dropdown model."""
-    with patch(
-        "custom_components.smartchain.get_client",
-        new_callable=AsyncMock,
-        return_value=mock_llm_client,
-    ):
-        await hass.config_entries.async_setup(mock_gigachat_options_entry.entry_id)
-        await hass.async_block_till_done()
-
-    result = await _options_flow_select_settings(hass, mock_gigachat_options_entry.entry_id)
-    result = await hass.config_entries.options.async_configure(
-        result["flow_id"],
-        {
-            CONF_CHAT_MODEL: "",
-            CONF_CHAT_MODEL_USER: "GigaChat-Pro-2",
-            CONF_PROMPT: DEFAULT_PROMPT,
-            CONF_TEMPERATURE: 0.5,
-            CONF_PROCESS_BUILTIN_SENTENCES: True,
-        },
-    )
-    assert result["type"] is FlowResultType.CREATE_ENTRY
-    assert result["data"][CONF_CHAT_MODEL_USER] == "GigaChat-Pro-2"
-    assert result["data"][CONF_TEMPERATURE] == 0.5
-
-
-async def test_options_flow_gigachat_extra_fields(
-    hass: HomeAssistant, mock_gigachat_options_entry, mock_llm_client
-) -> None:
-    """Test GigaChat options flow includes profanity and verify_ssl fields."""
-    with patch(
-        "custom_components.smartchain.get_client",
-        new_callable=AsyncMock,
-        return_value=mock_llm_client,
-    ):
-        await hass.config_entries.async_setup(mock_gigachat_options_entry.entry_id)
-        await hass.async_block_till_done()
-
-    result = await _options_flow_select_settings(hass, mock_gigachat_options_entry.entry_id)
-    result = await hass.config_entries.options.async_configure(
-        result["flow_id"],
-        {
-            CONF_CHAT_MODEL: "GigaChat",
-            CONF_PROMPT: DEFAULT_PROMPT,
-            CONF_TEMPERATURE: DEFAULT_TEMPERATURE,
-            CONF_PROCESS_BUILTIN_SENTENCES: True,
-            CONF_PROFANITY: True,
-            CONF_VERIFY_SSL: True,
-        },
+        {CONF_PROFANITY: True, CONF_VERIFY_SSL: False},
     )
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["data"][CONF_PROFANITY] is True
-    assert result["data"][CONF_VERIFY_SSL] is True
+    assert result["data"][CONF_VERIFY_SSL] is False
 
 
-async def test_options_flow_openai_no_gigachat_fields(
+async def test_options_flow_leaves_unpresented_options_in_storage(
+    hass: HomeAssistant, mock_llm_client
+) -> None:
+    """An entry that kept legacy agent options must not lose them on a save.
+
+    The spec's one rule for the both-options-and-agents case is that the
+    options stay in storage untouched; replacing them wholesale here would be
+    the one irreversible act in the change.
+    """
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_ENGINE: ID_GIGACHAT, CONF_API_KEY: "test-credentials"},
+        options={CONF_CHAT_MODEL: "GigaChat-Legacy", CONF_PROMPT: "legacy prompt"},
+        unique_id="GigaChat",
+        minor_version=2,
+    )
+    entry.add_to_hass(hass)
+    with patch(
+        "custom_components.smartchain.get_client",
+        new_callable=AsyncMock,
+        return_value=mock_llm_client,
+    ):
+        await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    result = await _options_flow_select_settings(hass, entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_PROFANITY: True, CONF_VERIFY_SSL: True},
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["data"][CONF_CHAT_MODEL] == "GigaChat-Legacy"
+    assert result["data"][CONF_PROMPT] == "legacy prompt"
+    assert result["data"][CONF_PROFANITY] is True
+
+
+async def test_options_flow_aborts_when_provider_has_no_connection_settings(
     hass: HomeAssistant, mock_openai_options_entry, mock_llm_client
 ) -> None:
-    """Test OpenAI options flow does not include GigaChat-specific fields."""
+    """An empty form is a lie; the step says so instead."""
     with patch(
         "custom_components.smartchain.get_client",
         new_callable=AsyncMock,
@@ -516,35 +487,6 @@ async def test_options_flow_openai_no_gigachat_fields(
         await hass.config_entries.async_setup(mock_openai_options_entry.entry_id)
         await hass.async_block_till_done()
 
-    result = await _options_flow_select_settings(hass, mock_openai_options_entry.entry_id)
-    # Schema should not contain profanity/verify_ssl for non-GigaChat
-    schema_keys = [str(k) for k in result["data_schema"].schema]
-    assert CONF_PROFANITY not in schema_keys
-    assert CONF_VERIFY_SSL not in schema_keys
-
-
-async def test_options_flow_empty_llm_api_removed(
-    hass: HomeAssistant, mock_gigachat_options_entry, mock_llm_client
-) -> None:
-    """Test that empty LLM API selection is removed from options."""
-    with patch(
-        "custom_components.smartchain.get_client",
-        new_callable=AsyncMock,
-        return_value=mock_llm_client,
-    ):
-        await hass.config_entries.async_setup(mock_gigachat_options_entry.entry_id)
-        await hass.async_block_till_done()
-
-    result = await _options_flow_select_settings(hass, mock_gigachat_options_entry.entry_id)
-    result = await hass.config_entries.options.async_configure(
-        result["flow_id"],
-        {
-            CONF_CHAT_MODEL: "GigaChat",
-            CONF_PROMPT: DEFAULT_PROMPT,
-            CONF_TEMPERATURE: DEFAULT_TEMPERATURE,
-            CONF_PROCESS_BUILTIN_SENTENCES: True,
-            CONF_LLM_HASS_API: [],
-        },
-    )
-    assert result["type"] is FlowResultType.CREATE_ENTRY
-    assert CONF_LLM_HASS_API not in result["data"]
+    result = await hass.config_entries.options.async_init(mock_openai_options_entry.entry_id)
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "no_connection_settings"

@@ -8,9 +8,15 @@ from typing import Any
 import voluptuous as vol
 from homeassistant.components.camera import async_get_image
 from homeassistant.components.frontend import async_register_built_in_panel
-from homeassistant.config_entries import ConfigEntry
+from homeassistant.config_entries import ConfigEntry, ConfigSubentry
 from homeassistant.const import Platform
-from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse
+from homeassistant.core import (
+    HomeAssistant,
+    ServiceCall,
+    ServiceResponse,
+    SupportsResponse,
+    callback,
+)
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import entity_registry as er
@@ -33,6 +39,7 @@ from .const import (
     CONF_ENGINE,
     CONF_MAX_TOKENS,
     CONF_PROFANITY,
+    CONF_PROMPT,
     CONF_TEMPERATURE,
     CONF_VERIFY_SSL,
     DEFAULT_TEMPERATURE,
@@ -70,6 +77,146 @@ except (ImportError, AttributeError):
 async def update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Update listener."""
     await hass.config_entries.async_reload(entry.entry_id)
+
+
+async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Migrate a config entry to the current minor version.
+
+    Lives here rather than in `async_setup_entry` on purpose: it writes
+    `entry.options`, and `update_listener` — registered as an update listener
+    during setup — reloads the entry on any update, so writing options from
+    inside setup would re-enter setup. `async_migrate_entry` is Home Assistant's
+    dedicated pre-setup hook and runs before that listener exists.
+    """
+    if entry.minor_version >= 2:
+        return True
+
+    options = _migrate_legacy_agent(hass, entry)
+    if options is None:
+        # The migration refused. Leave `minor_version` at 1 so the entry stays
+        # on the legacy path, and so the attempt is retried on the next start
+        # once whatever blocked it has been resolved.
+        return True
+
+    hass.config_entries.async_update_entry(entry, options=options, minor_version=2)
+    return True
+
+
+@callback
+def _migrate_legacy_agent(hass: HomeAssistant, entry: ConfigEntry) -> dict[str, Any] | None:
+    """Turn a legacy entry's agent-shaped options into a real agent subentry.
+
+    Returns the options the entry should carry afterwards, or ``None`` to refuse
+    the migration and leave the entry exactly as it was found.
+
+    The delicate part is the entity id. The legacy entity's unique id is the
+    config entry id; an agent's is ``f"{entry_id}_{subentry_id}"``. Creating the
+    subentry and letting a second entity appear would orphan the old one and
+    break every automation, script and dashboard card naming it — so the
+    existing registry rows are rewritten in place instead, which keeps the
+    entity id, the friendly name and the area. There are two of them: the
+    conversation entity and, when the AI Task platform is available, its
+    counterpart. Moving one and orphaning the other is the same failure in a
+    smaller costume.
+    """
+    options = dict(entry.options)
+    if not any(key in options for key in (CONF_CHAT_MODEL, CONF_CHAT_MODEL_USER, CONF_PROMPT)):
+        # Not agent-shaped: a connection-only entry, or one already migrated by
+        # hand. Nothing to do, and nothing to log about.
+        return options
+
+    agents = [
+        sub
+        for sub in (entry.subentries or {}).values()
+        if sub.subentry_type == SUBENTRY_TYPE_CONVERSATION
+    ]
+    if agents:
+        # Both options and agents. The options have been dead configuration
+        # since the first agent was created; clearing them would be tidier and
+        # is the one irreversible act available here, for data that costs
+        # nothing to leave alone. So: say so once, change nothing.
+        LOGGER.info(
+            "SmartChain entry %s carries legacy agent options alongside %d agent(s). "
+            "The options are no longer used or presented; they are left in storage untouched",
+            entry.title,
+            len(agents),
+        )
+        return options
+
+    from .config_flow import CONNECTION_KEYS, agent_title
+
+    engine = entry.data.get(CONF_ENGINE) or ID_GIGACHAT
+    # The agent gets everything, including the connection switches —
+    # `_resolve_client_args` forwards those per agent, and dropping them would
+    # quietly change an existing GigaChat user's behaviour.
+    agent_data = dict(options)
+    connection_only = {
+        key: options[key] for key in CONNECTION_KEYS.get(engine, ()) if key in options
+    }
+
+    subentry = ConfigSubentry(
+        data=agent_data,
+        subentry_type=SUBENTRY_TYPE_CONVERSATION,
+        title=agent_title(agent_data),
+        unique_id=None,
+    )
+    hass.config_entries.async_add_subentry(entry, subentry)
+
+    ent_reg = er.async_get(hass)
+    moves = [
+        ("conversation", entry.entry_id, f"{entry.entry_id}_{subentry.subentry_id}"),
+        (
+            "ai_task",
+            f"{entry.entry_id}_ai_task",
+            f"{entry.entry_id}_{subentry.subentry_id}_ai_task",
+        ),
+    ]
+    done: list[tuple[str, str]] = []
+    for domain, old_unique_id, new_unique_id in moves:
+        entity_id = ent_reg.async_get_entity_id(domain, DOMAIN, old_unique_id)
+        if entity_id is None:
+            # Legitimately absent: the AI Task platform is conditional, and a
+            # user may have deleted the entity.
+            continue
+        try:
+            ent_reg.async_update_entity(entity_id, new_unique_id=new_unique_id)
+        except Exception as err:  # noqa: BLE001 - the registry raises ValueError today
+            LOGGER.error(
+                "SmartChain entry %s: refusing to migrate the legacy agent — could not move "
+                "%s to its new unique id (%s). The entry is left on the legacy path; "
+                "resolve the conflicting entity and restart Home Assistant",
+                entry.title,
+                entity_id,
+                type(err).__name__,
+            )
+            _undo_unique_id_moves(ent_reg, done)
+            hass.config_entries.async_remove_subentry(entry, subentry.subentry_id)
+            return None
+        done.append((entity_id, old_unique_id))
+
+    LOGGER.info(
+        "SmartChain entry %s: migrated legacy options into agent %r; %d entity(ies) kept "
+        "their entity id",
+        entry.title,
+        subentry.title,
+        len(done),
+    )
+    return connection_only
+
+
+@callback
+def _undo_unique_id_moves(ent_reg: er.EntityRegistry, done: list[tuple[str, str]]) -> None:
+    """Put back the unique ids already rewritten before a migration refused."""
+    for entity_id, old_unique_id in reversed(done):
+        try:
+            ent_reg.async_update_entity(entity_id, new_unique_id=old_unique_id)
+        except Exception as err:  # noqa: BLE001
+            LOGGER.error(
+                "SmartChain: could not restore the unique id of %s after a refused "
+                "migration (%s); the entity may need to be re-added",
+                entity_id,
+                type(err).__name__,
+            )
 
 
 def _resolve_client_args(options: dict) -> dict:
@@ -529,24 +676,32 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             skeleton.invalidate()
             skeleton.start()
 
-    subentries = entry.subentries
-    if subentries:
-        clients: dict[str, object] = {}
-        for sub_id, subentry in subentries.items():
-            if subentry.subentry_type != SUBENTRY_TYPE_CONVERSATION:
-                continue
-            common_args = _resolve_client_args(dict(subentry.data))
-            clients[sub_id] = await get_client(hass, engine, entry, common_args)
-        entry.runtime_data = clients
-    else:
+    # One client per conversation agent. Filtering by subentry type rather than
+    # asking `if entry.subentries:` matters: an entry whose only subentry is an
+    # embeddings binding has no agents, and the old truthiness test silently
+    # took it down the legacy single-entity path.
+    clients: dict[str, object] = {}
+    for sub_id, subentry in (entry.subentries or {}).items():
+        if subentry.subentry_type != SUBENTRY_TYPE_CONVERSATION:
+            continue
+        common_args = _resolve_client_args(dict(subentry.data))
+        clients[sub_id] = await get_client(hass, engine, entry, common_args)
+
+    if not clients and entry.minor_version < 2:
+        # Only reachable when `_migrate_legacy_agent` refused (it is the sole
+        # path that leaves an entry below minor version 2). Refusing must
+        # degrade nothing, so the legacy single client stays for that entry.
         common_args = _resolve_client_args(dict(entry.options))
         LOGGER.debug(
-            "SmartChain setup: engine=%s, resolved_model=%s",
+            "SmartChain setup: engine=%s, resolved_model=%s (legacy, migration refused)",
             engine,
             common_args.get("model"),
         )
-        client = await get_client(hass, engine, entry, common_args)
-        entry.runtime_data = client
+        entry.runtime_data = await get_client(hass, engine, entry, common_args)
+    else:
+        # An entry with no agents is a connection nobody is using yet — a
+        # coherent state, not an error, and not an entity.
+        entry.runtime_data = clients
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True

@@ -110,11 +110,21 @@ Embeddings for long-term memory and the entity index are available from GigaChat
 | LM Studio | Base URL (default: `http://localhost:1234/v1`) — no API key needed |
 | llama.cpp | Base URL (default: `http://localhost:8080/v1`) — no API key needed |
 
-### 3. Configure Options
+### 3. Add an Agent
+A config entry is a **connection** to a provider and nothing more. Everything about
+a conversation agent lives on an agent sub-entry, which you add explicitly:
+**Settings > Devices & Services > SmartChain > Add agent** (or the Agents tab of
+the SmartChain panel).
+
 - **Model** — select from list or type custom model name
 - **Assist API** — enable device control via LLM tool calling
 - **System Prompt** — customize the assistant's behavior
 - **State History Tool** — enable past event analysis
+
+The entry's own **Configure** dialog holds connection settings only — for GigaChat
+`verify_ssl` and `profanity`; every other provider has none and says so. A provider
+with no agents yet is a connection nobody is using, which is a valid state: it
+simply provides no conversation entity.
 
 ### 4. Activate Assistant
 **Settings > Voice Assistants > Add** — select your SmartChain entity as the conversation agent.

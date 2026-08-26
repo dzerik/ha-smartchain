@@ -177,10 +177,56 @@ def agent_title(data: Mapping[str, Any]) -> str:
     return data.get(CONF_CHAT_MODEL_USER) or data.get(CONF_CHAT_MODEL) or "Agent"
 
 
+# Everything that belongs to the connection rather than to an agent, per engine.
+# Deliberately data-driven so the "does this provider have any connection
+# settings at all" question has exactly one answer, and callers that must
+# separate connection keys from agent keys (the migration in `__init__.py`) read
+# the same list the form does.
+CONNECTION_KEYS: dict[str, tuple[str, ...]] = {
+    ID_GIGACHAT: (CONF_VERIFY_SSL, CONF_PROFANITY),
+}
+
+
+def connection_schema(engine: str, options: Mapping[str, Any] | None = None) -> vol.Schema:
+    """Return the connection-level settings for ``engine``, and nothing else.
+
+    A config entry is a connection to a provider: credentials, endpoint, and the
+    few switches that belong to the connection itself. Model, prompt,
+    temperature, tools and entity context are properties of an *agent* and live
+    on a conversation subentry, so none of them appear here — this schema is
+    deliberately not `subentry_schema`.
+
+    For GigaChat that leaves `verify_ssl` and `profanity`, the two keys
+    `client_util.get_client` reads off `entry.options`. Every other provider has
+    none and gets an empty schema; a caller must show an honest sentence rather
+    than render a form with no fields.
+    """
+    current = options or {}
+    if not CONNECTION_KEYS.get(engine):
+        return vol.Schema({})
+    return vol.Schema(
+        {
+            vol.Optional(
+                CONF_VERIFY_SSL,
+                description={"suggested_value": current.get(CONF_VERIFY_SSL, DEFAULT_VERIFY_SSL)},
+                default=DEFAULT_VERIFY_SSL,
+            ): bool,
+            vol.Optional(
+                CONF_PROFANITY,
+                description={"suggested_value": current.get(CONF_PROFANITY, DEFAULT_PROFANITY)},
+                default=DEFAULT_PROFANITY,
+            ): bool,
+        }
+    )
+
+
 class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for SmartChain."""
 
     VERSION = 1
+    # 1 -> 2 turns a legacy entry's agent-shaped `options` into a real
+    # conversation subentry; see `__init__.async_migrate_entry`.
+    MINOR_VERSION = 2
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Handle the initial step."""
@@ -373,18 +419,26 @@ class OptionsFlow(config_entries.OptionsFlow):
     async def async_step_settings(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Manage model settings."""
-        unique_id = self.config_entry.unique_id
+        """Manage the connection's settings — the connection's, and nothing else.
+
+        An entry is a connection; the model, prompt and tools belong to an agent
+        subentry. So this form is `connection_schema`, not `subentry_schema`, and
+        there is deliberately no model list to fetch and no `normalize_model_input`
+        to run — with no model field in the schema that check would return
+        "model_required" forever and make the step unsubmittable.
+        """
         engine = self.config_entry.data.get(CONF_ENGINE, ID_GIGACHAT)
-        models = await async_fetch_models(self.hass, engine, self.config_entry.data)
-        schema = subentry_schema(self.hass, unique_id, self.config_entry.options, models=models)
+        schema = connection_schema(engine, self.config_entry.options)
+        if not schema.schema:
+            return self.async_abort(reason="no_connection_settings")
+
         if user_input is not None:
-            error = normalize_model_input(user_input)
-            if error:
-                return self.async_show_form(
-                    step_id="settings", data_schema=schema, errors={"base": error}
-                )
-            return self.async_create_entry(title=unique_id, data=user_input)
+            # Merge rather than replace. A legacy entry that also has agents
+            # keeps its old agent-shaped options in storage untouched (they are
+            # simply no longer presented), and replacing wholesale here would
+            # destroy them on the first save.
+            options = {**dict(self.config_entry.options), **user_input}
+            return self.async_create_entry(title=self.config_entry.unique_id or "", data=options)
 
         return self.async_show_form(
             step_id="settings",

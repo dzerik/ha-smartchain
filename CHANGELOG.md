@@ -5,6 +5,57 @@ All notable changes to this project are documented in this file.
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 project follows [Semantic Versioning](https://semver.org/).
 
+> **Note:** `5.0.1`–`5.0.7` were released without changelog entries and are not
+> reconstructed here.
+
+## [5.1.0] - unreleased
+
+### ⚠ BREAKING CHANGES
+
+**A config entry is a connection, not an agent.** The entry's **Configure** dialog
+used to edit an agent — model, prompt, temperature, tools, entity context — using
+the very same form an agent sub-entry uses. Those values drove exactly one thing:
+a single "legacy" conversation entity that existed only while the entry had no
+agent sub-entries. For anyone who had created an agent they were dead
+configuration: a control that looked live and was not.
+
+The dialog now offers **connection settings only**. For GigaChat that is
+`verify_ssl` and `profanity`; every other provider has none and the step says so
+instead of presenting an empty form. The legacy single-entity path is gone: an
+entry with no agents provides no conversation entity, which is a coherent state —
+a connection nobody is using yet — and not an error.
+
+**Automatic migration, with the entity id preserved.** On the first start after
+upgrading, an entry that has agent-shaped options and no conversation sub-entry
+gets one created from those options. The legacy entity's unique id was the config
+entry id and an agent's is `{entry_id}_{subentry_id}`, so a naive migration would
+have orphaned the old entity and broken every automation, script and dashboard
+card naming it. Instead the existing registry rows are rewritten **in place** —
+both the `conversation` entity and the `ai_task` one — so the entity id, friendly
+name and area survive untouched. If a rewrite is impossible (a colliding unique
+id, say) the migration **refuses**: it undoes what it did, leaves the entry exactly
+as it was, logs why, and that entry keeps the legacy path until the conflict is
+resolved.
+
+An entry that has **both** options and agents is left alone — the options stay in
+storage, unread and no longer presented, and a single log line says they were
+found and ignored.
+
+### Fixed
+- An entry whose only sub-entry was an **embeddings** binding lost its conversation
+  entity. The old test was `if entry.subentries:` — the truthiness of the whole
+  sub-entry dict — rather than "has a conversation sub-entry".
+- Saving the entry's settings replaced `entry.options` wholesale. It now merges, so
+  a key the current form does not present cannot be destroyed by a save.
+
+### Changed
+- The panel's Settings tab is now connection settings, and prints an honest
+  sentence for a provider that has none. Its "Refresh models" button is gone from
+  that form — a connection form declares no model.
+- `smartchain/settings/get` serves `connection_schema` and a new `empty` flag, and
+  no longer fetches a model list; `smartchain/settings/save` refuses a provider
+  with no connection settings rather than validating against the agent form.
+
 ## [5.0.0] - unreleased
 
 ### ⚠ BREAKING CHANGES

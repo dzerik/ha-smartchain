@@ -12,7 +12,9 @@ import { callWS, showToast } from "../services.js";
  * here with no change to this file.
  *
  * Properties: .hass, .commands ({schema, save}), .entryId, .subentryId,
- *             .showCancel (default true — a generic UI toggle, not a field)
+ *             .showCancel (default true — a generic UI toggle, not a field),
+ *             .showRefresh (default true — "Refresh models" is meaningless on
+ *              a form whose schema has no model in it)
  *
  * Events:
  *   sc-loaded      — detail: the full schema-command result (schema, data,
@@ -43,6 +45,7 @@ export class ScConfigForm extends HTMLElement {
     this._descriptions = {};
     this._fieldErrors = null;
     this._showCancel = true;
+    this._showRefresh = true;
     // Guards only the *automatic* load triggered by property arrival (see
     // _loadIfReady) — it does not affect explicit calls to load(), which is
     // how the Refresh control keeps working after the first load.
@@ -71,6 +74,11 @@ export class ScConfigForm extends HTMLElement {
 
   set showCancel(val) {
     this._showCancel = val !== false;
+    this._syncCancelVisibility();
+  }
+
+  set showRefresh(val) {
+    this._showRefresh = val !== false;
     this._syncCancelVisibility();
   }
 
@@ -105,8 +113,10 @@ export class ScConfigForm extends HTMLElement {
   }
 
   _syncCancelVisibility() {
-    const button = this.querySelector("#sc-form-cancel");
-    if (button) button.classList.toggle("sc-hidden", !this._showCancel);
+    const cancel = this.querySelector("#sc-form-cancel");
+    if (cancel) cancel.classList.toggle("sc-hidden", !this._showCancel);
+    const refresh = this.querySelector("#sc-form-refresh");
+    if (refresh) refresh.classList.toggle("sc-hidden", !this._showRefresh);
   }
 
   async load(refresh = false) {

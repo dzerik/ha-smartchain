@@ -26,19 +26,19 @@ async def async_setup_entry(
     """Set up AI Task entities."""
     entities: list[SmartChainAITaskEntity] = []
 
-    subentries = config_entry.subentries
-    if subentries:
-        for sub_id, subentry in subentries.items():
-            if subentry.subentry_type != SUBENTRY_TYPE_CONVERSATION:
-                continue
-            entities.append(
-                SmartChainAITaskEntity(
-                    config_entry,
-                    subentry_id=sub_id,
-                )
+    for sub_id, subentry in (config_entry.subentries or {}).items():
+        if subentry.subentry_type != SUBENTRY_TYPE_CONVERSATION:
+            continue
+        entities.append(
+            SmartChainAITaskEntity(
+                config_entry,
+                subentry_id=sub_id,
             )
-    else:
-        # Legacy mode: single entity
+        )
+
+    if not entities and config_entry.minor_version < 2:
+        # Mirrors conversation.py: only an entry whose migration refused stays
+        # below minor version 2, and it must not lose its entity.
         entities.append(SmartChainAITaskEntity(config_entry))
 
     async_add_entities(entities)

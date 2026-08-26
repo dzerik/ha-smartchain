@@ -108,20 +108,22 @@ async def async_setup_entry(
     """Set up conversation entities."""
     entities: list[SmartChainConversationEntity] = []
 
-    subentries = config_entry.subentries
-    if subentries:
-        for sub_id, subentry in subentries.items():
-            if subentry.subentry_type != SUBENTRY_TYPE_CONVERSATION:
-                continue
-            entities.append(
-                SmartChainConversationEntity(
-                    config_entry,
-                    subentry_id=sub_id,
-                    options=dict(subentry.data),
-                )
+    for sub_id, subentry in (config_entry.subentries or {}).items():
+        if subentry.subentry_type != SUBENTRY_TYPE_CONVERSATION:
+            continue
+        entities.append(
+            SmartChainConversationEntity(
+                config_entry,
+                subentry_id=sub_id,
+                options=dict(subentry.data),
             )
-    else:
-        # Legacy mode: single entity from entry.options
+        )
+
+    if not entities and config_entry.minor_version < 2:
+        # Only an entry whose migration refused stays below minor version 2
+        # (see `__init__._migrate_legacy_agent`). It keeps its single legacy
+        # entity rather than losing it; an entry with no agents and no refused
+        # migration is a connection nobody is using yet and gets no entity.
         entities.append(SmartChainConversationEntity(config_entry))
 
     async_add_entities(entities)

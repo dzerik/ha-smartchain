@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
+from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.smartchain.const import (
@@ -20,6 +21,7 @@ from custom_components.smartchain.const import (
     DOMAIN,
     ID_GIGACHAT,
     SUBENTRY_TYPE_CONVERSATION,
+    SUBENTRY_TYPE_EMBEDDINGS,
 )
 
 pytestmark = pytest.mark.usefixtures("enable_custom_integrations")
@@ -233,10 +235,14 @@ async def test_setup_with_multiple_subentries(hass: HomeAssistant, mock_llm_clie
     assert len(custom_entities) >= 2
 
 
-async def test_setup_legacy_without_subentries(
+async def test_setup_without_agents_is_a_connection_nobody_uses(
     hass: HomeAssistant, mock_gigachat_entry, mock_llm_client
 ) -> None:
-    """Test that setup still works in legacy mode (no subentries)."""
+    """An entry with no agents sets up cleanly and provides no entity.
+
+    This is the state a freshly connected provider is in. It is coherent, not
+    an error — and it must no longer conjure a legacy single entity.
+    """
     with patch(
         "custom_components.smartchain.get_client",
         new_callable=AsyncMock,
@@ -246,8 +252,48 @@ async def test_setup_legacy_without_subentries(
         await hass.async_block_till_done()
 
     assert result is True
-    # Legacy: runtime_data is a client, not a dict
-    assert not isinstance(mock_gigachat_entry.runtime_data, dict)
+    assert mock_gigachat_entry.runtime_data == {}
+    entity_reg = er.async_get(hass)
+    assert [
+        entity
+        for entity in entity_reg.entities.values()
+        if entity.platform == DOMAIN and entity.domain == "conversation"
+    ] == []
+
+
+async def test_embeddings_only_entry_keeps_no_conversation_entity(
+    hass: HomeAssistant, mock_llm_client
+) -> None:
+    """A non-conversation subentry must not be mistaken for an agent.
+
+    The old test was `if entry.subentries:` — the truthiness of the whole
+    subentry dict — so an entry whose only subentry was an embeddings binding
+    silently took the legacy path.
+    """
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_ENGINE: ID_GIGACHAT, CONF_API_KEY: "test-credentials"},
+        options={},
+        unique_id="GigaChat",
+        subentries_data=[
+            {
+                "data": {"name": "vectors", "model": "Embeddings"},
+                "subentry_type": SUBENTRY_TYPE_EMBEDDINGS,
+                "title": "vectors",
+                "unique_id": None,
+            }
+        ],
+    )
+    entry.add_to_hass(hass)
+    with patch(
+        "custom_components.smartchain.get_client",
+        new_callable=AsyncMock,
+        return_value=mock_llm_client,
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    assert entry.runtime_data == {}
 
 
 # --- Conversation entity with subentry ---

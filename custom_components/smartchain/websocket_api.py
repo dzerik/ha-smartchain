@@ -318,8 +318,16 @@ async def ws_settings_get(
     connection: websocket_api.ActiveConnection,
     msg: dict[str, Any],
 ) -> None:
-    """Serve the entry's options form — the same schema the agent form uses."""
-    from .config_flow import subentry_schema
+    """Serve the entry's *connection* form.
+
+    Not the agent schema: an entry is a connection, and the model, prompt and
+    tools live on a conversation subentry. Most providers therefore have no
+    connection settings at all, which is why the result carries ``empty`` — the
+    panel must say so rather than render a form with no fields. ``refresh`` is
+    accepted and ignored; a connection form has no model list, so it must not
+    pay a network round trip to open.
+    """
+    from .config_flow import connection_schema
 
     entry = _get_entry(hass, msg["entry_id"])
     if entry is None:
@@ -327,13 +335,14 @@ async def ws_settings_get(
         return
 
     defaults = dict(entry.options)
-    models = await _models_for(hass, entry, refresh=msg["refresh"], purpose=CAPABILITY_CHAT)
-    schema = subentry_schema(hass, entry.unique_id, defaults, models=models)
+    engine = entry.data.get(CONF_ENGINE, ID_GIGACHAT)
+    schema = connection_schema(engine, defaults)
 
     # Same trap as ws_agent_schema (see F1): the schema is conditional, so a
     # stale option key it no longer declares must not be served — <ha-form>
     # would echo it back and PREVENT_EXTRA in ws_settings_save would reject it
-    # forever.
+    # forever. It also keeps a legacy entry's leftover agent options off the
+    # wire entirely.
     declared = {str(key.schema) for key in schema.schema}
     served = {name: value for name, value in defaults.items() if name in declared}
 
@@ -342,6 +351,7 @@ async def ws_settings_get(
         {
             "schema": voluptuous_serialize.convert(schema, custom_serializer=cv.custom_serializer),
             "data": served,
+            "empty": not schema.schema,
             "labels": await async_field_labels(hass, "options"),
             "descriptions": await async_field_descriptions(hass, "options"),
         },
@@ -362,20 +372,28 @@ async def ws_settings_save(
     connection: websocket_api.ActiveConnection,
     msg: dict[str, Any],
 ) -> None:
-    """Save the entry's options, validating exactly as the agent form does.
+    """Save the entry's connection settings.
 
     Written with ``options=``, never ``data=`` — ``entry.data`` is where the
-    provider credential lives.
+    provider credential lives. There is no ``normalize_model_input`` here: the
+    connection schema declares no model, so that check would reject every
+    submission with "model_required".
     """
-    from .config_flow import normalize_model_input, subentry_schema
+    from .config_flow import connection_schema
 
     entry = _get_entry(hass, msg["entry_id"])
     if entry is None:
         connection.send_error(msg["id"], "not_found", "Unknown config entry")
         return
 
-    models = await _models_for(hass, entry, refresh=False, purpose=CAPABILITY_CHAT)
-    schema = subentry_schema(hass, entry.unique_id, dict(entry.options), models=models)
+    stored = dict(entry.options)
+    engine = entry.data.get(CONF_ENGINE, ID_GIGACHAT)
+    schema = connection_schema(engine, stored)
+    if not schema.schema:
+        connection.send_error(
+            msg["id"], "not_supported", "This provider has no connection settings"
+        )
+        return
 
     try:
         data = dict(schema(dict(msg["data"])))
@@ -383,12 +401,10 @@ async def ws_settings_save(
         connection.send_error(msg["id"], "invalid_data", _describe_invalid(err))
         return
 
-    error = normalize_model_input(data)
-    if error:
-        connection.send_error(msg["id"], "invalid_data", error)
-        return
-
-    hass.config_entries.async_update_entry(entry, options=data)
+    # Merge, never replace: a legacy entry that also has agents keeps its old
+    # agent-shaped options in storage untouched — they simply stop being
+    # presented — and replacing wholesale would destroy them on the first save.
+    hass.config_entries.async_update_entry(entry, options={**stored, **data})
     connection.send_result(msg["id"], {"entry_id": entry.entry_id})
 
 

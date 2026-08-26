@@ -158,12 +158,15 @@
     }
   },
   "options": {
+    "abort": {
+      "no_connection_settings": "This provider has no connection settings. Models, prompts and tools belong to an agent — add or edit one under this entry."
+    },
     "error": {
       "model_required": "Either Model or Custom Model required"
     },
     "step": {
       "settings": {
-        "title": "Model configuration",
+        "title": "Connection settings",
         "data": {
           "llm_hass_api": "Assist API (Control HA devices)",
           "prompt": "Prompt Template",
