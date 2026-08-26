@@ -72,18 +72,40 @@ class SmartChainPanel extends HTMLElement {
   /**
    * Which visible tab, if any, is holding something the user has not saved.
    *
-   * A tab says so by exposing a `hasUnsavedChanges` getter. A tab that has no
-   * such state — Camera — exposes nothing, reads as `undefined`, and never
-   * produces a question: a confirmation that appears on every navigation is one
-   * the user learns to click through, which would cost the guarantee entirely.
    * Only the selected tab is in the DOM, so this examines at most one element.
+   * A tab that has no such state — Camera — answers nothing and never produces
+   * a question: a confirmation that appears on every navigation is one the user
+   * learns to click through, which would cost the guarantee entirely.
    */
   _unsavedTab() {
     for (const tab of TABS) {
       const el = this.querySelector(tab.tag);
-      if (el && el.hasUnsavedChanges) return tab;
+      if (el && this._holdsUnsaved(el)) return tab;
     }
     return null;
+  }
+
+  /**
+   * Whether a mounted tab is holding an edit that replacing its DOM would lose.
+   *
+   * Two sources, on purpose:
+   *
+   *  - **The form.** Five of the six tabs put their whole editing surface in an
+   *    <sc-config-form>, which already tracks its own dirtiness, so the shell
+   *    reads it directly rather than each tab repeating the same getter. It
+   *    used to be exactly that — one getter, on <sc-agents-tab> alone — which
+   *    made this guard true for one tab in five while the docstring above
+   *    described it as complete. A tab added tomorrow that hosts the form is
+   *    covered without touching this file or that tab.
+   *  - **The tab itself**, via an optional `hasUnsavedChanges` getter, for
+   *    state that is not in a form: <sc-tools-tab>'s tools.yaml editor is a
+   *    plain <textarea> whose unsaved text no <sc-config-form> knows about.
+   *    A tab that exposes no such getter reads as `undefined` and contributes
+   *    nothing.
+   */
+  _holdsUnsaved(el) {
+    if (el.hasUnsavedChanges) return true;
+    return [...el.querySelectorAll("sc-config-form")].some((form) => form.hasUnsavedChanges);
   }
 
   /** True if it is all right to replace the tab body now. */

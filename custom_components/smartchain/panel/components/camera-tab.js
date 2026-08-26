@@ -111,7 +111,10 @@ export class ScCameraTab extends HTMLElement {
       </div>
 
       <!-- The result lands after an await, by which time focus has moved on;
-           without a live region it is drawn but never announced. -->
+           without a live region it is drawn but never announced. The region
+           only works while it is on screen, which is _showResult's job:
+           .sc-hidden is display:none, and nothing inside a display:none
+           subtree reaches the accessibility tree for the region to announce. -->
       <div id="ct-result" class="sc-hidden" aria-live="polite">
         <div class="sc-card" style="padding:0;">
           <div class="ct-result-card">
@@ -126,6 +129,27 @@ export class ScCameraTab extends HTMLElement {
     `;
 
     this.querySelector("#ct-btn-analyze").addEventListener("click", () => this._handleAnalyze());
+  }
+
+  /**
+   * Write `text` into the result pane, and make sure it is announced.
+   *
+   * The order is the whole point. `#ct-result` carries `aria-live`, but while
+   * it holds `.sc-hidden` it is `display: none`, and a node in a display:none
+   * subtree is not in the accessibility tree at all — a screen reader sees no
+   * change to announce, so the attribute promises something that mechanically
+   * cannot happen. Revealing first and writing second puts the change in a
+   * region that is on screen.
+   *
+   * It is also why a run reveals the pane with a progress line instead of
+   * hiding it: the region is then already live, and the result that follows is
+   * an ordinary text change inside a visible region rather than a region
+   * appearing and being written to in the same frame — which is the case
+   * assistive technologies disagree about.
+   */
+  _showResult(text) {
+    this.querySelector("#ct-result").classList.remove("sc-hidden");
+    this.querySelector("#ct-response").textContent = text;
   }
 
   async _handleAnalyze() {
@@ -143,7 +167,9 @@ export class ScCameraTab extends HTMLElement {
     icon.icon = "mdi:loading";
     const textNode = icon.nextSibling;
     if (textNode) textNode.textContent = " Analyzing...";
-    this.querySelector("#ct-result").classList.add("sc-hidden");
+    // Clears the previous run's answer *and* brings the live region on screen
+    // before there is anything to announce — see `_showResult`.
+    this._showResult("Analyzing…");
 
     try {
       const svcData = { camera_entity_id: camera, message: prompt };
@@ -153,13 +179,18 @@ export class ScCameraTab extends HTMLElement {
       const data = extractResponse(resp, "smartchain.analyze_image");
       const response = data.response || "";
       if (response) {
-        this.querySelector("#ct-response").textContent = response;
-        this.querySelector("#ct-result").classList.remove("sc-hidden");
+        this._showResult(response);
         showToast("Analysis complete", "success");
+      } else {
+        // The call succeeded and carried no text. This used to leave the pane
+        // hidden and say nothing at all, so the run looked like it had never
+        // happened; now it would leave the progress line standing forever.
+        // Either way the user learns nothing, so say what came back.
+        this._showResult("The model returned no text for this image.");
+        showToast("Analysis returned no text", "warning");
       }
     } catch (err) {
-      this.querySelector("#ct-response").textContent = "Error: " + (err.message || err);
-      this.querySelector("#ct-result").classList.remove("sc-hidden");
+      this._showResult("Error: " + (err.message || err));
       showToast("Analysis failed", "error");
     } finally {
       btn.disabled = false;

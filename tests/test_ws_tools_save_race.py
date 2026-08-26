@@ -366,6 +366,12 @@ async def test_reload_failed_tells_the_panel_a_backup_is_still_there(
     assert backup.read_text() == TOOL_A
     assert tools_path.read_text() == TOOL_C
     assert msg["result"]["backup_exists"] is True
+    # ...and precisely because of that, Rollback must not be offered here: the
+    # backup on disk is TOOL_A, the text that just refused to load, so restoring
+    # it walks the user into the breakage instead of out of it. `backup_exists`
+    # answers "is there a file"; `restored` answers "is there anything left to
+    # undo", which is the question the button asks.
+    assert msg["result"]["restored"] is True
 
 
 async def test_reload_failed_on_a_first_save_reports_no_backup(
@@ -393,3 +399,33 @@ async def test_reload_failed_on_a_first_save_reports_no_backup(
     assert msg["result"]["reason"] == "reload_failed"
     assert not (tools_dir / "tools.yaml.bak").exists()
     assert msg["result"]["backup_exists"] is False
+
+
+async def test_a_failed_rollback_does_not_claim_anything_was_restored(
+    hass: HomeAssistant, hass_ws_client, tools_dir: Path
+):
+    """The neighbouring case, and the reason `restored` is a field rather than
+    a rule about `reload_failed`.
+
+    A rollback whose own reload fails undid nothing on the user's behalf — the
+    file it installed is the one now failing — so the escape hatch has to stay
+    reachable. Sending `restored` here too would hide it.
+    """
+    tools_path = tools_dir / "tools.yaml"
+    tools_path.write_text(TOOL_C)
+    (tools_dir / "tools.yaml.bak").write_text(TOOL_A)
+    await async_setup_component(hass, DOMAIN, {})
+
+    client = await hass_ws_client(hass)
+
+    with patch(
+        "custom_components.smartchain._reload_registry",
+        new=AsyncMock(side_effect=LoaderError("boom")),
+    ):
+        await client.send_json_auto_id({"type": "smartchain/tools/rollback"})
+        msg = await client.receive_json()
+
+    assert msg["success"], msg
+    assert msg["result"]["ok"] is False
+    assert msg["result"]["reason"] == "reload_failed"
+    assert msg["result"].get("restored") is not True

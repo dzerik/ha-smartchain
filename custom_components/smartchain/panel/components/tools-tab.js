@@ -839,6 +839,35 @@ export class ScToolsTab extends HTMLElement {
     rollbackBtn.classList.toggle("sc-hidden", !this._backupAvailable());
   }
 
+  /**
+   * Believe the backend about the backup, and repaint the button.
+   *
+   * Every answer from `tools/save` and `tools/rollback` reports
+   * `backup_exists`, read off the disk the command just changed — which this
+   * session cannot reconstruct: a rollback swaps the file into the `.bak` slot
+   * when one is there and consumes the `.bak` when none is, and a restore after
+   * a failed reload leaves a backup in the ordinary case and nothing on a
+   * first-ever save. Guessing here is what hid Rollback while a real backup sat
+   * on disk, at the one moment the user was hunting for it.
+   *
+   * An answer that says nothing leaves what the panel already knew alone:
+   * a missing field is not a report of `false`, and inventing one is the same
+   * mistake in a quieter coat.
+   *
+   * `restored` overrides it. A save whose reload failed has already put the
+   * good file back, and the swap left the *failed* text sitting in `.bak` — so
+   * a backup is genuinely there, and offering it would walk the user into the
+   * breakage they are escaping rather than out of it. `backup_exists` answers
+   * "is there a file"; only `restored` answers "is there anything left to
+   * undo", which is the question this button asks.
+   */
+  _adoptBackupState(result) {
+    if (this._state && "backup_exists" in result) {
+      this._state.backup_exists = !!result.backup_exists && !result.restored;
+    }
+    this._updateRollbackVisibility();
+  }
+
   async _validate() {
     // Validates the file as it currently sits on disk — the websocket command
     // takes no text, so this checks what was last saved, not whatever is still
@@ -887,12 +916,12 @@ export class ScToolsTab extends HTMLElement {
         exists: true,
         error: null,
         hash: result.hash,
-        // A successful save over an existing file always leaves a backup;
-        // a first-ever save has nothing to back up. Either way the next
-        // `tools/get` re-reads the truth from disk.
-        backup_exists: this._state ? !!this._state.exists : false,
       };
-      this._updateRollbackVisibility();
+      // The save answered from the disk it had just written, so take its word
+      // for the backup rather than inferring one from whether the file existed
+      // — that inference was wrong whenever a `.bak` outlived the file beside
+      // it, and hid a Rollback that led somewhere real.
+      this._adoptBackupState(result);
       this._updateSaveState();
       // Refresh the banner (clears any stale "no file yet" notice) without
       // touching the textarea's value.
@@ -936,10 +965,10 @@ export class ScToolsTab extends HTMLElement {
         return;
       case "reload_failed":
         // The write succeeded and validated, but the running integration could
-        // not adopt it, so the backend restored the previous file — consuming
-        // whatever backup made that possible.
-        if (this._state) this._state.backup_exists = false;
-        this._updateRollbackVisibility();
+        // not adopt it, so the backend restored the previous file. The restore
+        // is a swap, so it normally leaves a backup rather than consuming one —
+        // and the refusal says which, read from disk after the fact.
+        this._adoptBackupState(result);
         showToast(
           `tools.yaml was valid but could not be loaded (${result.error}). ` +
             "The previous file has been restored on disk — your edit here " +
@@ -974,14 +1003,15 @@ export class ScToolsTab extends HTMLElement {
 
     if (!result.ok) {
       if (result.reason === "no_backup") {
-        if (this._state) this._state.backup_exists = false;
-        this._updateRollbackVisibility();
+        this._adoptBackupState(result);
         showToast("No backup to restore.", "info");
         return;
       }
       // reload_failed — the restore itself succeeded (the .bak is now on disk
-      // at the target) but the integration could not adopt it.
-      this._updateRollbackVisibility();
+      // at the target) but the integration could not adopt it. Whether a backup
+      // survived that depends on which branch the restore took, so the answer
+      // carries it: the swap leaves one, a restore onto a missing file does not.
+      this._adoptBackupState(result);
       showToast(
         `Rollback restored the file on disk, but the integration could not load it (${result.error}).`,
         "error",

@@ -68,8 +68,23 @@ class MCPClient:
             streams = await self._open_transport(stack)
             session = await stack.enter_async_context(ClientSession(*streams))
             await session.initialize()
-        except Exception:
-            await stack.aclose()
+        except BaseException:
+            # `Exception` was not wide enough. The await here that most often
+            # fails to return is `initialize()`, waiting for the server's first
+            # reply, and what ends that wait during a reload or an unload is a
+            # `CancelledError` — which used to sail past this handler and take
+            # the stack with the frame. `self._exit_stack` is assigned only on
+            # success, so a later `close()` then found nothing to close and a
+            # stdio server's child process outlived the integration.
+            try:
+                await stack.aclose()
+            except Exception:  # noqa: BLE001
+                # Report it and let the original failure propagate: the caller
+                # decides what to do about a handshake that did not happen, and
+                # an unwind that went wrong is news of its own, not a substitute.
+                LOGGER.exception(
+                    "Error unwinding the failed MCP handshake for %s", self.config.name
+                )
             raise
         self._exit_stack = stack
         self._session = session

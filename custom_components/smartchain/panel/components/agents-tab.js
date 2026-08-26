@@ -58,16 +58,12 @@ export class ScAgentsTab extends HTMLElement {
     this._editing = null; // {entryId, subentryId|null}
   }
 
-  /**
-   * Whether this tab is holding an edit the user would lose if its DOM were
-   * replaced. The answer belongs to the open form — this tab has no state of
-   * its own — and is `false` whenever no form is open, which is most of the
-   * time. The panel shell reads this before it navigates away.
-   */
-  get hasUnsavedChanges() {
-    const form = this.querySelector("sc-config-form");
-    return !!(form && form.hasUnsavedChanges);
-  }
+  // No `hasUnsavedChanges` getter here on purpose. Everything this tab could
+  // lose lives in the <sc-config-form> it hosts, and the panel shell reads that
+  // form directly (see `_holdsUnsaved`) — for every tab, not just this one. A
+  // getter here would be a second copy of the same answer, and the first one
+  // stayed the *only* copy for four releases while four other tabs went
+  // unguarded. A tab with state outside a form still adds a getter of its own.
 
   set hass(val) {
     this._hass = val;

@@ -20,6 +20,7 @@ raised `KeyError` on its own server name.
 import asyncio
 from unittest.mock import AsyncMock, patch
 
+import pytest
 from homeassistant.core import HomeAssistant
 
 from custom_components.smartchain import _rebuild_lock
@@ -244,3 +245,54 @@ async def test_a_server_dropped_by_a_reload_does_not_crash_its_task(hass: HomeAs
         assert registry.names() == []
     finally:
         patcher.stop()
+
+
+async def test_wait_idle_reports_the_servers_that_never_settled(hass: HomeAssistant) -> None:
+    """The helper every test above leans on must never answer "settled" when it is not.
+
+    `wait_idle` is the one thing in this file that reads the wall clock, so it is
+    the one thing a loaded machine can change. Returning quietly at the deadline
+    hands the assertions that follow a half-built manager, and what they then
+    report — `closed == []`, `1 client built, expected 2` — describes the
+    symptom of a timeout while naming something else entirely. That is how a
+    green-when-alone, red-under-load test teaches people to shrug at red.
+
+    An earlier version of this docstring claimed nothing in the suite reaches
+    the branch, "checked by making it raise unconditionally and watching all 137
+    MCP tests stay green". That check does not hold: forcing the branch
+    (`if True:`, or a deadline 100s in the past) fails six tests —
+    test_mcp_backoff.py::test_backoff_restarts_from_the_initial_delay_after_a_working_connection
+    and ::test_every_failed_attempt_waits_before_the_next[1] and [3],
+    test_mcp_liveness.py::test_a_dropped_connection_retries_from_the_initial_delay,
+    test_mcp_manager.py::test_connect_failure_triggers_reconnect_attempt and
+    ::test_call_tool_failure_triggers_reconnect.
+
+    So the true statement is narrower, and worth having straight: six tests do
+    enter `wait_idle` with work still pending and depend on the deadline *not*
+    expiring. Being loud here is free at the real deadline on an unloaded
+    machine, and it is precisely those six that will speak up first if that
+    stops being true.
+    """
+    hang = asyncio.Event()
+
+    async def never_connects(*args, **kwargs):
+        await hang.wait()
+
+    def make_instance(*args, **kwargs):
+        inst = AsyncMock()
+        inst.connect = AsyncMock(side_effect=never_connects)
+        inst.close = AsyncMock()
+        return inst
+
+    with patch(
+        "custom_components.smartchain.tools.mcp.manager.MCPClient", side_effect=make_instance
+    ):
+        registry = ToolRegistry()
+        mgr = MCPManager(hass, registry)
+        mgr.configure([StdioConfig(name="fs", command="npx")])
+        await mgr.start()
+
+        with pytest.raises(TimeoutError, match="fs"):
+            await mgr.wait_idle(timeout=0.05)
+
+        await mgr.stop()

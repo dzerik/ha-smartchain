@@ -265,18 +265,138 @@ describe("smartchain-panel: closing the browser tab", () => {
   });
 });
 
-describe("sc-agents-tab.hasUnsavedChanges", () => {
-  it("reports what the form it is hosting says, and nothing when it hosts none", async () => {
-    const { panel } = await bootPanel();
-    const tab = panel.querySelector("sc-agents-tab");
-    expect(tab.hasUnsavedChanges).toBe(false);
+/**
+ * The guard is not the Agents tab's guard — it belongs to every tab that hosts
+ * <sc-config-form>, which is five of the six. It used to be one getter on
+ * <sc-agents-tab>, so Embeddings, Stores, Settings and Tools each threw an
+ * unsaved form away in silence while the shell's own docstring described the
+ * protection as complete.
+ *
+ * These tests drive the real tabs, not a stub: a shell that reads the answer
+ * off the tab element alone passes for Agents and fails for the other three,
+ * which is precisely the shape of the hole.
+ */
+const FORM_SCHEMA = {
+  schema: [{ name: "prompt", selector: { text: {} } }],
+  data: { prompt: "stored on the server" },
+  labels: { prompt: "Prompt" },
+};
 
-    const form = await openDirtyAgentForm(panel);
-    expect(tab.hasUnsavedChanges).toBe(true);
+/** An overview rich enough that every form-hosting tab has something to show. */
+const FORM_OVERVIEW = {
+  entries: [{ ...OVERVIEW.entries[0], supports_embeddings: true, stores: [], embeddings: [] }],
+};
 
-    // Cancel closes the form; there is nothing left to lose.
-    form.querySelector("#sc-form-cancel").dispatchEvent(new Event("click"));
+/**
+ * Each form-hosting tab in this lane, and how a form is opened on it. Settings
+ * needs no control: with a single configured entry it paints the form itself.
+ */
+const FORM_HOSTS = [
+  { label: "Agents", open: ".sc-add" },
+  { label: "Embeddings", open: ".sc-add" },
+  { label: "Stores", open: ".sc-add" },
+  { label: "Settings", open: null },
+];
+
+async function bootWithForms() {
+  const net = fakeHass({
+    "smartchain/overview": FORM_OVERVIEW,
+    "smartchain/agent/schema": FORM_SCHEMA,
+    "smartchain/embeddings/schema": FORM_SCHEMA,
+    "smartchain/store/schema": { ...FORM_SCHEMA, embeddings_available: ["An embeddings binding"] },
+    "smartchain/store/status": { stores: [], shadowed_yaml: [] },
+    "smartchain/settings/get": FORM_SCHEMA,
+  });
+  net.hass.user = { is_admin: true };
+  const panel = mount("smartchain-panel");
+  panel.hass = net.hass;
+  await flush();
+  return { net, panel };
+}
+
+/** Open the form on `host` and type into it. Returns the live form. */
+async function dirtyFormOn(panel, host) {
+  await clickTab(panel, host.label);
+  if (host.open) {
+    // Only the selected tab is in the DOM, so this reaches that tab's control.
+    const control = panel.querySelector(host.open);
+    expect(control, `no "${host.open}" on the ${host.label} tab`).not.toBeNull();
+    control.dispatchEvent(new Event("click"));
     await flush();
-    expect(tab.hasUnsavedChanges).toBe(false);
+  }
+  const form = panel.querySelector("sc-config-form");
+  expect(form, `the ${host.label} tab put no form on screen`).not.toBeNull();
+  form
+    .querySelector("ha-form")
+    .dispatchEvent(new CustomEvent("value-changed", { detail: { value: { prompt: "half typed" } } }));
+  expect(form.hasUnsavedChanges, `the ${host.label} form did not go dirty`).toBe(true);
+  return form;
+}
+
+describe("smartchain-panel: every tab that hosts a form is guarded", () => {
+  for (const host of FORM_HOSTS) {
+    it(`asks before it throws away the ${host.label} tab's unsaved form`, async () => {
+      const { panel } = await bootWithForms();
+      const form = await dirtyFormOn(panel, host);
+      confirmSpy.mockClear();
+      confirmSpy.mockReturnValue(false);
+
+      await clickTab(panel, "Camera");
+
+      expect(confirmSpy).toHaveBeenCalledTimes(1);
+      // And names the tab the edit is on, not just "a tab".
+      expect(confirmSpy.mock.calls[0][0]).toContain(host.label);
+      expect(panel.querySelector("sc-config-form")).toBe(form);
+      expect(form._data).toEqual({ prompt: "half typed" });
+      expect(panel.querySelector("sc-camera-tab")).toBeNull();
+    });
+
+    it(`asks nothing about an untouched form on the ${host.label} tab`, async () => {
+      // The other half: a guard that answered "maybe" for any open form would
+      // put a question in front of every user who merely looked at one.
+      const { panel } = await bootWithForms();
+      await clickTab(panel, host.label);
+      if (host.open) {
+        panel.querySelector(host.open).dispatchEvent(new Event("click"));
+        await flush();
+      }
+      expect(panel.querySelector("sc-config-form")).not.toBeNull();
+      confirmSpy.mockClear();
+
+      await clickTab(panel, "Camera");
+
+      expect(confirmSpy).not.toHaveBeenCalled();
+      expect(panel.querySelector("sc-camera-tab")).not.toBeNull();
+    });
+  }
+
+  it("still lets a tab answer for state that is not in a form", async () => {
+    // <sc-tools-tab>'s tools.yaml editor is a plain <textarea>: its unsaved
+    // text belongs to no <sc-config-form>, so the tab has to say so itself.
+    // Asserted on a mounted tab element rather than on tools-tab, because the
+    // contract is the shell's — any tab may expose the getter.
+    const { panel } = await bootWithForms();
+    await clickTab(panel, "Camera");
+    const camera = panel.querySelector("sc-camera-tab");
+    expect(camera.querySelector("sc-config-form")).toBeNull();
+    Object.defineProperty(camera, "hasUnsavedChanges", { configurable: true, get: () => true });
+
+    confirmSpy.mockClear();
+    confirmSpy.mockReturnValue(false);
+    await clickTab(panel, "Agents");
+
+    expect(confirmSpy).toHaveBeenCalledTimes(1);
+    expect(confirmSpy.mock.calls[0][0]).toContain("Camera");
+    expect(panel.querySelector("sc-camera-tab")).toBe(camera);
+  });
+
+  it("stops the browser unload for a form on a tab that is not Agents", async () => {
+    // beforeunload reads the same answer, so a hole in one is a hole in both.
+    const { panel } = await bootWithForms();
+    await dirtyFormOn(panel, { label: "Settings", open: null });
+
+    const event = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(true);
   });
 });

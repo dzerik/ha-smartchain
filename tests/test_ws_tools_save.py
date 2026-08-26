@@ -505,6 +505,9 @@ async def test_rollback_without_a_backup_is_refused(
     assert msg["success"], msg
     assert msg["result"]["ok"] is False
     assert msg["result"]["reason"] == "no_backup"
+    # Every rollback answer states the backup's fate, so the panel has one
+    # rule — believe the field — instead of a rule per refusal reason.
+    assert msg["result"]["backup_exists"] is False
 
 
 async def test_saving_a_fix_over_a_broken_file_does_not_lose_the_fix_on_rollback(
@@ -579,3 +582,122 @@ async def test_a_rollback_landing_on_a_broken_file_is_recoverable_by_a_second_ro
     assert msg["success"], msg
     assert msg["result"]["ok"] is True
     assert tools_path.read_text() == VALID_TOOL
+
+
+async def test_a_successful_save_reports_the_backup_it_left(
+    hass: HomeAssistant, hass_ws_client, tools_dir: Path
+):
+    """A save that overwrote a file always leaves that file as the backup, and
+    says so on the wire.
+
+    The panel used to infer this instead — "the file existed, so a backup was
+    made" — which is the same class of mistake the `reload_failed` branch made:
+    a fact the backend reads off disk, guessed at by the client. `save` already
+    re-reads the file to answer with its hash; reporting `backup_exists` from
+    that same read costs nothing and removes the guess.
+    """
+    tools_path = tools_dir / "tools.yaml"
+    tools_path.write_text(VALID_TOOL)
+    await async_setup_component(hass, DOMAIN, {})
+
+    client = await hass_ws_client(hass)
+    base_hash = await _get_hash(client)
+
+    await client.send_json_auto_id(
+        {"type": "smartchain/tools/save", "text": VALID_TOOL_V2, "base_hash": base_hash}
+    )
+    msg = await client.receive_json()
+
+    assert msg["success"], msg
+    assert msg["result"]["ok"] is True
+    assert msg["result"]["backup_exists"] is True
+    assert (tools_dir / "tools.yaml.bak").is_file()
+
+
+async def test_a_first_ever_save_reports_that_there_is_no_backup(
+    hass: HomeAssistant, hass_ws_client, config_dir: Path
+):
+    """The other half: nothing was overwritten on a fresh install, so Rollback
+    has nothing to offer and the answer must not claim otherwise."""
+    await async_setup_component(hass, DOMAIN, {})
+
+    client = await hass_ws_client(hass)
+    await client.send_json_auto_id(
+        {"type": "smartchain/tools/save", "text": VALID_TOOL, "base_hash": None}
+    )
+    msg = await client.receive_json()
+
+    assert msg["success"], msg
+    assert msg["result"]["ok"] is True
+    assert msg["result"]["backup_exists"] is False
+    assert not (config_dir / "smartchain" / "tools.yaml.bak").exists()
+
+
+async def test_a_save_creating_a_file_beside_an_older_backup_still_reports_it(
+    hass: HomeAssistant, hass_ws_client, tools_dir: Path
+):
+    """The case the client-side guess got exactly backwards: tools.yaml was
+    deleted (by hand, by an add-on) while its .bak stayed. The save creates the
+    file and backs nothing up — but the older backup is still there, and
+    Rollback still leads somewhere real."""
+    (tools_dir / "tools.yaml.bak").write_text(VALID_TOOL)
+    await async_setup_component(hass, DOMAIN, {})
+
+    client = await hass_ws_client(hass)
+    await client.send_json_auto_id(
+        {"type": "smartchain/tools/save", "text": VALID_TOOL_V2, "base_hash": None}
+    )
+    msg = await client.receive_json()
+
+    assert msg["success"], msg
+    assert msg["result"]["ok"] is True
+    assert msg["result"]["backup_exists"] is True
+    assert (tools_dir / "tools.yaml.bak").read_text() == VALID_TOOL
+
+
+async def test_a_rollback_whose_reload_fails_reports_the_surviving_backup(
+    hass: HomeAssistant, hass_ws_client, tools_dir: Path
+):
+    """The swap leaves the replaced file in the .bak slot, so a second rollback
+    can undo this one — but only if the panel is told the button still leads
+    somewhere. Same field, same reason, other command."""
+    tools_path = tools_dir / "tools.yaml"
+    tools_path.write_text(BROKEN_YAML)
+    await async_setup_component(hass, DOMAIN, {})
+
+    client = await hass_ws_client(hass)
+    base_hash = await _get_hash(client)
+    await client.send_json_auto_id(
+        {"type": "smartchain/tools/save", "text": VALID_TOOL, "base_hash": base_hash}
+    )
+    msg = await client.receive_json()
+    assert msg["success"] and msg["result"]["ok"] is True
+
+    await client.send_json_auto_id({"type": "smartchain/tools/rollback"})
+    msg = await client.receive_json()
+
+    assert msg["success"], msg
+    assert msg["result"]["ok"] is False
+    assert msg["result"]["reason"] == "reload_failed"
+    assert msg["result"]["backup_exists"] is True
+    assert (tools_dir / "tools.yaml.bak").read_text() == VALID_TOOL
+
+
+async def test_a_rollback_that_consumed_the_backup_and_failed_says_so(
+    hass: HomeAssistant, hass_ws_client, tools_dir: Path
+):
+    """With no file at the target there is nothing to swap, so the restore
+    *moves* the backup — and a reload failure afterwards leaves none. Reporting
+    `True` here would leave a Rollback button pointing at a file that is gone."""
+    (tools_dir / "tools.yaml.bak").write_text(BROKEN_YAML)
+    await async_setup_component(hass, DOMAIN, {})
+
+    client = await hass_ws_client(hass)
+    await client.send_json_auto_id({"type": "smartchain/tools/rollback"})
+    msg = await client.receive_json()
+
+    assert msg["success"], msg
+    assert msg["result"]["ok"] is False
+    assert msg["result"]["reason"] == "reload_failed"
+    assert msg["result"]["backup_exists"] is False
+    assert not (tools_dir / "tools.yaml.bak").exists()

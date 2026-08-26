@@ -79,19 +79,29 @@ class MCPManager:
 
         Used by tests to avoid sleeping; in production the connect tasks keep
         running in the background and reconnect on failure.
+
+        Raises `TimeoutError` when the deadline passes with servers still
+        unsettled, naming them. It used to return quietly, which is the worst
+        answer available: the caller reads it as "everything connected" and goes
+        on to assert against a half-built manager, so a machine slow enough to
+        blow the deadline reports a missing client or an empty registry — the
+        symptom — and never the timeout that caused it. The check is made after
+        the pending list, so a manager that settled exactly on the deadline
+        still counts as settled.
         """
         deadline = asyncio.get_running_loop().time() + timeout
         while True:
-            now = asyncio.get_running_loop().time()
-            if now > deadline:
-                return
             pending = [
-                state.task
-                for state in self._servers.values()
+                name
+                for name, state in self._servers.items()
                 if state.task is not None and not state.task.done() and state.client is None
             ]
             if not pending:
                 return
+            if asyncio.get_running_loop().time() > deadline:
+                raise TimeoutError(
+                    f"MCP servers did not settle within {timeout}s: {', '.join(sorted(pending))}"
+                )
             await asyncio.sleep(0.01)
 
     def _lifecycle_lock(self) -> asyncio.Lock:
@@ -155,6 +165,13 @@ class MCPManager:
                 await client.connect()
                 tools = await client.list_tools()
             except asyncio.CancelledError:
+                # A stop or a rebuild landed mid-handshake. A cancel on the
+                # `list_tools` await catches a session that is already live and
+                # that nothing but this frame knows about, so close it here or
+                # it survives the manager that owns it. (A cancel inside
+                # `connect()` is unwound by `connect()` itself; this close then
+                # finds nothing to do, which is why it is safe to run for both.)
+                await self._close_quietly(client, name)
                 raise
             except Exception:  # noqa: BLE001
                 LOGGER.exception(
@@ -173,14 +190,26 @@ class MCPManager:
                 delay = min(delay * 2, self._max_delay)
                 continue
 
-            async with self._lifecycle_lock():
-                # Re-check what the two awaits above could have changed: a stop,
-                # or a rebuild that replaced the server table while we connected.
-                if self._stopped or self._servers.get(name) is not state:
-                    await self._close_quietly(client, name)
-                    return
-                state.client = client
-                self._register_tools(state, tools)
+            try:
+                async with self._lifecycle_lock():
+                    # Re-check what the two awaits above could have changed: a
+                    # stop, or a rebuild that replaced the server table while we
+                    # connected.
+                    if self._stopped or self._servers.get(name) is not state:
+                        await self._close_quietly(client, name)
+                        return
+                    state.client = client
+                    self._register_tools(state, tools)
+            except asyncio.CancelledError:
+                # Cancelled while queued for the lock — and the coroutine ahead
+                # of us in that queue is very likely the `stop()` that cancelled
+                # us. `state.client` is still None, so `stop()` iterates straight
+                # past this fully connected session; this frame holds the only
+                # reference to it, so this frame has to close it. Left open, a
+                # stdio server's subprocess survives every reload for the life of
+                # the process.
+                await self._close_quietly(client, name)
+                raise
             LOGGER.info("MCP server %s connected; %d tools registered", name, len(tools))
             # A working connection resets the ramp. The task used to *end* here
             # and a reconnect started a fresh one with a fresh `delay`; now the
@@ -384,5 +413,16 @@ class MCPManager:
         """
         try:
             await client.close()
+        except asyncio.CancelledError:
+            # A second cancellation landed on top of the first, so the close did
+            # not finish. Nothing here can retry it — the caller is unwinding —
+            # but the one thing this whole path exists to prevent is a session
+            # vanishing without a word, so say so before re-raising.
+            LOGGER.warning(
+                "Error closing MCP client for %s: the close was itself cancelled; "
+                "the session may still be open",
+                name,
+            )
+            raise
         except Exception:  # noqa: BLE001
             LOGGER.exception("Error closing MCP client for %s", name)

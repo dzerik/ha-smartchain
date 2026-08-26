@@ -2,10 +2,10 @@ import { callWS, showToast } from "../services.js";
 
 /**
  * Structural equality for the values <ha-form> carries: primitives, arrays
- * (a multi-select such as "allowed tools") and plain objects. Used to tell a
- * real edit from <ha-form> re-emitting the value it already had — `!==` on two
- * freshly built objects is always true, so it would call every emission an
- * edit and every form dirty the moment it rendered.
+ * (a multi-select such as "allowed tools") and plain objects. Used by `isEcho`
+ * to tell a real edit from <ha-form> re-emitting a value it already had —
+ * `!==` on two freshly built arrays is always true, so it would call every
+ * emission an edit and every form dirty the moment it rendered.
  */
 function sameValue(a, b) {
   if (a === b) return true;
@@ -21,6 +21,53 @@ function sameValue(a, b) {
     return true;
   }
   return false;
+}
+
+/**
+ * Is `next` <ha-form> handing back what we gave it, rather than a user edit?
+ *
+ * <ha-form> answers `form.data = …` with a `value-changed` of its own, and the
+ * value is not always identical: a selector renders a default for a key the
+ * payload carried no value for, so the echo is our data plus a key or two. It
+ * also makes no promise about *when* — a selector that settles one frame later
+ * echoes one frame later. Timing therefore cannot be the test. What the echo
+ * always is, whenever it lands, is a value in which every key we handed over
+ * still holds what we handed over.
+ *
+ * The exemption is deliberately narrow in one direction and admittedly loose in
+ * the other:
+ *
+ *  - A value we *did* give is only allowed to change if it was `null` or
+ *    `undefined` — "no value", which is exactly what a selector substitutes its
+ *    default for. Rewriting a real value is an edit, however early it arrives.
+ *  - A key we never sent at all is treated as the form filling one in. A user's
+ *    very first interaction with a field the backend served no value for looks
+ *    the same from here and is missed; their second one is not, because the key
+ *    then exists and its value changes.
+ *
+ * KNOWN GAP, and it is wider than "residual". A create form is served `{}`, so
+ * *every* first pick lands on a key we never sent: choose a model, switch tabs,
+ * and the choice is gone with no question asked. Widening the rule was tried
+ * and reverted — `<ha-form>` really does fill keys in with real values (the
+ * echo tests model exactly that), so from the value alone "the form defaulted
+ * this" and "the user chose this" are the same event, and the wider rule turns
+ * every render dirty. Timing cannot separate them either: the echo is allowed
+ * to arrive a frame late, after any flag we could set around the assignment.
+ *
+ * The fix is not in here. It is to serve a create form the keys it renders —
+ * every schema field present, `null` where there is no value — so that a first
+ * pick becomes a change to an existing key, which this function already reads
+ * correctly. Until then the first interaction on a create form is not tracked.
+ */
+function isEcho(previous, next) {
+  const before = previous || {};
+  const after = next || {};
+  for (const key of Object.keys(before)) {
+    if (key in after && sameValue(before[key], after[key])) continue;
+    if (before[key] === undefined || before[key] === null) continue;
+    return false;
+  }
+  return true;
 }
 
 /**
@@ -110,8 +157,6 @@ export class ScConfigForm extends HTMLElement {
     // server last sent" would quietly go false while the edit is still unsaved.
     // Cleared in exactly one place — a successful save.
     this._dirty = false;
-    // True only while `_apply` is assigning to <ha-form>; see `_apply`.
-    this._applying = false;
   }
 
   /**
@@ -426,11 +471,15 @@ export class ScConfigForm extends HTMLElement {
     this.querySelector("ha-form").addEventListener("value-changed", (ev) => {
       const previous = this._data;
       this._data = ev.detail.value;
-      // Our own `form.data =` assignment coming back around is not an edit.
-      if (this._applying) return;
-      if (!sameValue(previous, this._data)) this._dirty = true;
+      // Our own `form.data =` assignment coming back around is not an edit —
+      // and is recognised by its value, not by whether it happened to arrive
+      // inside the assignment. See `isEcho`.
+      if (isEcho(previous, this._data)) return;
+      this._dirty = true;
       // A field the backend named as reactive decides which other fields
       // exist, so the schema is asked for again rather than guessed at here.
+      // An echo never gets here, so <ha-form> settling a default cannot start
+      // a reload loop with the load that handed it that default.
       if (!this._reloading && this._reactiveChanged(previous, this._data)) this.load();
     });
 
@@ -485,19 +534,20 @@ export class ScConfigForm extends HTMLElement {
     await this.save();
   }
 
+  /**
+   * Push the current schema/data/labels into <ha-form>.
+   *
+   * `form.data = …` can come back as a value-changed — immediately, or a frame
+   * later. Either way it is this component talking to itself and must not mark
+   * the form dirty, so the value-changed handler recognises it by value (see
+   * `isEcho`). There is deliberately no flag around this call: a flag can only
+   * describe the synchronous case, and a guarantee that holds only when the
+   * echo is synchronous is one that fails silently the day it is not.
+   */
   _apply() {
     const form = this.querySelector("ha-form");
     if (!form || !this._schema) return;
-    // `form.data = …` below can come straight back as a value-changed. That is
-    // this component talking to itself, not the user typing, so it must not
-    // mark the form dirty — otherwise every form is dirty from the moment it
-    // renders and the leave-confirmation becomes noise to click through.
-    this._applying = true;
-    try {
-      this._applyTo(form);
-    } finally {
-      this._applying = false;
-    }
+    this._applyTo(form);
   }
 
   _applyTo(form) {

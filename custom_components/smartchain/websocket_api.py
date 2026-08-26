@@ -1670,7 +1670,7 @@ def _read_tools_file(path: Path) -> dict[str, Any]:
     UTF-8, and a Cyrillic file under a non-UTF-8 locale must not silently
     mismatch or mojibake.
     """
-    backup_exists = _backup_path(path).is_file()
+    backup_exists = _backup_exists(path)
     if not path.exists():
         return {
             "text": "",
@@ -1840,6 +1840,21 @@ async def ws_tools_reload(
 
 def _backup_path(path: Path) -> Path:
     return path.with_name(path.name + ".bak")
+
+
+def _backup_exists(path: Path) -> bool:
+    """Whether Rollback has anything to offer, read from disk.
+
+    Every answer that changes the backup carries this, because the panel
+    cannot derive it: `_restore_backup` *swaps* when a file is there and
+    *moves* when one is not, so the same command leaves a backup in one case
+    and none in the other. Guessing is how the Rollback button once vanished
+    while a perfectly good `.bak` sat beside the file.
+
+    Blocking `is_file()` — call it through the executor, like every other
+    stat on this path.
+    """
+    return _backup_path(path).is_file()
 
 
 def _new_temp_file(path: Path) -> Path:
@@ -2026,11 +2041,16 @@ def _restore_after_failed_reload(path: Path) -> bool:
 
     The return value is read from disk rather than inferred, and the two
     branches disagree about it: the swap leaves the text of the failed save
-    as the new `.bak`, so a backup is still there and Rollback still has
-    something to do, while the fresh-install branch leaves nothing at all.
-    Without it on the wire the panel has to guess, and it guessed the
-    restore had consumed the backup — hiding the escape hatch at the one
-    moment the user is looking for it.
+    as the new `.bak`, while the fresh-install branch leaves nothing at all.
+
+    A `.bak` being there is **not** a reason to offer Rollback here, and an
+    earlier version of this docstring said it was. After the swap the good
+    file is already back on disk and the backup holds the text that just
+    refused to load — the very thing the user is escaping. Rolling back would
+    walk them straight into it. What the panel needs to know is not "is there
+    a file" but "is there anything left to undo", and after this function
+    there is not: `save` answers that with `restored`, and this return value
+    only reports which of the two branches ran.
     """
     if not _restore_backup(path):
         # No prior file means nothing here has adopted this text yet, and a
@@ -2039,7 +2059,7 @@ def _restore_after_failed_reload(path: Path) -> bool:
         # user's work, it schedules a breakage for their next restart. The
         # panel still holds their text, so removing it loses nothing visible.
         path.unlink(missing_ok=True)
-    return _backup_path(path).is_file()
+    return _backup_exists(path)
 
 
 @callback
@@ -2137,6 +2157,15 @@ async def ws_tools_save(
        `backup_exists`, read from disk after the restore, so the panel does
        not have to guess whether Rollback still has anything to offer.
 
+    Every answer carries `backup_exists`, success included: a save that
+    overwrote a file leaves that file as the backup, a first-ever save
+    leaves none, and a save that creates a file beside a `.bak` orphaned by
+    a hand-deleted tools.yaml leaves the older one intact. The panel used to
+    infer this from whether the file had existed and got that last case
+    backwards, hiding a Rollback that led somewhere real. The successful
+    branch already re-reads the file for its hash, so the fact comes off the
+    same read.
+
     Nothing here parses `text` into a structure and re-serialises it — raw
     text in, raw text out — which is what lets `!secret openai_key` survive
     a save as a reference instead of being written back as the resolved
@@ -2178,13 +2207,21 @@ async def ws_tools_save(
                     "reason": "reload_failed",
                     "error": _safe_loader_error(err),
                     "backup_exists": backup_exists,
+                    # The good file is already back, so there is nothing for
+                    # Rollback to undo — and the `.bak` it would restore is
+                    # now the text that just failed to load. `restored` says
+                    # that; `backup_exists` only says a file is there.
+                    "restored": True,
                 },
             )
             return
 
         new = await hass.async_add_executor_job(_read_tools_file, path)
 
-    connection.send_result(msg["id"], {"ok": True, "hash": new["hash"]})
+    connection.send_result(
+        msg["id"],
+        {"ok": True, "hash": new["hash"], "backup_exists": new["backup_exists"]},
+    )
 
 
 @websocket_api.require_admin
@@ -2204,6 +2241,13 @@ async def ws_tools_rollback(
     backup by `_restore_backup`'s swap — not restored a second time here —
     so a second rollback can undo this one.
 
+    Every answer carries `backup_exists`, for a reason specific to this
+    command: `_restore_backup` swaps when a file is at the target and
+    *moves* the backup when none is, so a rollback onto a missing file
+    consumes the `.bak` outright. The panel cannot tell those apart from
+    here, and a Rollback button left pointing at a file that is gone is a
+    dead end offered at the worst moment.
+
     Holds `_tools_file_lock` for the swap and the reload together, the same
     way `ws_tools_save` does and for the same reason: a rollback landing in
     the middle of a save would have the save's staleness check pass against
@@ -2216,22 +2260,34 @@ async def ws_tools_rollback(
     async with _tools_file_lock(hass):
         restored = await hass.async_add_executor_job(_restore_backup, path)
         if not restored:
-            connection.send_result(msg["id"], {"ok": False, "reason": "no_backup"})
+            connection.send_result(
+                msg["id"],
+                {"ok": False, "reason": "no_backup", "backup_exists": False},
+            )
             return
 
         try:
             await _reload_registry(hass)
         except Exception as err:  # noqa: BLE001
             LOGGER.warning("tools.yaml reload after rollback failed: %s", err)  # server-side only
+            backup_exists = await hass.async_add_executor_job(_backup_exists, path)
             connection.send_result(
                 msg["id"],
-                {"ok": False, "reason": "reload_failed", "error": _safe_loader_error(err)},
+                {
+                    "ok": False,
+                    "reason": "reload_failed",
+                    "error": _safe_loader_error(err),
+                    "backup_exists": backup_exists,
+                },
             )
             return
 
         new = await hass.async_add_executor_job(_read_tools_file, path)
 
-    connection.send_result(msg["id"], {"ok": True, "hash": new["hash"]})
+    connection.send_result(
+        msg["id"],
+        {"ok": True, "hash": new["hash"], "backup_exists": new["backup_exists"]},
+    )
 
 
 # ----- custom tools ------------------------------------------------------

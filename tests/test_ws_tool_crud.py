@@ -122,10 +122,13 @@ async def test_the_backend_serialises_the_whole_form(
 @pytest.mark.parametrize(
     "action_type,expected",
     [
-        ("service", {"service", "target", "service_data", "response"}),
+        # `timeout` on service and script as well as rest: the budget was
+        # declared in tools.yaml and nowhere else, so the form could neither
+        # show it nor keep it — an untouched Save reset it to the default.
+        ("service", {"service", "target", "service_data", "response", "timeout"}),
         ("template", {"value_template"}),
         ("rest", {"method", "url", "headers", "payload", "timeout", "response_format"}),
-        ("script", {"script", "variables"}),
+        ("script", {"script", "variables", "timeout"}),
     ],
 )
 async def test_the_form_reshapes_around_the_action_type(

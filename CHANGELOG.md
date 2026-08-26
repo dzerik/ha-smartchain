@@ -11,6 +11,41 @@ project follows [Semantic Versioning](https://semver.org/).
 > **Note:** the `5.4.0` section below is a roll-up: it covers `5.4.0` through
 > `5.4.7`, which were developed on one branch and are not separated here.
 
+## [5.6.1] - unreleased
+
+### Fixed
+- **The `timeout` no longer cancels the action it is timing.** `5.6.0` gave
+  `service` and `script` a budget by wrapping the call in `asyncio.timeout`,
+  which stops the wait by killing the task — so the documented
+  `script.morning_routine` would open the curtains and be cut off halfway. The
+  call now runs in its own task and only the *waiting* is bounded: the model
+  hears "started, no result yet — it is still running", and the outcome is
+  logged when it arrives. A budget configured in `tools.yaml` also survives a
+  round trip through the panel now; opening a tool and pressing Save used to
+  drop it back to the default.
+- **Rollback is not offered when there is nothing left to undo.** A save whose
+  reload fails already puts the good file back, and the swap leaves the *failed*
+  text in `.bak` — so the button that appeared there in `5.6.0` pointed forward
+  into the breakage, not out of it. The backend now says `restored`, which
+  answers the question the button actually asks; `backup_exists` only ever
+  answered "is there a file".
+- **An MCP client built while a rebuild held the lock is closed.** The lock
+  added in `5.6.0` to stop two rebuilds racing introduced a leak of its own: a
+  client queued behind it was cancelled before `state.client` was set, so
+  `stop()` could not see it and nothing ever closed it.
+
+### Changed
+- A test docstring claimed a branch was unreachable "checked by making it raise
+  and watching all 137 MCP tests stay green". Forcing the branch fails six of
+  them. The claim is replaced by what is actually true, with the six named.
+- The gap in the panel's unsaved-changes detection is now written down where it
+  lives instead of being described as residual: a create form is served `{}`, so
+  the first pick in any dropdown is not recognised as an edit. Widening the
+  rule was tried and reverted — `<ha-form>` fills keys in with real values, so
+  by value alone a default and a choice are the same event, and timing cannot
+  separate them either. The fix belongs in what the form is served, not in how
+  its echoes are read.
+
 ## [5.6.0] - unreleased
 
 ### Added

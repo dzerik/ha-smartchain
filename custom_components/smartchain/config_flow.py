@@ -1572,10 +1572,10 @@ TOOL_ERROR_TEXT: dict[str, str] = {
 # Which extra fields each action type declares, in the order the form shows
 # them. Data-driven so the form, the validator and the composer cannot drift.
 TOOL_ACTION_FIELDS: dict[str, tuple[str, ...]] = {
-    "service": ("service", "target", "service_data", "response"),
+    "service": ("service", "target", "service_data", "response", "timeout"),
     "template": ("value_template",),
     "rest": ("method", "url", "headers", "payload", "timeout", "response_format"),
-    "script": ("script", "variables"),
+    "script": ("script", "variables", "timeout"),
 }
 
 # The five answers that decide what the rest of the tool form looks like.
@@ -1648,6 +1648,8 @@ def tool_subentry_schema(hass, defaults: Mapping[str, Any] | None = None) -> vol
     PREVENT_EXTRA does the mutual-exclusion work for free: a `template` tool
     that submits a `url` is rejected by the schema itself.
     """
+    from .tools.model import ACTION_DEFAULT_TIMEOUT, ACTION_MAX_TIMEOUT, ACTION_MIN_TIMEOUT
+
     current = dict(defaults or {})
     action_type = current.get("action_type") or TOOL_DEFAULT_ACTION_TYPE
     if action_type not in TOOL_ACTION_TYPES:
@@ -1658,6 +1660,27 @@ def tool_subentry_schema(hass, defaults: Mapping[str, Any] | None = None) -> vol
 
     def suggest(key: str, fallback: Any = None) -> dict[str, Any]:
         return {"suggested_value": current.get(key, fallback)}
+
+    def action_timeout_field() -> tuple[Any, Any]:
+        """The `service`/`script` budget, in the form as well as in YAML.
+
+        It was declared in `tools.yaml` and nowhere else, so the panel could
+        neither show it nor keep it: opening a tool that set `timeout: 300` and
+        pressing Save reset it to the default without saying so.
+
+        Deliberately no `default=` on the key, matching `_ACTION_TIMEOUT` in
+        `tools/schema.py`: an action that never named a budget must come back
+        out of the form still not naming one, or the first Save rewrites every
+        preset in the catalogue.
+        """
+        return (
+            vol.Optional("timeout", description=suggest("timeout", ACTION_DEFAULT_TIMEOUT)),
+            NumberSelector(
+                NumberSelectorConfig(
+                    min=ACTION_MIN_TIMEOUT, max=ACTION_MAX_TIMEOUT, step=1, mode="box"
+                )
+            ),
+        )
 
     fields: dict[Any, Any] = {
         vol.Required("name", description=suggest("name", "")): selector.TextSelector(),
@@ -1710,6 +1733,8 @@ def tool_subentry_schema(hass, defaults: Mapping[str, Any] | None = None) -> vol
         fields[vol.Optional("response", description=suggest("response", False), default=False)] = (
             bool
         )
+        timeout_key, timeout_selector = action_timeout_field()
+        fields[timeout_key] = timeout_selector
     elif action_type == "template":
         fields[vol.Optional("value_template", description=suggest("value_template", ""))] = (
             TemplateSelector()
@@ -1757,6 +1782,8 @@ def tool_subentry_schema(hass, defaults: Mapping[str, Any] | None = None) -> vol
         fields[vol.Optional("variables", description=suggest("variables", {}), default=dict)] = (
             selector.ObjectSelector()
         )
+        timeout_key, timeout_selector = action_timeout_field()
+        fields[timeout_key] = timeout_selector
 
     return vol.Schema(fields)
 
@@ -1863,6 +1890,18 @@ def compose_tool_action(
     action_type = form.get("action_type") or TOOL_DEFAULT_ACTION_TYPE
     action: dict[str, Any] = {"type": action_type}
 
+    def carry_timeout() -> None:
+        """Copy the budget across only when the form actually carries one.
+
+        `form.get("timeout", DEFAULT)` would have been wrong in the other
+        direction: the key is `vol.Optional` without a `default=` in both this
+        form and `tools/schema.py`, precisely so a tool that never named a
+        budget is not rewritten by opening and saving it.
+        """
+        budget = form.get("timeout")
+        if budget is not None:
+            action["timeout"] = int(budget)
+
     if action_type == "service":
         service = str(form.get("service") or "").strip()
         if not service:
@@ -1875,6 +1914,7 @@ def compose_tool_action(
         action["target"] = dict(form.get("target") or {})
         action["data"] = dict(form.get("service_data") or {})
         action["response"] = bool(form.get("response", False))
+        carry_timeout()
     elif action_type == "template":
         value_template = str(form.get("value_template") or "").strip()
         if not value_template:
@@ -1903,6 +1943,7 @@ def compose_tool_action(
             return None, ("script", "invalid_script")
         action["script"] = script
         action["variables"] = dict(form.get("variables") or {})
+        carry_timeout()
     else:
         return None, ("action_type", "invalid_action")
 
@@ -2118,6 +2159,13 @@ def tool_form_defaults(subentry: Any, *, redact: bool = True) -> dict[str, Any]:
     else:
         defaults["params_json"] = json.dumps(parameters, indent=2, ensure_ascii=False)
 
+    # Only when stored, never invented — the mirror of `carry_timeout` in
+    # `compose_tool_action`, and the reason an untouched Save leaves a
+    # budget-free action budget-free.
+    def carry_timeout() -> None:
+        if "timeout" in action:
+            defaults["timeout"] = action["timeout"]
+
     if action_type == "service":
         domain = action.get("domain", "")
         service = action.get("service", "")
@@ -2125,6 +2173,7 @@ def tool_form_defaults(subentry: Any, *, redact: bool = True) -> dict[str, Any]:
         defaults["target"] = dict(action.get("target") or {})
         defaults["service_data"] = dict(action.get("data") or {})
         defaults["response"] = bool(action.get("response", False))
+        carry_timeout()
     elif action_type == "template":
         defaults["value_template"] = action.get("value_template", "")
     elif action_type == "rest":
@@ -2137,6 +2186,7 @@ def tool_form_defaults(subentry: Any, *, redact: bool = True) -> dict[str, Any]:
     elif action_type == "script":
         defaults["script"] = action.get("script", "")
         defaults["variables"] = dict(action.get("variables") or {})
+        carry_timeout()
 
     return redact_tool_secrets(defaults) if redact else defaults
 

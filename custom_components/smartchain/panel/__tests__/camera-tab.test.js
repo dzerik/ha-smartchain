@@ -1,7 +1,7 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import "../components/camera-tab.js";
-import { mount } from "./harness.js";
+import { fakeHass, flush, mount } from "./harness.js";
 
 /**
  * Accessible names for the camera tab's controls.
@@ -70,14 +70,6 @@ describe("<sc-camera-tab> control labelling", () => {
     }
   });
 
-  it("announces the analysis result when it appears", () => {
-    // The result arrives after an await, long after focus moved on. Without a
-    // live region the text is drawn and never spoken.
-    const result = tab.querySelector("#ct-result");
-    expect(result).not.toBeNull();
-    expect(result.getAttribute("aria-live")).toBe("polite");
-  });
-
   it("has no hardcoded foreground colour over the themable code background", () => {
     // The response pane paints itself on --code-editor-background-color, which
     // Home Assistant resolves to the card background — white on a light theme.
@@ -86,5 +78,109 @@ describe("<sc-camera-tab> control labelling", () => {
     const style = tab.querySelector("style").textContent;
     expect(style).not.toContain("#d4d4d4");
     expect(style).toContain("var(--primary-text-color");
+  });
+});
+
+/**
+ * The result pane is the tab's one asynchronous output: it arrives long after
+ * focus has moved on, so `aria-live` is what is supposed to speak it.
+ *
+ * The attribute alone proves nothing. `.sc-hidden` is `display: none`, and a
+ * node inside a `display:none` subtree is not in the accessibility tree at
+ * all — a text change there is invisible to assistive technology, so a live
+ * region that is hidden when it is written to announces nothing whatsoever.
+ * These tests therefore watch the *writes*: every one of them must land while
+ * the region is on screen. Asserting the attribute exists would pass just as
+ * happily with the announcement mechanically impossible, which is exactly the
+ * state this file used to certify.
+ */
+describe("<sc-camera-tab> announcing the analysis result", () => {
+  /**
+   * Record every assignment to the response pane's text, with the visibility
+   * of the live region at that exact moment. Synchronous on purpose: a
+   * MutationObserver batches, so it would report the state after the whole
+   * handler finished and would happily bless a write made while hidden.
+   */
+  function watchWrites(tab) {
+    const region = tab.querySelector("#ct-result");
+    const pane = tab.querySelector("#ct-response");
+    const writes = [];
+    let text = "";
+    Object.defineProperty(pane, "textContent", {
+      configurable: true,
+      get: () => text,
+      set(value) {
+        text = value;
+        writes.push({ value, hidden: region.classList.contains("sc-hidden") });
+      },
+    });
+    return writes;
+  }
+
+  async function analyze(answer) {
+    const net = fakeHass({ call_service: answer });
+    net.hass.states = {
+      "camera.front": { state: "idle", attributes: { friendly_name: "Front door" } },
+    };
+    const tab = mount("sc-camera-tab");
+    tab.hass = net.hass;
+    const writes = watchWrites(tab);
+    tab.querySelector("#ct-camera").value = "camera.front";
+    tab.querySelector("#ct-prompt").value = "who is at the door?";
+    tab.querySelector("#ct-btn-analyze").dispatchEvent(new Event("click"));
+    await flush();
+    return { tab, writes };
+  }
+
+  // jsdom refuses to run a second element's connectedCallback render while an
+  // earlier instance is still in the body, so each test starts from an empty
+  // document — the same thing the first describe does.
+  beforeEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  afterEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  it("marks the pane as a live region at all", () => {
+    // Necessary but nowhere near sufficient — see the tests below.
+    const tab = mount("sc-camera-tab");
+    expect(tab.querySelector("#ct-result").getAttribute("aria-live")).toBe("polite");
+  });
+
+  it("is on screen every time the result text is written", async () => {
+    const { tab, writes } = await analyze({
+      response: { "smartchain.analyze_image": { response: "A parcel courier." } },
+    });
+
+    expect(writes.length).toBeGreaterThan(0);
+    // Not "the last write was visible": a write made while hidden is a lost
+    // announcement even if the pane is revealed a line later.
+    expect(writes.map((write) => write.hidden)).toEqual(writes.map(() => false));
+    expect(writes[writes.length - 1].value).toBe("A parcel courier.");
+    expect(tab.querySelector("#ct-result").classList.contains("sc-hidden")).toBe(false);
+  });
+
+  it("is on screen when a failure is written there too", async () => {
+    const { writes } = await analyze(() => {
+      throw new Error("Camera unavailable");
+    });
+
+    expect(writes.length).toBeGreaterThan(0);
+    expect(writes.map((write) => write.hidden)).toEqual(writes.map(() => false));
+    expect(writes[writes.length - 1].value).toContain("Camera unavailable");
+  });
+
+  it("says something rather than sitting on a stale progress line", async () => {
+    // An empty response used to leave the pane hidden and silent; with the
+    // region revealed for the run, it would leave "Analyzing…" on screen
+    // forever instead. Either way the user is told nothing about what came
+    // back, so say it.
+    const { writes } = await analyze({ response: { "smartchain.analyze_image": {} } });
+    const final = writes[writes.length - 1].value;
+    expect(final).not.toMatch(/Analyzing/);
+    expect(final).not.toBe("");
+    expect(writes.map((write) => write.hidden)).toEqual(writes.map(() => false));
   });
 });

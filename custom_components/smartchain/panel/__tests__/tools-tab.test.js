@@ -223,6 +223,245 @@ describe("sc-tools-tab: a stale refusal never silently overwrites the editor", (
   });
 });
 
+describe("sc-tools-tab: Rollback is offered exactly when a backup exists", () => {
+  const MINE = "tools:\n  - name: mine_unsaved\n";
+
+  /** Is the Rollback button on screen? Hiding is a class, not removal. */
+  const rollbackShown = (tab) =>
+    !tab.querySelector("#sc-tools-rollback").classList.contains("sc-hidden");
+
+  /** Type an edit and press Save, letting the round trip finish. */
+  async function save(tab, editor) {
+    type(editor, MINE);
+    tab.querySelector("#sc-tools-save").dispatchEvent(new Event("click"));
+    await flush();
+  }
+
+  it("shows Rollback when a reload_failed refusal reports a backup on disk", async () => {
+    // The whole point of the refusal carrying `backup_exists`: the restore it
+    // performed left the failed text as the new .bak, so there *is* something
+    // to roll back to. Assuming otherwise hides the escape hatch at the one
+    // moment the user is hunting for it.
+    const { tab, editor } = await boot({
+      "smartchain/tools/save": {
+        ok: false,
+        reason: "reload_failed",
+        error: "boom",
+        backup_exists: true,
+      },
+    });
+    expect(rollbackShown(tab)).toBe(false); // the file loaded with no backup
+
+    await save(tab, editor);
+
+    expect(rollbackShown(tab)).toBe(true);
+  });
+
+  it("hides Rollback when a reload_failed refusal reports no backup", async () => {
+    // The other half of the same claim: a first-ever save that fails to reload
+    // is undone by deleting the file, leaving nothing to roll back to — and the
+    // button must go away rather than lead the user to a dead end.
+    const { tab, editor } = await boot({
+      "smartchain/tools/get": {
+        path: "/config/smartchain/tools.yaml",
+        text: ON_DISK,
+        exists: true,
+        error: null,
+        hash: DISK_HASH,
+        backup_exists: true,
+      },
+      "smartchain/tools/save": {
+        ok: false,
+        reason: "reload_failed",
+        error: "boom",
+        backup_exists: false,
+      },
+    });
+    expect(rollbackShown(tab)).toBe(true);
+
+    await save(tab, editor);
+
+    expect(rollbackShown(tab)).toBe(false);
+  });
+
+  it("keeps what it already knew when a refusal says nothing about the backup", async () => {
+    // Absence of the field is not a report of `false`. Inventing one here is
+    // how the button vanished while a backup sat on disk; the panel may only
+    // change its mind on a fact the backend actually stated.
+    const { tab, editor } = await boot({
+      "smartchain/tools/get": {
+        path: "/config/smartchain/tools.yaml",
+        text: ON_DISK,
+        exists: true,
+        error: null,
+        hash: DISK_HASH,
+        backup_exists: true,
+      },
+      "smartchain/tools/save": { ok: false, reason: "reload_failed", error: "boom" },
+    });
+
+    await save(tab, editor);
+
+    expect(rollbackShown(tab)).toBe(true);
+  });
+
+  it("hides Rollback when the failed save was already undone for us", async () => {
+    // The one case where a backup is on disk and offering it would be wrong.
+    // A save whose reload failed has already had the good file put back, and
+    // the swap left the *failed* text in `.bak` — so Rollback here does not
+    // undo the breakage, it installs it. `restored` is the backend saying so.
+    const { tab, editor } = await boot({
+      "smartchain/tools/get": {
+        path: "/config/smartchain/tools.yaml",
+        text: ON_DISK,
+        exists: true,
+        error: null,
+        hash: DISK_HASH,
+        backup_exists: true,
+      },
+      "smartchain/tools/save": {
+        ok: false,
+        reason: "reload_failed",
+        error: "boom",
+        backup_exists: true,
+        restored: true,
+      },
+    });
+    expect(rollbackShown(tab)).toBe(true);
+
+    await save(tab, editor);
+
+    expect(rollbackShown(tab)).toBe(false);
+  });
+
+  it("still offers Rollback when a rollback's own reload failed", async () => {
+    // The neighbouring case, and the reason `restored` exists rather than a
+    // blanket rule about reload_failed: nothing was undone for the user here,
+    // so the escape hatch stays.
+    confirmSpy.mockReturnValue(true);
+    const { tab } = await boot({
+      "smartchain/tools/get": {
+        path: "/config/smartchain/tools.yaml",
+        text: ON_DISK,
+        exists: true,
+        error: null,
+        hash: DISK_HASH,
+        backup_exists: true,
+      },
+      "smartchain/tools/rollback": {
+        ok: false,
+        reason: "reload_failed",
+        error: "boom",
+        backup_exists: true,
+      },
+    });
+    expect(rollbackShown(tab)).toBe(true);
+
+    tab.querySelector("#sc-tools-rollback").dispatchEvent(new Event("click"));
+    await flush();
+
+    expect(rollbackShown(tab)).toBe(true);
+  });
+
+  it("takes the backup state a successful save reports instead of guessing", async () => {
+    // A save answers from the disk it just wrote. The panel used to infer the
+    // backup from whether the file had existed, which is wrong whenever a .bak
+    // outlives the file beside it.
+    const { tab, editor } = await boot({
+      "smartchain/tools/get": {
+        path: "/config/smartchain/tools.yaml",
+        text: "",
+        exists: false,
+        error: null,
+        hash: null,
+        backup_exists: false,
+      },
+      "smartchain/tools/save": { ok: true, hash: "hash-after-save", backup_exists: true },
+    });
+    expect(rollbackShown(tab)).toBe(false);
+
+    await save(tab, editor);
+
+    expect(rollbackShown(tab)).toBe(true);
+  });
+
+  it("hides Rollback when a successful save reports no backup", async () => {
+    const { tab, editor } = await boot({
+      "smartchain/tools/get": {
+        path: "/config/smartchain/tools.yaml",
+        text: ON_DISK,
+        exists: true,
+        error: null,
+        hash: DISK_HASH,
+        backup_exists: true,
+      },
+      "smartchain/tools/save": { ok: true, hash: "hash-after-save", backup_exists: false },
+    });
+    expect(rollbackShown(tab)).toBe(true);
+
+    await save(tab, editor);
+
+    expect(rollbackShown(tab)).toBe(false);
+  });
+
+  it("hides Rollback when a rollback's own reload failure consumed the backup", async () => {
+    // A rollback onto a path with no file moves the .bak rather than swapping
+    // it, so a failed reload can leave nothing behind. The button must not keep
+    // pointing at a backup that is gone.
+    confirmSpy.mockReturnValue(true);
+    const { tab } = await boot({
+      "smartchain/tools/get": {
+        path: "/config/smartchain/tools.yaml",
+        text: ON_DISK,
+        exists: true,
+        error: null,
+        hash: DISK_HASH,
+        backup_exists: true,
+      },
+      "smartchain/tools/rollback": {
+        ok: false,
+        reason: "reload_failed",
+        error: "boom",
+        backup_exists: false,
+      },
+    });
+    expect(rollbackShown(tab)).toBe(true);
+
+    tab.querySelector("#sc-tools-rollback").dispatchEvent(new Event("click"));
+    await flush();
+
+    expect(rollbackShown(tab)).toBe(false);
+  });
+
+  it("keeps Rollback after a rollback whose reload failed but left a backup", async () => {
+    // The usual shape of that failure: the swap put the replaced file in the
+    // .bak slot, so a second rollback can undo this one — and the only way to
+    // reach it is a button that is still there.
+    confirmSpy.mockReturnValue(true);
+    const { tab } = await boot({
+      "smartchain/tools/get": {
+        path: "/config/smartchain/tools.yaml",
+        text: ON_DISK,
+        exists: true,
+        error: null,
+        hash: DISK_HASH,
+        backup_exists: true,
+      },
+      "smartchain/tools/rollback": {
+        ok: false,
+        reason: "reload_failed",
+        error: "boom",
+        backup_exists: true,
+      },
+    });
+
+    tab.querySelector("#sc-tools-rollback").dispatchEvent(new Event("click"));
+    await flush();
+
+    expect(rollbackShown(tab)).toBe(true);
+  });
+});
+
 describe("sc-tools-tab: a hass tick is not a repaint", () => {
   it("survives twenty state pushes with the same node and the same text", async () => {
     const { net, tab, editor } = await boot();

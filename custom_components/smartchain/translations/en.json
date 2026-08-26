@@ -505,7 +505,7 @@
             "url": "May contain {{ }} templates referencing the tool's arguments.",
             "headers": "Sent with the request; values may template too. Header values are never shown again once saved — leave one blank to keep the stored value, or type a new one to replace it.",
             "payload": "JSON request body, for POST and PUT. Leave empty to send no body at all, which is not the same as sending an empty object.",
-            "timeout": "How long to wait for the endpoint, 1–120 seconds.",
+            "timeout": "How long to wait for a result. A REST request is aborted at the deadline (1–120 s). A service or script is not — it keeps running and the model is simply told there is no answer yet (1–300 s).",
             "response_format": "json parses the response and hands the model the parsed data; text hands back the raw body.",
             "script": "The script this tool runs.",
             "variables": "Passed to the script as variables; values may contain {{ }} templates referencing the tool's arguments."

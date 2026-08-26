@@ -701,34 +701,6 @@ describe("ScConfigForm.hasUnsavedChanges", () => {
     expect(form.hasUnsavedChanges).toBe(true);
   });
 
-  it("is not made dirty by <ha-form> normalising the data we hand it", async () => {
-    // Home Assistant's <ha-form> answers a `data` assignment with a
-    // value-changed of its own, and the value it sends back is not always
-    // identical — it fills in defaults for keys the schema declares. That is
-    // this component talking to itself. Counted as an edit, it would leave
-    // every form dirty right after it saved, and put a "you have unsaved
-    // changes" question in front of a user who has just saved.
-    const { form } = await boot({ "smartchain/agent/save": { ok: true } });
-    const haForm = form.querySelector("ha-form");
-    let stored;
-    Object.defineProperty(haForm, "data", {
-      configurable: true,
-      get: () => stored,
-      set(value) {
-        stored = value;
-        haForm.dispatchEvent(
-          new CustomEvent("value-changed", { detail: { value: { ...value, extra: "default" } } })
-        );
-      },
-    });
-
-    type(form, { prompt: "changed" });
-    form.querySelector("#sc-form-save").dispatchEvent(new Event("click"));
-    await flush();
-
-    expect(form.hasUnsavedChanges).toBe(false);
-  });
-
   it("survives Refresh models, which keeps the edits it was pressed for", async () => {
     const { form } = await boot();
     type(form, { prompt: "half typed" });
@@ -743,5 +715,118 @@ describe("ScConfigForm.hasUnsavedChanges", () => {
     for (let i = 0; i < 20; i += 1) form.hass = { ...net.hass };
     await flush();
     expect(form.hasUnsavedChanges).toBe(false);
+  });
+});
+
+/**
+ * <ha-form> answers a `data` assignment with a `value-changed` of its own, and
+ * the value it sends back is not always identical: it fills in defaults for
+ * keys the schema declares but the payload had no value for. That is this
+ * component talking to itself, not a user typing.
+ *
+ * The guard used to be a synchronous `_applying` flag around the assignment,
+ * which is only correct if <ha-form> echoes inside the assignment. Nothing
+ * promises that — a selector that settles its own value one frame later echoes
+ * a frame later — and when it does not, every form is dirty the moment it
+ * loads: a "you have unsaved changes" question on every tab switch after
+ * merely opening a form, which is exactly the confirmation users learn to
+ * click through without reading.
+ *
+ * So the echo is recognised by what the value *is* — every key we handed over
+ * still carrying the value we handed over — and not by when it arrives.
+ */
+describe("ScConfigForm: an <ha-form> that echoes the data we hand it", () => {
+  const SCHEMA = {
+    "smartchain/agent/schema": {
+      schema: [{ name: "prompt", selector: { text: {} } }],
+      data: { prompt: "hello" },
+      labels: { prompt: "Prompt" },
+    },
+  };
+
+  /**
+   * Make `haForm` behave like Home Assistant's: every `data` assignment comes
+   * back as a value-changed carrying a normalised copy — one extra key the
+   * schema declares a default for. `when` decides only the timing.
+   */
+  function echoing(haForm, when) {
+    let stored;
+    Object.defineProperty(haForm, "data", {
+      configurable: true,
+      get: () => stored,
+      set(value) {
+        stored = value;
+        const echo = () =>
+          haForm.dispatchEvent(
+            new CustomEvent("value-changed", { detail: { value: { ...value, extra: "default" } } })
+          );
+        if (when === "sync") echo();
+        else setTimeout(echo, 0);
+      },
+    });
+  }
+
+  async function boot(when, extra = {}) {
+    const net = fakeHass({ ...SCHEMA, ...extra });
+    const form = mount("sc-config-form");
+    // Before the load, so the very first `_apply` is echoed too — the moment
+    // the async version used to turn a freshly opened form dirty.
+    echoing(form.querySelector("ha-form"), when);
+    form.commands = { schema: "smartchain/agent/schema", save: "smartchain/agent/save" };
+    form.entryId = "entry-1";
+    form.hass = net.hass;
+    await flush();
+    return { net, form };
+  }
+
+  for (const when of ["sync", "async"]) {
+    it(`leaves a freshly loaded form clean when the echo is ${when}`, async () => {
+      const { form } = await boot(when);
+      expect(form._data).toEqual({ prompt: "hello", extra: "default" });
+      expect(form.hasUnsavedChanges).toBe(false);
+    });
+
+    it(`leaves a just-saved form clean when the echo is ${when}`, async () => {
+      const { form } = await boot(when, { "smartchain/agent/save": { ok: true } });
+      form
+        .querySelector("ha-form")
+        .dispatchEvent(new CustomEvent("value-changed", { detail: { value: { prompt: "typed" } } }));
+      expect(form.hasUnsavedChanges).toBe(true);
+
+      form.querySelector("#sc-form-save").dispatchEvent(new Event("click"));
+      await flush();
+
+      expect(form.hasUnsavedChanges).toBe(false);
+    });
+
+    it(`still sees a real edit as one when the echo is ${when}`, async () => {
+      // The exemption is for values we handed over coming back unchanged, not
+      // for "anything that arrives soon after a load". An emission that
+      // rewrites one of them is an edit however early it lands.
+      const { form } = await boot(when);
+      form.querySelector("ha-form").dispatchEvent(
+        new CustomEvent("value-changed", {
+          detail: { value: { prompt: "typed over it", extra: "default" } },
+        })
+      );
+      expect(form.hasUnsavedChanges).toBe(true);
+    });
+  }
+
+  it("does not lose a dirty flag to an echo that lands after the edit", async () => {
+    // The orders can interleave: the user types before a slow selector has
+    // finished settling. The late echo must not talk the form back to clean.
+    const { form } = await boot("async");
+    const haForm = form.querySelector("ha-form");
+    haForm.dispatchEvent(
+      new CustomEvent("value-changed", { detail: { value: { prompt: "typed", extra: "default" } } })
+    );
+    expect(form.hasUnsavedChanges).toBe(true);
+
+    haForm.dispatchEvent(
+      new CustomEvent("value-changed", { detail: { value: { prompt: "typed", extra: "default" } } })
+    );
+    await flush();
+    expect(form.hasUnsavedChanges).toBe(true);
   });
 });
