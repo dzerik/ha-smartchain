@@ -251,9 +251,47 @@ what to do when the model calls it. Four action types: `service`, `template`,
 execution; templated strings inside the action are Jinja-rendered with the
 LLM-supplied arguments as the variable scope.
 
-**There are two ways to write one, and they produce the same tool.**
+**There are two ways to write one, and they produce the same tool** — plus a
+catalogue of ready-made ones you do not have to write at all.
 
-### 7.0. The Tools tab *(v5.3.0+)* — build one without YAML
+### 7.0. Ready-made tools *(v5.4.6+)* — a set you switch on
+
+The **Tools** tab opens with a **Ready-made tools** block above your own tools.
+Each row is a real tool with a switch; flip it and the tool exists.
+
+| Tool | What it gives the model |
+|---|---|
+| `weather_forecast` | The forecast for the coming days or hours — Assist only reports the weather *now* |
+| `sun_times` | Sunrise, sunset, dawn and dusk |
+| `calendar_events` | Events from a calendar over a date range |
+| `todo_list_items` | Reads a to-do or shopping list back — Assist can only add to one |
+| `area_summary` | What is on in one room, in a single call |
+| `who_is_home` | Presence, without assembling it from entity names |
+| `look_at_camera` | Looks at a camera mid-conversation and describes what it sees |
+| `notify_device` | Sends a notification, so the agent can reach you rather than only answer |
+
+Each takes the entity as an *argument*, so one `weather_forecast` serves every
+weather entity in the house.
+
+Nothing about an installed preset stays special: it is a tool sub-entry, it
+appears in the list below with source **built here**, and Edit, disable and
+Delete all work on it. The switch goes on and stays on — removing it is Delete
+in the list below, where the button says what it does.
+
+The catalogue deliberately does **not** duplicate Home Assistant's own Assist
+API (turning things on and off, setting lights and climate, adding to lists) or
+our built-in tools (§6). Energy over a period, a sensor's min/max/mean and
+recent logbook events are absent for a different reason: they live in the
+recorder's statistics and the logbook, which are reachable only over the
+websocket API, and doing them properly means a built-in tool rather than a
+preset.
+
+A preset whose name is already taken — by one of your tools or by a connected
+MCP server — is refused with the reason, exactly as the form refuses it. A
+`tools.yaml` tool of the same name is *not* a conflict: installing shadows it,
+and the panel says so (§7.7).
+
+### 7.0.1. The Tools tab *(v5.3.0+)* — build one without YAML
 
 Open the SmartChain panel and pick **Tools**, or add a **Tool** sub-entry from
 Settings → Devices & Services. Either way you get a form:

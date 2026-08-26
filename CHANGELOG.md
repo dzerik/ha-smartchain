@@ -11,6 +11,28 @@ project follows [Semantic Versioning](https://semver.org/).
 ## [5.4.0] - unreleased
 
 ### Added
+- **A normal set of tools you can just switch on.** The **Tools** tab opens with
+  a **Ready-made tools** catalogue above your own: eight real tools — weather
+  forecast, sun times, calendar events, to-do list items, area summary, who is
+  home, look at a camera, notify a device — each a row with a switch. Switching
+  one on writes it as an ordinary tool sub-entry: editable, disableable,
+  deletable, indistinguishable afterwards from one built in the form.
+  The catalogue covers what Assist and the built-in tools do not, on purpose —
+  it does not offer a second way to turn a light on. Three things the catalogue
+  deliberately omits (energy over a period, sensor min/max/mean, recent logbook
+  events) need the recorder's statistics or the logbook, which are websocket-only
+  and belong in a built-in tool rather than in a preset.
+- Two admin-only commands behind it: `smartchain/tool/presets` lists the
+  catalogue with an `installed` flag derived from the tool sub-entries that
+  exist, and `smartchain/tool/preset/install` materialises one. Install reuses
+  `validate_tool_name` (reserved names, duplicates, a live MCP tool's name), the
+  same `_write_subentry` storability guard and the same registry rebuild as
+  `smartchain/tool/save`, and reports `shadows_yaml` the same way.
+- **A translation key convention for panel text**: `config_panel.presets.<tool
+  name>.name` and `.description`, in both locales. The tool's own `description`
+  — the sentence the *model* reads — stays English in `tools/presets.py`, since
+  that is what the providers are trained on. Different audiences, different
+  strings, different places.
 - **One place that says what an agent can do.** The **Agents** tab's tools cell
   expands into the agent's whole inventory — the six built-in tools and every
   custom tool together, the ones that are *off* included, each with where it

@@ -205,6 +205,20 @@ const SOURCE_LABELS = {
 };
 
 /**
+ * Why a preset could not be installed. Each reason is a different problem and
+ * gets its own sentence, the same way `_importFailureMessage` does — the
+ * backend sends a key precisely so that the wording lives here, next to the
+ * user, rather than being assembled in Python.
+ */
+const PRESET_FAILURE = {
+  name_taken: "A tool of that name already exists. Rename or delete it first.",
+  reserved_name: "That name belongs to a built-in tool.",
+  mcp_name_taken: "A connected MCP server already publishes a tool of that name.",
+  invalid_name: "That preset's name is not a valid tool name.",
+  unstorable: "That preset could not be stored. The detail is in the Home Assistant log.",
+};
+
+/**
  * <sc-tools-tab> — a constructor for custom tools, plus tools.yaml import/export.
  *
  * A tool used to exist only as an entry in tools.yaml, so building one meant
@@ -237,6 +251,7 @@ export class ScToolsTab extends HTMLElement {
     this._entries = [];
     this._rawEntries = null;
     this._list = null; // {tools, shadowed_yaml} from tool/list
+    this._presets = null; // [{name, title, blurb, action_type, installed}]
     this._editing = null; // {entryId, subentryId|null}
 
     this._loaded = false; // becomes true once the first tools/get resolves
@@ -295,6 +310,14 @@ export class ScToolsTab extends HTMLElement {
       // still works, which is the escape hatch when something is wrong.
       showToast(err.message || "Could not read the tool list", "error");
       this._list = null;
+    }
+    try {
+      const result = await callWS(this._hass, "smartchain/tool/presets");
+      this._presets = (result && result.presets) || [];
+    } catch {
+      // Losing the catalogue must not cost the list beneath it, which is the
+      // half the user's own tools live in. The block simply does not render.
+      this._presets = null;
     }
     if (this._rendered && !this._editing) this._paintList();
   }
@@ -389,6 +412,7 @@ export class ScToolsTab extends HTMLElement {
     const yamlError = (this._list && this._list.yaml_error) || null;
 
     root.innerHTML = `
+      ${this._presetsHtml()}
       <section class="sc-entry">
         <header class="sc-entry-head">
           <span class="sc-entry-title">Tools</span>
@@ -427,6 +451,103 @@ export class ScToolsTab extends HTMLElement {
     root.querySelectorAll("[data-act]").forEach((button) =>
       button.addEventListener("click", () => this._act(button.dataset))
     );
+    root.querySelectorAll("[data-preset]").forEach((toggle) =>
+      toggle.addEventListener("change", () => this._installPreset(toggle))
+    );
+  }
+
+  /**
+   * The ready-made catalogue, above the user's own tools.
+   *
+   * A switch rather than a button because that is the promise: these are tools
+   * you turn on, not tools you fill in a form for. An installed preset's switch
+   * stays on and goes disabled — turning it back off would have to mean delete,
+   * and by then the tool is an ordinary one the user may have edited, so the
+   * decision belongs in the list below where Delete says what it does.
+   *
+   * `title` and `blurb` arrive translated from `tool/presets`; nothing here
+   * spells either of them, and an untranslated preset still renders because the
+   * backend falls back to the tool's own name.
+   */
+  _presetsHtml() {
+    const presets = this._presets || [];
+    if (!presets.length) return "";
+    const added = presets.filter((preset) => preset.installed).length;
+    return `
+      <section class="sc-entry sc-presets">
+        <header class="sc-entry-head">
+          <span class="sc-entry-title">Ready-made tools</span>
+          <span class="sc-entry-engine">${added} of ${presets.length} added</span>
+        </header>
+        <p class="sc-empty">Switch one on and it becomes an ordinary tool below —
+          editable, disableable, deletable. These cover what Assist and the built-in
+          tools do not.</p>
+        <ul class="sc-embed-list">
+          ${presets.map((preset) => this._presetHtml(preset)).join("")}
+        </ul>
+      </section>`;
+  }
+
+  _presetHtml(preset) {
+    return `
+      <li class="sc-embed-row sc-preset-row">
+        <span class="sc-embed-name">${escapeHtml(preset.title || preset.name)}</span>
+        <span class="sc-embed-model">${escapeHtml(preset.blurb || "")}</span>
+        <span class="sc-embed-actions">
+          <ha-switch
+            data-preset="${escapeHtml(preset.name)}"
+            ${preset.installed ? "checked disabled" : ""}
+            title="${escapeHtml(preset.installed ? `${preset.name} — already in the list below` : `Add ${preset.name}`)}"
+          ></ha-switch>
+        </span>
+      </li>`;
+  }
+
+  async _installPreset(toggle) {
+    const name = toggle.dataset.preset;
+    const entryId = this._chosenEntryId();
+    if (!entryId) {
+      toggle.checked = false;
+      showToast("Configure a provider first — a tool has to live somewhere.", "error");
+      return;
+    }
+    // A switch reports its new position immediately; the write has not
+    // happened yet. Lock it so a second click cannot start a second install,
+    // and let the repaint below decide what it finally shows.
+    toggle.disabled = true;
+
+    let result;
+    try {
+      result = await callWS(this._hass, "smartchain/tool/preset/install", {
+        entry_id: entryId,
+        preset: name,
+      });
+    } catch (err) {
+      toggle.checked = false;
+      toggle.disabled = false;
+      showToast(err.message || "That did not work", "error");
+      return;
+    }
+
+    if (!result.ok) {
+      toggle.checked = false;
+      toggle.disabled = false;
+      showToast(
+        PRESET_FAILURE[result.reason] || `Could not add ${name} (${result.reason}).`,
+        "error"
+      );
+      return;
+    }
+
+    if (result.reload_error) {
+      showToast(`Added ${name}, but the reload failed: ${result.reload_error}`, "warning");
+    } else if (result.shadows_yaml) {
+      showToast(`Added ${name}. A tool of this name in tools.yaml is now ignored.`, "warning");
+    } else {
+      showToast(`Added ${name}`, "success");
+    }
+    this._requestRefresh();
+    this._loadList();
   }
 
   /**

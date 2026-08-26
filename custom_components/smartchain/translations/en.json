@@ -507,5 +507,41 @@
         "unstorable": "The value in this field can not be saved. Remove it, or retype it as plain text."
       }
     }
+  },
+  "config_panel": {
+    "presets": {
+      "weather_forecast": {
+        "name": "Weather forecast",
+        "description": "Will it rain tomorrow afternoon? Assist reports the weather now; this answers questions about later."
+      },
+      "sun_times": {
+        "name": "Sun times",
+        "description": "Sunrise, sunset, dawn and dusk, for anything that depends on daylight."
+      },
+      "calendar_events": {
+        "name": "Calendar events",
+        "description": "What is planned. Reads events from a calendar over the range the question is about."
+      },
+      "todo_list_items": {
+        "name": "To-do list items",
+        "description": "Reads a to-do or shopping list back. Assist can add to a list but cannot tell you what is on it."
+      },
+      "area_summary": {
+        "name": "Area summary",
+        "description": "What is on in one room, in a single call, instead of the model guessing entity names one at a time."
+      },
+      "who_is_home": {
+        "name": "Who is home",
+        "description": "Who is home and who is away, without assembling the answer out of entity names."
+      },
+      "look_at_camera": {
+        "name": "Look at a camera",
+        "description": "Looks at a camera mid-conversation and describes what is visible."
+      },
+      "notify_device": {
+        "name": "Notify a device",
+        "description": "Lets the agent reach you: a notification sent to a device or a person, rather than only an answer."
+      }
+    }
   }
 }

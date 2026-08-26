@@ -76,6 +76,8 @@ def async_register(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_tool_save)
     websocket_api.async_register_command(hass, ws_tool_delete)
     websocket_api.async_register_command(hass, ws_tool_list)
+    websocket_api.async_register_command(hass, ws_tool_presets)
+    websocket_api.async_register_command(hass, ws_tool_preset_install)
     websocket_api.async_register_command(hass, ws_tools_import)
     websocket_api.async_register_command(hass, ws_tools_export)
     websocket_api.async_register_command(hass, ws_overview)
@@ -184,6 +186,46 @@ async def async_field_descriptions(
     return await _async_field_texts(
         hass, category, ".data_description.", subentry_type=subentry_type
     )
+
+
+# Where the panel-facing text of a preset lives, and the one convention chosen
+# for it: `config_panel.presets.<preset name>.{name,description}`.
+#
+# `config_panel` because it is the only category Home Assistant defines for text
+# a custom panel shows — hassfest validates it as a free-form tree of
+# translation keys down to strings, which is exactly the shape needed, and it
+# says in the key itself that this text is for the panel and not for a flow.
+# `presets` scopes it the way `config_subentries` is scoped by subentry type, so
+# a second kind of panel text added later cannot collide with a preset name.
+#
+# The split it establishes is the point: `<preset>.name` and
+# `<preset>.description` are UI strings and are translated, while the tool's own
+# `description` — the sentence the *model* reads to decide whether to call it —
+# stays in English in `tools/presets.py` and is never read from here. They are
+# different audiences, so they are different strings in different places.
+PRESET_TEXT_CATEGORY = "config_panel"
+PRESET_TEXT_PREFIX = f"component.{DOMAIN}.{PRESET_TEXT_CATEGORY}.presets."
+
+
+async def async_preset_texts(hass: HomeAssistant) -> dict[str, dict[str, str]]:
+    """`{preset name: {"name": ..., "description": ...}}` in the user's language.
+
+    Returns whatever it can, like `async_field_labels` does: a preset with no
+    translation is simply absent from the map and the panel falls back to the
+    tool's own name, so a preset added without a translation still renders.
+    """
+    resources = await translation.async_get_translations(
+        hass, hass.config.language, PRESET_TEXT_CATEGORY, [DOMAIN]
+    )
+    texts: dict[str, dict[str, str]] = {}
+    for key, value in resources.items():
+        if not key.startswith(PRESET_TEXT_PREFIX):
+            continue
+        preset, _, field = key[len(PRESET_TEXT_PREFIX) :].partition(".")
+        if field not in ("name", "description"):
+            continue
+        texts.setdefault(preset, {})[field] = value
+    return texts
 
 
 # Said only when the translation file has nothing to say — an English sentence
@@ -2255,6 +2297,142 @@ async def ws_tools_import(
             "imported": imported,
             "skipped": skipped,
             "reload_error": reload_error,
+        },
+    )
+
+
+# ----- the preset catalogue ---------------------------------------------
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): "smartchain/tool/presets"})
+@websocket_api.async_response
+async def ws_tool_presets(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """The ready-made tool catalogue, with each entry's install state.
+
+    `installed` is derived from the tool subentries that exist right now rather
+    than remembered anywhere, because there is nothing to remember: installing a
+    preset writes an ordinary tool subentry and the integration keeps no mark on
+    it afterwards. A user who renames an installed preset therefore sees the
+    catalogue offer it again — correctly, since under that name it no longer
+    exists.
+
+    A tools.yaml tool of the same name does *not* count as installed. It is not
+    a subentry, the panel cannot edit it, and installing over it is allowed —
+    the result shadows the file, which `preset/install` reports the same way
+    `tool/save` does.
+    """
+    from .tools.presets import PRESET_TOOLS
+    from .tools.subentry_source import tool_subentries
+
+    texts = await async_preset_texts(hass)
+    installed = {subentry.title for _entry, subentry in tool_subentries(hass)}
+
+    connection.send_result(
+        msg["id"],
+        {
+            "presets": [
+                {
+                    "name": preset.name,
+                    # The panel-facing pair, translated; falls back to the tool
+                    # name and to nothing, so an untranslated preset still
+                    # renders as a row the user can switch on.
+                    "title": texts.get(preset.name, {}).get("name", preset.name),
+                    "blurb": texts.get(preset.name, {}).get("description", ""),
+                    "action_type": preset.action_type,
+                    "installed": preset.name in installed,
+                }
+                for preset in PRESET_TOOLS
+            ]
+        },
+    )
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "smartchain/tool/preset/install",
+        vol.Required("entry_id"): str,
+        vol.Required("preset"): str,
+    }
+)
+@websocket_api.async_response
+async def ws_tool_preset_install(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Materialise one preset as an ordinary tool subentry.
+
+    The same three writes `ws_tool_save` performs, in the same order and
+    through the same functions: `validate_tool_name` for the reserved-name,
+    duplicate-name and live-MCP-name rules, `_write_subentry` for the
+    JSON-storability guard, `_rebuild_after_subentry_write` for the registry.
+    Nothing here is a preset-specific code path, which is what makes the
+    resulting tool an ordinary one — after this command the integration has no
+    way of telling it apart from a tool built in the form, and does not try.
+
+    A refusal comes back as `{"ok": False, "reason": ...}` rather than as a
+    websocket error, following `tools/import` rather than `tool/save`: there is
+    no form open and no field to attach a message to, so the panel needs a
+    reason it can turn into its own sentence. `params_mode` is derived, not
+    stored in the catalogue — see `preset_subentry_data`.
+    """
+    from .config_flow import validate_tool_name
+    from .tools.presets import PRESETS_BY_NAME, preset_subentry_data
+
+    entry = _get_entry(hass, msg["entry_id"])
+    if entry is None:
+        connection.send_error(msg["id"], "not_found", "Unknown config entry")
+        return
+
+    preset = PRESETS_BY_NAME.get(msg["preset"])
+    if preset is None:
+        connection.send_error(msg["id"], "not_found", "Unknown preset")
+        return
+
+    error = validate_tool_name(hass, preset.name)
+    if error is not None:
+        _field, key = error
+        connection.send_result(msg["id"], {"ok": False, "reason": key})
+        return
+
+    data = preset_subentry_data(preset)
+    data["params_mode"] = _params_mode_for(data["parameters"])
+
+    try:
+        subentry_id = _write_subentry(
+            hass,
+            entry,
+            None,
+            subentry_type=SUBENTRY_TYPE_TOOL,
+            data=data,
+            title=preset.name,
+        )
+    except vol.Invalid:
+        # Unreachable with the catalogue as it stands — every entry is plain
+        # JSON, and a test holds it to that — but the guard is structural in
+        # `_write_subentry` and swallowing its refusal here would be the one
+        # place that undoes it.
+        LOGGER.warning("preset %r could not be stored", preset.name)
+        connection.send_result(msg["id"], {"ok": False, "reason": "unstorable"})
+        return
+
+    reload_error = await _rebuild_after_subentry_write(hass)
+    connection.send_result(
+        msg["id"],
+        {
+            "ok": True,
+            "name": preset.name,
+            "subentry_id": subentry_id,
+            "reload_error": reload_error,
+            # Same report as `tool/save`: a tools.yaml tool of this name is now
+            # ignored in favour of the one just written.
+            "shadows_yaml": preset.name in (hass.data.get(DOMAIN, {}).get("tools_shadowed") or []),
         },
     )
 

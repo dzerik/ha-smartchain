@@ -276,6 +276,14 @@ export const SC_STYLES = `
      it, so it gets breathing room above and a picker that lines up with the
      Add button beside it. */
   .sc-tools-io { margin-top: 20px; }
+  /* The ready-made catalogue. Its blurb is a sentence rather than a model
+     name, so the middle column gets the room the tool list does not need. */
+  .sc-presets .sc-empty { margin: 8px 0 4px; }
+  .sc-preset-row { grid-template-columns: minmax(140px, 1fr) 2fr auto; }
+  .sc-preset-row .sc-embed-actions { align-items: center; }
+  @media (max-width: 600px) {
+    .sc-preset-row { grid-template-columns: 1fr; }
+  }
   .sc-tools-export { min-height: 160px; margin-bottom: 12px; }
   .sc-entry-head .sc-tools-owner { max-width: 220px; margin-left: auto; }
   .sc-entry-head .sc-tools-owner + .sc-add { margin-left: 8px; }
