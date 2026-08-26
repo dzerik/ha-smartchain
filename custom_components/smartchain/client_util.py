@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import re
 from collections.abc import Mapping
@@ -36,6 +37,11 @@ from .const import (
 )
 
 LOGGER = logging.getLogger(__name__)
+
+# Seconds any one provider's model listing may take. The aiohttp fetches carry
+# their own `ClientTimeout(total=10)`; this is the same bound for the one
+# provider whose SDK gives us no timeout parameter to set.
+MODEL_FETCH_TIMEOUT = 10
 
 # The four hand-written providers are literal; every OpenAI-compatible one
 # contributes its row's capabilities.
@@ -271,16 +277,24 @@ def is_embedding_model(engine: str, name: str) -> bool:
     return False
 
 
-async def async_fetch_models(
-    hass: HomeAssistant,
-    engine: str,
-    data: dict,
-    purpose: str = CAPABILITY_CHAT,
-) -> list[str]:
-    """Fetch available models from provider API, filtered by purpose.
+class ModelFetchError(Exception):
+    """A model list could not be fetched from the provider.
 
-    Returns a list of model names with an empty string first (the 'custom'
-    option). Falls back to the static list for `purpose` on any error.
+    Raised only when a caller asks for `strict=True`. It exists so that "the
+    provider said these are its models" and "we could not ask, so here is a
+    list we shipped months ago" stop being the same value. A caller that
+    cannot tell them apart will cache the second as though it were the first,
+    which is how one network blip became permanent until a restart.
+    """
+
+
+def static_models(engine: str, purpose: str = CAPABILITY_CHAT) -> list[str]:
+    """The shipped list for `engine`, used when the provider cannot be asked.
+
+    A copy, never the constant itself: callers extend the list they get back
+    (with a stored model the provider has not listed, for instance), and
+    mutating `MODELS_GIGACHAT` in place would leak that into every later
+    caller.
     """
     from .const import (
         ENGINE_EMBEDDING_MODELS,
@@ -288,12 +302,27 @@ async def async_fetch_models(
         UNIQUE_ID,
     )
 
+    table = ENGINE_EMBEDDING_MODELS if purpose == CAPABILITY_EMBEDDINGS else ENGINE_MODELS
+    return list(table.get(UNIQUE_ID.get(engine, ""), [""]))
+
+
+async def async_fetch_models(
+    hass: HomeAssistant,
+    engine: str,
+    data: dict,
+    purpose: str = CAPABILITY_CHAT,
+    strict: bool = False,
+) -> list[str]:
+    """Fetch available models from provider API, filtered by purpose.
+
+    Returns a list of model names with an empty string first (the 'custom'
+    option). Falls back to the static list for `purpose` on any error — unless
+    `strict`, in which case the failure is raised as `ModelFetchError` and the
+    caller decides what a non-answer is worth. Anything that caches the result,
+    or shows it as the provider's catalogue, wants `strict=True`.
+    """
     want_embeddings = purpose == CAPABILITY_EMBEDDINGS
-    static = (
-        ENGINE_EMBEDDING_MODELS.get(UNIQUE_ID.get(engine, ""), [""])
-        if want_embeddings
-        else ENGINE_MODELS.get(UNIQUE_ID.get(engine, ""), [""])
-    )
+    static = static_models(engine, purpose)
 
     try:
         if engine in OPENAI_COMPATIBLE:
@@ -318,8 +347,13 @@ async def async_fetch_models(
         if models:
             return [""] + models
         raise ValueError("Empty model list")
-    except Exception:
-        LOGGER.debug("Failed to fetch %s models for %s, using static list", purpose, engine)
+    except Exception as err:
+        # WARNING, with the error: this is the moment the user stops being
+        # shown their provider's real catalogue, and a debug line nobody has
+        # enabled is not a trace anyone can act on.
+        LOGGER.warning("Could not fetch %s models for %s: %s", purpose, engine, err)
+        if strict:
+            raise ModelFetchError(f"Could not fetch {purpose} models for {engine}") from err
         return static
 
 
@@ -380,7 +414,39 @@ async def _fetch_anthropic_models(hass: HomeAssistant, data: dict) -> list[str]:
 
 
 async def _fetch_gigachat_models(hass: HomeAssistant, data: dict) -> list[str]:
-    """Fetch models from GigaChat API via SDK."""
-    client = GigaChat(credentials=data[CONF_API_KEY], verify_ssl_certs=False)
-    result = await hass.async_add_executor_job(client.get_models)
+    """Fetch models from GigaChat API via SDK.
+
+    Two things every other provider's fetch already had. `verify_ssl_certs`
+    comes from the hub's own Verify SSL switch rather than being pinned to
+    `False` — v5.4.7 routed the chat client through that switch and left this
+    one behind, so the setting was a placebo for anyone whose network requires
+    certificate checking. And the call is bounded: `get_models` is a blocking
+    SDK call on an executor thread, so a provider that accepts the connection
+    and then never answers used to hang the Agents tab for as long as it felt
+    like, with no timeout anywhere in the path.
+    """
+    verify_ssl = data.get(CONF_VERIFY_SSL, DEFAULT_VERIFY_SSL)
+    client = GigaChat(credentials=data[CONF_API_KEY], verify_ssl_certs=verify_ssl)
+    async with asyncio.timeout(MODEL_FETCH_TIMEOUT):
+        result = await hass.async_add_executor_job(client.get_models)
     return sorted(m.id_ for m in result.data)
+
+
+def connection_data(entry: ConfigEntry) -> dict[str, Any]:
+    """Everything a model fetch needs to know about a connection.
+
+    The credential lives in `entry.data`, but the hub's own switches — Verify
+    SSL, profanity — live in `entry.options`. A fetch handed only `entry.data`
+    is a fetch those switches do not reach, which is precisely how GigaChat's
+    model listing kept ignoring Verify SSL. Only the keys the connection form
+    declares are carried over, so a legacy entry's leftover agent options
+    (prompt, model, temperature) stay out of it.
+    """
+    from .config_flow import CONNECTION_KEYS
+
+    merged = dict(entry.data)
+    engine = merged.get(CONF_ENGINE, ID_GIGACHAT)
+    for key in CONNECTION_KEYS.get(engine, ()):
+        if key in entry.options:
+            merged[key] = entry.options[key]
+    return merged

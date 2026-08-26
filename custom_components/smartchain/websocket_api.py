@@ -24,7 +24,13 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import translation
 
-from .client_util import async_fetch_models, supports
+from .client_util import (
+    ModelFetchError,
+    async_fetch_models,
+    connection_data,
+    static_models,
+    supports,
+)
 from .const import (
     CAPABILITY_CHAT,
     CAPABILITY_EMBEDDINGS,
@@ -104,15 +110,32 @@ async def _models_for(
     every click between agents, so the list is cached and an explicit refresh is
     the only invalidation. Keyed by entry id *and* purpose — a chat fetch and an
     embeddings fetch on the same entry must not serve each other's list.
+
+    A *failed* fetch is not cached. It used to be, and the consequence was out
+    of all proportion to its cause: one blip while the panel was first opening
+    replaced the provider's catalogue with the shipped list, and that stayed
+    until Home Assistant restarted or the user found "Refresh models" — by
+    which time their own model was missing from every agent form and every save
+    was refused. Only an answer is worth remembering; a non-answer is worth
+    trying again.
     """
     cache: dict[tuple[str, str], list[str]] = hass.data.setdefault(DOMAIN, {}).setdefault(
         _MODEL_CACHE, {}
     )
     key = (entry.entry_id, purpose)
-    if refresh or key not in cache:
-        engine = entry.data.get(CONF_ENGINE, ID_GIGACHAT)
-        cache[key] = await async_fetch_models(hass, engine, entry.data, purpose=purpose)
-    return cache[key]
+    if not refresh and key in cache:
+        return cache[key]
+
+    engine = entry.data.get(CONF_ENGINE, ID_GIGACHAT)
+    try:
+        models = await async_fetch_models(
+            hass, engine, connection_data(entry), purpose=purpose, strict=True
+        )
+    except ModelFetchError:
+        # Deliberately outside the cache: the next open retries.
+        return static_models(engine, purpose)
+    cache[key] = models
+    return models
 
 
 async def _async_field_texts(
@@ -233,6 +256,17 @@ async def async_preset_texts(hass: HomeAssistant) -> dict[str, dict[str, str]]:
 # be shown. The rule is about both fields, so it names both.
 MODEL_REQUIRED_FALLBACK = "select a model from the list, or type a custom model name"
 MODEL_REQUIRED_FIELDS = (CONF_CHAT_MODEL, CONF_CHAT_MODEL_USER)
+
+# The other half of the same story. `model_required` covers "you picked
+# nothing"; this covers "you picked something the list has never heard of",
+# which is what a user whose provider has just shipped a model — or whose
+# provider was unreachable when the panel opened — actually hits. It says which
+# of the two it is likely to be, and both ways out.
+MODEL_UNKNOWN_FALLBACK = (
+    "that model is not in the list we could get from the provider just now — "
+    "press Refresh models if the connection was down, or type the exact name "
+    "into the custom model field to use it anyway"
+)
 
 
 async def async_flow_error_text(
@@ -396,9 +430,42 @@ def _describe_invalid(err: vol.Invalid) -> str:
     an arbitrary `vol.Invalid`'s message would not be.
     """
     suberrors = getattr(err, "errors", None) or [err]
-    fields = sorted({str(sub.path[0]) for sub in suberrors if getattr(sub, "path", None)})
+    fields = _invalid_fields(err)
     detail = UNSTORABLE_TEXT if any(isinstance(sub, UnstorableValue) for sub in suberrors) else None
     return invalid_data(fields, detail)
+
+
+def _invalid_fields(err: vol.Invalid) -> list[str]:
+    """The schema field names one `vol.Invalid` names, deduplicated and sorted."""
+    suberrors = getattr(err, "errors", None) or [err]
+    return sorted({str(sub.path[0]) for sub in suberrors if getattr(sub, "path", None)})
+
+
+async def _describe_agent_invalid(hass: HomeAssistant, err: vol.Invalid) -> str:
+    """`_describe_invalid`, plus a sentence when the model is what was rejected.
+
+    The model select is the one field on this form whose valid values are
+    decided elsewhere — by whatever the provider listed when the panel opened.
+    So it is the one field a user can be refused on without having touched it:
+    open an agent, edit the prompt, save, and be told `invalid_data: model`
+    about a model that has been working all week. v5.4.7 fixed exactly this
+    shape of dead end for the stores form and did not carry it here.
+
+    Every other field keeps the plain description: they fail because of
+    something the user typed, and the control they typed it into is the
+    message.
+    """
+    fields = _invalid_fields(err)
+    if CONF_CHAT_MODEL not in fields:
+        return _describe_invalid(err)
+    text = await async_flow_error_text(
+        hass,
+        "model_unknown",
+        "config_subentries",
+        fallback=MODEL_UNKNOWN_FALLBACK,
+        subentry_type=SUBENTRY_TYPE_CONVERSATION,
+    )
+    return invalid_data(fields, text)
 
 
 def _write_subentry(
@@ -471,7 +538,7 @@ async def ws_agent_save(
     try:
         data = ensure_storable(schema(dict(msg["data"])))
     except vol.Invalid as err:
-        connection.send_error(msg["id"], "invalid_data", _describe_invalid(err))
+        connection.send_error(msg["id"], "invalid_data", await _describe_agent_invalid(hass, err))
         return
 
     error = normalize_model_input(data)

@@ -11,6 +11,40 @@ project follows [Semantic Versioning](https://semver.org/).
 > **Note:** the `5.4.0` section below is a roll-up: it covers `5.4.0` through
 > `5.4.7`, which were developed on one branch and are not separated here.
 
+## [5.4.10] - unreleased
+
+### Fixed
+- **An agent whose model we could not list was an agent you could not edit.**
+  Five defects compounded into one dead end for a GigaChat user running
+  `GigaChat-2-Max` and `GigaChat-2-Pro`:
+  - `MODELS_GIGACHAT` stopped at `GigaChat-Max` and knew none of the
+    second-generation names. It now lists `GigaChat-3-Ultra`, `GigaChat-2-Max`,
+    `GigaChat-2-Pro` and `GigaChat-2` alongside the first-generation names,
+    which are kept because Sber still accepts them and because removing a name
+    somebody has stored is the very failure this list caused.
+  - `async_fetch_models` swallowed every exception and returned the shipped
+    list, so a caller could not tell a catalogue from a shrug. It now logs the
+    error at WARNING, and callers that cache can pass `strict=True` to get a
+    `ModelFetchError` instead of a substitute.
+  - The panel cached that substitute as though it were an answer, so one blip
+    while the Agents tab was first opening lasted until a restart. A failed
+    fetch is no longer cached; the next open retries.
+  - An agent's own model is now always present in its own dropdown, whether or
+    not the provider (or the shipped list) named it. Opening an agent to change
+    its prompt no longer dead-ends on the model field.
+  - When a model genuinely is unknown, the refusal is a translated sentence
+    (`model_unknown`, EN + RU) naming both ways out, not the bare
+    `invalid_data: model`. Same treatment `5.4.7` gave the stores form.
+- **"Refresh models" discarded whatever the user had typed.** The one recovery
+  from a stale model list overwrote the form with the server's stored values.
+  On a refresh, edits to fields the returned schema still declares are kept.
+- **GigaChat's model listing ignored Verify SSL and had no timeout.** It was
+  pinned to `verify_ssl_certs=False` — the last client `5.4.7` did not reach —
+  and was the only provider fetch with no time bound, so a provider that
+  accepted the connection and never answered hung the Agents tab. The switch
+  now reaches it (via a new `connection_data`, which merges the hub's own
+  options into the fetch payload) and the call is bounded at 10s.
+
 ## [5.4.9] - unreleased
 
 ### Documentation

@@ -27,7 +27,7 @@ from homeassistant.helpers.selector import (
 )
 from httpx import ConnectError
 
-from .client_util import async_fetch_models, supports, validate_client
+from .client_util import async_fetch_models, connection_data, supports, validate_client
 from .const import (
     ALL_TOOLS_LABELS,
     ALL_TOOLS_SENTINEL,
@@ -438,7 +438,7 @@ class ConversationSubentryFlow(StorableSubentryFlow):
         entry = self._get_entry()
         unique_id = entry.unique_id
         engine = entry.data.get(CONF_ENGINE, ID_GIGACHAT)
-        models = await async_fetch_models(self.hass, engine, entry.data)
+        models = await async_fetch_models(self.hass, engine, connection_data(entry))
         schema = subentry_schema(self.hass, unique_id, {}, models=models)
 
         if user_input is not None:
@@ -454,7 +454,7 @@ class ConversationSubentryFlow(StorableSubentryFlow):
         subentry = self._get_reconfigure_subentry()
         unique_id = entry.unique_id
         engine = entry.data.get(CONF_ENGINE, ID_GIGACHAT)
-        models = await async_fetch_models(self.hass, engine, entry.data)
+        models = await async_fetch_models(self.hass, engine, connection_data(entry))
         schema = subentry_schema(self.hass, unique_id, subentry.data, models=models)
 
         if user_input is not None:
@@ -552,6 +552,17 @@ def subentry_schema(
 
     if models is None:
         models = ENGINE_MODELS[unique_id]
+
+    # An agent's own model always belongs in its own dropdown. The list is
+    # either what the provider answered a moment ago or what we shipped, and
+    # neither is guaranteed to contain a model that is already stored — a new
+    # release, a private deployment, or simply a fetch that failed is enough.
+    # Without this the select rejects the stored value, so opening an agent to
+    # change its *prompt* dead-ends on a field the user never touched. Built as
+    # a new list because `models` is frequently a module constant.
+    stored_model = options.get(CONF_CHAT_MODEL)
+    if stored_model and stored_model not in models:
+        models = [*models, stored_model]
 
     hass_apis: list[selector.SelectOptionDict] = [
         selector.SelectOptionDict(value=api.id, label=api.name) for api in llm.async_get_apis(hass)
@@ -773,7 +784,7 @@ class EmbeddingsSubentryFlow(StorableSubentryFlow):
         entry = self._get_entry()
         engine = entry.data.get(CONF_ENGINE, ID_GIGACHAT)
         models = await async_fetch_models(
-            self.hass, engine, entry.data, purpose=CAPABILITY_EMBEDDINGS
+            self.hass, engine, connection_data(entry), purpose=CAPABILITY_EMBEDDINGS
         )
         schema = embeddings_subentry_schema(models)
 
@@ -789,7 +800,7 @@ class EmbeddingsSubentryFlow(StorableSubentryFlow):
         subentry = self._get_reconfigure_subentry()
         engine = entry.data.get(CONF_ENGINE, ID_GIGACHAT)
         models = await async_fetch_models(
-            self.hass, engine, entry.data, purpose=CAPABILITY_EMBEDDINGS
+            self.hass, engine, connection_data(entry), purpose=CAPABILITY_EMBEDDINGS
         )
         defaults = {**subentry.data, "name": subentry.title}
         schema = embeddings_subentry_schema(models, defaults)

@@ -94,13 +94,27 @@ CONF_ENGINE_OPTIONS = [
     selector.SelectOptionDict(value=ID_DEEPSEEK, label=UNIQUE_ID_DEEPSEEK),
     selector.SelectOptionDict(value=ID_ANTHROPIC, label=UNIQUE_ID_ANTHROPIC),
 ]
+# GigaChat's catalogue, newest first under the blank "custom" entry. This list
+# is what a user sees whenever the provider cannot be reached, so a name
+# missing here is not cosmetic: the model dropdown validates against it, and an
+# agent whose stored model is absent could not be saved at all.
+#
+# The 2.x names are what the API serves today. The first-generation names stay
+# because Sber still accepts them (requests are redirected to the 2.x
+# equivalents) and because dropping a name that somebody has stored is exactly
+# the failure this list caused. `GigaChat:latest` is the old version-pinned
+# spelling, kept for the same reason.
 MODELS_GIGACHAT = [
     "",
+    "GigaChat-3-Ultra",
+    "GigaChat-2-Max",
+    "GigaChat-2-Pro",
+    "GigaChat-2",
+    "GigaChat-Max",
+    "GigaChat-Pro",
+    "GigaChat-Plus",
     "GigaChat",
     "GigaChat:latest",
-    "GigaChat-Plus",
-    "GigaChat-Pro",
-    "GigaChat-Max",
 ]
 DEFAULT_MODELS_YANDEX_GPT = ["", "YandexGPT", "YandexGPT Lite", "Summary"]
 MODELS_OPENAI = [

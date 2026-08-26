@@ -274,7 +274,8 @@
         }
       },
       "error": {
-        "model_required": "Either Model or Custom Model required"
+        "model_required": "Either Model or Custom Model required",
+        "model_unknown": "That model is not in the list we could get from the provider just now. Press Refresh models if the connection was down, or type the exact name into Custom Model to use it anyway."
       }
     },
     "embeddings": {

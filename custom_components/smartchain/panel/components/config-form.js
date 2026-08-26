@@ -162,7 +162,7 @@ export class ScConfigForm extends HTMLElement {
     try {
       const result = await callWS(this._hass, this._commands.schema, payload);
       this._schema = result.schema;
-      this._data = result.data || {};
+      this._data = this._merged(result, refresh);
       this._labels = result.labels || {};
       this._descriptions = result.descriptions || {};
       this._reactive = Array.isArray(result.reactive) ? result.reactive : [];
@@ -178,6 +178,33 @@ export class ScConfigForm extends HTMLElement {
     } finally {
       this._reloading = false;
     }
+  }
+
+  /**
+   * What the form should hold after a schema response comes back.
+   *
+   * An automatic or reactive load is the server telling us what this form is;
+   * it wins outright. A *refresh* is not — the user pressed "Refresh models"
+   * on a form they have been typing into, and the values they entered are the
+   * whole reason they are still on this screen. Overwriting them made the one
+   * recovery from a stale model list cost the user their prompt, which is a
+   * poor trade for a dropdown.
+   *
+   * Only fields the returned schema still declares are kept. The server prunes
+   * values it no longer wants to hear about (a conditional field that has gone
+   * out of schema), and putting one back would have the save rejected as an
+   * extra key — so the edits survive without smuggling anything past the
+   * server's own idea of the form.
+   */
+  _merged(result, refresh) {
+    const served = result.data || {};
+    if (!refresh) return served;
+    const declared = new Set((result.schema || []).map((field) => field.name));
+    const kept = {};
+    for (const [name, value] of Object.entries(this._data || {})) {
+      if (declared.has(name)) kept[name] = value;
+    }
+    return { ...served, ...kept };
   }
 
   /**
