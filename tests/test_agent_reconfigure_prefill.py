@@ -60,6 +60,12 @@ pytestmark = pytest.mark.usefixtures("enable_custom_integrations")
 
 MODELS = ["gpt-4.1-mini", "gpt-4o"]
 
+# An API id that is in the subentry's storage and in no registry: the
+# integration that registered it was removed or disabled, and Home Assistant
+# forgot it the moment it was unloaded. The stored id survives, because nothing
+# rewrites a subentry when an unrelated integration goes away.
+GHOST_API = "ghost_api_from_removed_integration"
+
 # One non-default value for every field `subentry_schema` declares, so that a
 # field silently reset to its default is a visible difference rather than a
 # coincidence. `test_reconfigure_touches_only_the_edited_field` asserts the
@@ -78,6 +84,31 @@ STORED_AGENT = {
     CONF_DYNAMIC_CONTEXT_ON_ASSIST: True,
     CONF_ALLOWED_TOOLS: [HISTORY_TOOL_NAME, MEMORY_TOOL_NAME, ENTITY_TOOL_NAME],
 }
+
+
+class _SecondAPI(llm.API):
+    """A second registered LLM API, so "the stored one" and "the only one" differ.
+
+    With one API in the registry every prefill assertion is ambiguous: a
+    hard-coded `["assist"]` and `options.get(CONF_LLM_HASS_API)` produce the
+    same form. Registering a second id makes the two testable apart.
+    """
+
+    async def async_get_api_instance(self, llm_context: Any) -> Any:
+        raise NotImplementedError
+
+
+def _register_api(hass: HomeAssistant, api_id: str, name: str) -> None:
+    llm.async_register_api(hass, _SecondAPI(hass=hass, id=api_id, name=name))
+
+
+def _offered_apis(result: dict[str, Any]) -> list[str]:
+    """The ids the served picker lets the user choose."""
+    fields = voluptuous_serialize.convert(
+        result["data_schema"], custom_serializer=cv.custom_serializer
+    )
+    field = next(item for item in fields if item["name"] == CONF_LLM_HASS_API)
+    return [option["value"] for option in field["selector"]["select"]["options"]]
 
 
 def _entry(hass: HomeAssistant, data: dict[str, Any]) -> MockConfigEntry:
@@ -176,8 +207,96 @@ async def test_clearing_the_assist_api_still_clears_it(hass: HomeAssistant) -> N
     result = await _submit(hass, result["flow_id"], payload)
     assert result["type"] is FlowResultType.ABORT
 
+    # Absence of the key, not falsity of the value. `normalize_model_input`
+    # promises it *pops* the empty selection, and a `llm_hass_api: []` left in
+    # storage would satisfy `not data.get(...)` while being a different stored
+    # state — one that outlives every later migration reading this key.
     data = entry.subentries[_subentry_id(entry)].data
-    assert not data.get(CONF_LLM_HASS_API)
+    assert CONF_LLM_HASS_API not in data
+
+
+async def test_prefill_is_the_stored_api_not_the_first_registered_one(hass: HomeAssistant) -> None:
+    """The form must show what this agent has, not what the system happens to offer.
+
+    With a single API registered, "prefilled from storage" and "hard-coded
+    assist" are indistinguishable. A second registered API separates them: the
+    agent stores only the second one, so a prefill that is not read from the
+    subentry cannot produce this form.
+    """
+    _register_api(hass, "house_brain", "House Brain")
+    entry = _entry(hass, {**STORED_AGENT, CONF_LLM_HASS_API: ["house_brain"]})
+
+    result = await _open_reconfigure(hass, entry)
+
+    assert set(_offered_apis(result)) == {llm.LLM_API_ASSIST, "house_brain"}
+    assert _rendered_form(result)[CONF_LLM_HASS_API] == ["house_brain"]
+
+
+async def test_prefill_drops_an_api_that_is_no_longer_registered(
+    hass: HomeAssistant, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A stored id whose integration is gone must not be offered back.
+
+    `llm.async_get_apis` is the whole truth about which APIs exist, so an id
+    that is not in it names nothing: selecting it makes
+    `chat_log.async_provide_llm_data` raise and the agent answer with an error.
+    The picker therefore cannot list it and the prefill cannot suggest it — but
+    the removal is announced in the log rather than performed in silence.
+    """
+    entry = _entry(hass, {**STORED_AGENT, CONF_LLM_HASS_API: [llm.LLM_API_ASSIST, GHOST_API]})
+
+    result = await _open_reconfigure(hass, entry)
+
+    assert GHOST_API not in _offered_apis(result)
+    assert _rendered_form(result)[CONF_LLM_HASS_API] == [llm.LLM_API_ASSIST]
+    assert GHOST_API in caplog.text
+
+
+async def test_saving_the_form_lets_go_of_the_dropped_api(hass: HomeAssistant) -> None:
+    """The drop must converge: a save writes the surviving selection only."""
+    entry = _entry(hass, {**STORED_AGENT, CONF_LLM_HASS_API: [llm.LLM_API_ASSIST, GHOST_API]})
+    result = await _open_reconfigure(hass, entry)
+
+    payload = _rendered_form(result)
+    payload[CONF_TEMPERATURE] = 0.2
+
+    result = await _submit(hass, result["flow_id"], payload)
+    assert result["type"] is FlowResultType.ABORT
+
+    data = entry.subentries[_subentry_id(entry)].data
+    assert data[CONF_LLM_HASS_API] == [llm.LLM_API_ASSIST]
+
+
+async def test_an_agent_whose_only_api_vanished_saves_without_the_key(
+    hass: HomeAssistant,
+) -> None:
+    """Nothing survives the filter, so the field is empty and the key goes."""
+    entry = _entry(hass, {**STORED_AGENT, CONF_LLM_HASS_API: [GHOST_API]})
+    result = await _open_reconfigure(hass, entry)
+
+    payload = _rendered_form(result)
+    assert payload[CONF_LLM_HASS_API] == []
+
+    result = await _submit(hass, result["flow_id"], payload)
+    assert result["type"] is FlowResultType.ABORT
+
+    data = entry.subentries[_subentry_id(entry)].data
+    assert CONF_LLM_HASS_API not in data
+
+
+async def test_an_agent_that_never_had_an_api_gets_no_suggestion(hass: HomeAssistant) -> None:
+    """No stored selection is not an empty selection.
+
+    The filter must not invent a value where storage has none — a suggested
+    `[]` where there was nothing is the same class of unasked-for write the
+    prefill exists to prevent.
+    """
+    stored = {name: value for name, value in STORED_AGENT.items() if name != CONF_LLM_HASS_API}
+    entry = _entry(hass, stored)
+
+    result = await _open_reconfigure(hass, entry)
+
+    assert CONF_LLM_HASS_API not in _rendered_form(result)
 
 
 async def test_reconfigure_touches_only_the_edited_field(hass: HomeAssistant) -> None:

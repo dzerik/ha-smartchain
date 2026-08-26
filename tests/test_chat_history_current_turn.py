@@ -22,6 +22,7 @@ from homeassistant.components.conversation.chat_log import (
     AssistantContent,
     ChatLog,
     SystemContent,
+    ToolResultContent,
     UserContent,
 )
 from homeassistant.core import Context, HomeAssistant
@@ -42,7 +43,10 @@ from custom_components.smartchain.const import (
     CONF_PROMPT,
     ID_GIGACHAT,
 )
-from custom_components.smartchain.conversation import SmartChainConversationEntity
+from custom_components.smartchain.conversation import (
+    SmartChainConversationEntity,
+    _current_turn_content,
+)
 
 TOOL_NAME = "HassTurnOn"
 
@@ -233,3 +237,72 @@ async def test_history_enabled_sends_the_whole_log(hass: HomeAssistant) -> None:
         HumanMessage,
     ]
     assert first[2].content == "Вчера было солнечно."
+
+
+def test_turn_without_a_user_message_reveals_nothing(hass: HomeAssistant) -> None:
+    """No user message means no turn to send — not "send everything".
+
+    The boundary of the turn is the last `UserContent`. With none in the log
+    there is nothing the option would be willing to disclose, and falling back
+    to the whole log inverts the promise the option makes.
+    """
+    chat_log = ChatLog(hass, "conv-no-user")
+    chat_log.content = [
+        SystemContent(content="Ты ассистент."),
+        AssistantContent(agent_id="test", content="Секрет из прошлого хода."),
+        ToolResultContent(
+            agent_id="test",
+            tool_call_id="call_old",
+            tool_name=TOOL_NAME,
+            tool_result={"secret": True},
+        ),
+    ]
+
+    turn = _current_turn_content(chat_log)
+
+    assert turn == [chat_log.content[0]], f"history leaked: {turn}"
+
+
+def _make_stubborn_client(sent: list[list]):
+    """A model that asks for the tool on every pass, whatever it is shown."""
+    client = MagicMock()
+
+    async def _astream(messages):
+        sent.append(list(messages))
+        yield AIMessageChunk(
+            content="",
+            tool_calls=[
+                {
+                    "id": f"call_{len(sent)}",
+                    "name": TOOL_NAME,
+                    "args": {"entity_id": "light.bedroom"},
+                }
+            ],
+        )
+
+    client.astream = MagicMock(side_effect=_astream)
+    client.bind_tools = MagicMock(return_value=client)
+    return client
+
+
+async def test_tool_loop_exhaustion_returns_an_intent_error(hass: HomeAssistant) -> None:
+    """Running out of tool iterations must answer, not raise at the user.
+
+    The loop ends with a tool result as the last entry, and HA's
+    `async_get_result_from_chat_log` raises `HomeAssistantError` on that. It is
+    called outside the try/except that guards the stream, so the exception
+    escapes the agent as a traceback.
+    """
+    tool = _TurnOnTool()
+    sent: list[list] = []
+    ent = _make_entity(hass, _make_stubborn_client(sent), chat_history=True)
+    chat_log = _make_chat_log(
+        hass,
+        _make_llm_api(tool),
+        history=[UserContent(content="Включи лампу в спальне")],
+    )
+
+    result = await ent._async_handle_message(_make_input("Включи лампу в спальне"), chat_log)
+
+    assert result.response.error_code is not None, result.response
+    assert result.conversation_id == "conv-current-turn"

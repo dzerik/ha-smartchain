@@ -29,7 +29,6 @@ from langchain_core.messages import HumanMessage
 
 from .client_util import get_client
 from .helpers import async_generate_structured  # re-exported for downstream integrations
-from .sensor import async_release_sensor_owner
 from .tools import ToolRegistry
 from .tools.loader import LoaderError, LoaderResult, load_tools_file
 from .tools.mcp import MCPManager
@@ -647,6 +646,10 @@ EVENT_IMAGE_ANALYZED = f"{DOMAIN}_image_analyzed"
 _GENERIC_LLM_ERROR = "LLM request failed; see Home Assistant logs for details."
 _GENERIC_CAMERA_ERROR = "Failed to read camera image; see Home Assistant logs for details."
 
+# What `ai_task.py` appends to the agent's unique_id when it builds the second
+# entity from the same subentry. `_client_for_unique_id` strips it.
+_AI_TASK_UNIQUE_ID_SUFFIX = "_ai_task"
+
 
 def _entry_clients(entry: ConfigEntry):
     """What an entry currently holds in `runtime_data`, or None if it holds nothing.
@@ -660,38 +663,79 @@ def _entry_clients(entry: ConfigEntry):
     return getattr(entry, "runtime_data", None)
 
 
-def _find_client(hass: HomeAssistant, entity_id: str | None = None):
-    """Find a SmartChain LLM client, optionally routed by entity_id.
+def _client_for_unique_id(hass: HomeAssistant, unique_id: str):
+    """The client behind one registry `unique_id`, or None if nothing holds it.
 
-    Routing uses entity_registry to resolve `entity_id` -> `unique_id`, which is
-    the only stable mapping back to a subentry / config entry (entity_id is
-    derived from the title slug, not the unique_id).
+    `unique_id` is the only stable mapping back to a subentry / config entry —
+    `entity_id` is derived from the title slug, so it changes when the agent is
+    renamed and collides across hubs that chose the same name.
 
-    Both passes read `runtime_data` through `_entry_clients`, never as a plain
-    attribute: `async_entries` hands back unloaded, disabled and failed entries
-    too, and `ConfigEntry.runtime_data` is a bare annotation that Home Assistant
+    Two entities are built from the same agent and they do *not* share a
+    unique_id: `conversation` registers `{entry_id}_{subentry_id}` (or the bare
+    `entry_id` for a pre-migration entry) while `ai_task` registers the same
+    string plus `_ai_task`. Matching only the conversation form meant every
+    `ai_task.*` entity_id missed and fell through to "first client of the first
+    entry" — right by luck on a single-hub install, somebody else's provider on
+    any other. The suffix is stripped rather than special-cased per platform so
+    a legacy `{entry_id}_ai_task` lands on the legacy branch too.
+
+    Reads `runtime_data` through `_entry_clients`, never as a plain attribute:
+    `async_entries` hands back unloaded, disabled and failed entries too, and
+    `ConfigEntry.runtime_data` is a bare annotation that Home Assistant
     *deletes* again on unload. Touching it directly on such an entry raises
     AttributeError instead of yielding None — so one hub that was disabled or
     failed to set up took `smartchain.ask`, `analyze_image` and the public
     `async_generate_structured` down with it while a healthy hub sat right
-    behind it in the list, and the "No SmartChain agent available." answer
-    could never be reached at all.
+    behind it in the list.
+    """
+    candidates = {unique_id}
+    if unique_id.endswith(_AI_TASK_UNIQUE_ID_SUFFIX):
+        candidates.add(unique_id[: -len(_AI_TASK_UNIQUE_ID_SUFFIX)])
+
+    for entry in hass.config_entries.async_entries(DOMAIN):
+        runtime_data = _entry_clients(entry)
+        if runtime_data is None:
+            continue
+        if isinstance(runtime_data, dict):
+            for sub_id, client in runtime_data.items():
+                if f"{entry.entry_id}_{sub_id}" in candidates:
+                    return client
+        elif entry.entry_id in candidates:
+            return runtime_data
+    return None
+
+
+def _find_client(hass: HomeAssistant, entity_id: str | None = None):
+    """Find a SmartChain LLM client, optionally routed by entity_id.
+
+    The two arguments are two different questions, and they fail differently:
+
+    - No `entity_id`: "any SmartChain agent will do." The first client of the
+      first loaded entry answers, and None means there is none — the callers
+      turn that into "No SmartChain agent available."
+    - An `entity_id`: "that agent, specifically." If it resolves to no loaded
+      client the call raises `HomeAssistantError`. It used to fall through to
+      the same first-client fallback, which answered a request naming an
+      unloaded GigaChat hub with, say, the OpenAI hub — different provider,
+      different model, different system prompt, and nothing anywhere in the
+      response to say a substitution happened. A mistyped entity_id, a disabled
+      hub and a hub that failed to set up all landed there. Failing loudly is
+      the whole point: this is a caller or configuration error, and the caller
+      is the only one who can fix it.
     """
     if entity_id:
         ent_reg = er.async_get(hass)
         ent_entry = ent_reg.async_get(entity_id)
+        client = None
         if ent_entry and ent_entry.platform == DOMAIN and ent_entry.unique_id:
-            unique_id = ent_entry.unique_id
-            for entry in hass.config_entries.async_entries(DOMAIN):
-                runtime_data = _entry_clients(entry)
-                if runtime_data is None:
-                    continue
-                if isinstance(runtime_data, dict):
-                    for sub_id, client in runtime_data.items():
-                        if unique_id == f"{entry.entry_id}_{sub_id}":
-                            return client
-                elif unique_id == entry.entry_id:
-                    return runtime_data
+            client = _client_for_unique_id(hass, ent_entry.unique_id)
+        if client is None:
+            raise HomeAssistantError(
+                f"No SmartChain agent behind {entity_id} — it is unknown, not a "
+                "SmartChain agent, or its hub is not loaded. Fix the entity_id "
+                "or omit it to use any available agent."
+            )
+        return client
 
     for entry in hass.config_entries.async_entries(DOMAIN):
         runtime_data = _entry_clients(entry)
@@ -1320,13 +1364,34 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # a reload of the only config entry must not leave memory, MCP and the
         # entity skeleton cache dead for the rest of the HA run.
         domain_data["subsystems_stopped"] = True
-    unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
-    if unloaded:
-        # The Last Analysis sensor is a domain-wide singleton living on the
-        # platform of whichever entry registered it, so unloading that entry
-        # takes the entity with it. Release the claim here — and only when the
-        # platforms really went down — so the `async_setup_entry` half of a
-        # reload registers it again instead of returning early and leaving
-        # `sensor.smartchain_last_analysis` unavailable until an HA restart.
+    # `.sensor` is deferred for the reason `websocket_api` is, one step removed:
+    # it is a platform module, which Home Assistant loads when the platform is
+    # forwarded. Importing it at module scope pulled it — and the whole
+    # `homeassistant.components.sensor` tree behind it — into the import of the
+    # integration package itself, against the convention the rest of this file
+    # keeps.
+    from .sensor import async_rehome_sensor, async_release_sensor_owner
+
+    # The Last Analysis sensor is a domain-wide singleton living on the platform
+    # of whichever entry registered it, so unloading that entry takes the entity
+    # with it and the claim has to be given up for it to come back.
+    #
+    # The sensor platform is unloaded on its own rather than inside the batch:
+    # `async_unload_platforms` answers `all()` over every platform at once, so a
+    # conversation platform that refuses to unload made the answer False even
+    # though the sensor platform had gone down cleanly. The claim then stayed
+    # with an entry that no longer had the entity, the entry went to
+    # FAILED_UNLOAD and never set up again, and every other hub's setup saw the
+    # slot taken and skipped registering the sensor. Whether *this* platform
+    # went down is the only question the claim depends on.
+    sensor_unloaded = await hass.config_entries.async_unload_platforms(entry, [Platform.SENSOR])
+    others_unloaded = await hass.config_entries.async_unload_platforms(
+        entry, [p for p in PLATFORMS if p != Platform.SENSOR]
+    )
+    if sensor_unloaded:
         async_release_sensor_owner(hass, entry.entry_id)
-    return unloaded
+        # A reload brings the same entry — and the sensor — straight back. A
+        # permanent unload does not, so the singleton is handed to a hub that is
+        # still up rather than left `unavailable` beside a working install.
+        await async_rehome_sensor(hass, entry.entry_id)
+    return sensor_unloaded and others_unloaded

@@ -26,6 +26,7 @@ from homeassistant.components.conversation.chat_log import (
     UserContent,
 )
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import intent, llm, template
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.util import dt as dt_util
@@ -100,6 +101,12 @@ from .tools.memory.search_tool import (
 
 LOGGER = logging.getLogger(__name__)
 PROMPT_CACHE_TTL = 30  # seconds
+
+# Marker put in the `native` slot of an assistant delta that carries nothing
+# else. `ChatLog` creates an `AssistantContent` only for a delta with content,
+# thinking_content, tool_calls or native, and native is the only one of the
+# four it neither shows the user nor passes to the delta listener.
+EMPTY_RESPONSE_NATIVE = "smartchain:no_visible_response"
 
 
 async def async_setup_entry(
@@ -588,7 +595,20 @@ class SmartChainConversationEntity(ConversationEntity):
                     name="smartchain_memory_ingest",
                 )
 
-        return conversation.async_get_result_from_chat_log(user_input, chat_log)
+        try:
+            return conversation.async_get_result_from_chat_log(user_input, chat_log)
+        except HomeAssistantError as err:
+            # The log does not end in an assistant message — the tool loop ran
+            # out of iterations, or the model answered with nothing HA keeps.
+            # Every other failure in this method reports an intent error; this
+            # one used to escape as a traceback.
+            LOGGER.error("No usable response in the chat log: %s", err)
+            response = intent.IntentResponse(language=user_input.language)
+            response.async_set_error(
+                intent.IntentResponseErrorCode.UNKNOWN,
+                f"Не удалось получить ответ от модели: {err}",
+            )
+            return ConversationResult(conversation_id=chat_log.conversation_id, response=response)
 
 
 def _attachment_to_base64(attachment: Attachment) -> str | None:
@@ -637,12 +657,18 @@ def _current_turn_content(chat_log: ChatLog) -> list[Content]:
     serve as the boundary: it is only set on the Assist path, and it is set to
     the length of the log *after* the user message was appended, so it points
     past the message that opens the turn.
+
+    With no user message at all there is no turn in flight, and the honest
+    answer is the system message alone. Falling back to the start of the log
+    would turn "withhold the previous conversation" into "send all of it".
     """
-    start = 1
+    start: int | None = None
     for index in range(len(chat_log.content) - 1, 0, -1):
         if isinstance(chat_log.content[index], UserContent):
             start = index
             break
+    if start is None:
+        return [chat_log.content[0]]
     return [chat_log.content[0], *chat_log.content[start:]]
 
 
@@ -870,6 +896,61 @@ def _chunk_text(content: Any) -> str:
     return ""
 
 
+def _tool_args_finished(raw: str) -> bool:
+    """Say whether a raw argument slice is a whole JSON object.
+
+    langchain parses the accumulated slice with a *partial* JSON parser, so a
+    model that hit `max_tokens` halfway through `{"entity_id": "light.` still
+    produces a tool call — with the arguments silently completed or dropped.
+    The raw text is the only place the truncation is still visible.
+
+    An empty slice is not truncation: providers send `args=""` (and `"{}"`) for
+    a tool that takes no arguments at all.
+    """
+    text = raw.strip()
+    if not text:
+        return True
+    try:
+        parsed = json.loads(text)
+    except ValueError:
+        return False
+    return isinstance(parsed, dict)
+
+
+def _finished_tool_calls(accumulated: Any) -> list[dict[str, Any]]:
+    """Return the accumulated tool calls whose arguments actually arrived.
+
+    A call whose arguments never finished is dropped, not repaired: Home
+    Assistant runs a tool the moment it sees the delta, and running
+    `HassTurnOn` with `{}` acts on whatever the schema defaults to.
+    """
+    tool_calls = list(getattr(accumulated, "tool_calls", None) or [])
+    if not tool_calls:
+        return []
+
+    raw_args: dict[str, str] = {}
+    for chunk in getattr(accumulated, "tool_call_chunks", None) or []:
+        call_id = chunk.get("id")
+        if call_id:
+            raw_args[call_id] = chunk.get("args") or ""
+
+    finished: list[dict[str, Any]] = []
+    for tool_call in tool_calls:
+        raw = raw_args.get(tool_call.get("id") or "")
+        if raw is None or _tool_args_finished(raw):
+            finished.append(tool_call)
+            continue
+        # The arguments themselves are never logged: they carry whatever the
+        # user just said, and the failure is described fully by their length.
+        LOGGER.warning(
+            "Discarding tool call %s: the model stopped before its arguments"
+            " were complete (%d raw characters)",
+            tool_call.get("name") or "<unnamed>",
+            len(raw),
+        )
+    return finished
+
+
 async def _async_langchain_stream(
     client: Any,
     messages: list[BaseMessage],
@@ -882,37 +963,59 @@ async def _async_langchain_stream(
     chunk on its own re-derives `tool_calls` from its own fragment only, which
     yields an empty argument dict plus a nameless phantom call — and HA fires a
     tool call the instant it sees one. Only the summed message holds the whole
-    call, so tool calls are emitted once, after the stream ends.
+    call, so tool calls are emitted once, after the stream ends, and only if
+    their arguments finished arriving.
+
+    Whatever happens, one delta always carries something `ChatLog` keeps, so
+    the turn ends with an assistant message instead of an exception raised at
+    the user by `async_get_result_from_chat_log`.
     """
     _external = external_tool_names | {HISTORY_TOOL_NAME, DELEGATE_TOOL_NAME}
     first = True
+    substantive = False
     accumulated: Any = None
     async for chunk in client.astream(messages):
-        accumulated = chunk if accumulated is None else accumulated + chunk
+        try:
+            accumulated = chunk if accumulated is None else accumulated + chunk
+        except (TypeError, ValueError) as err:
+            # `merge_dicts` refuses a metadata key that arrived as two types.
+            # Part of the answer is already on the user's screen, so keep the
+            # stream running on what was accumulated before the clash.
+            LOGGER.warning("Stream chunk could not be accumulated, ignoring it: %s", err)
         delta: dict[str, Any] = {}
         if first:
             delta["role"] = "assistant"
             first = False
         if text := _chunk_text(chunk.content):
             delta["content"] = text
+            substantive = True
 
         if delta:
             yield delta
 
-    tool_calls = getattr(accumulated, "tool_calls", None)
-    if not tool_calls:
+    if tool_calls := _finished_tool_calls(accumulated):
+        delta = {"role": "assistant"} if first else {}
+        delta["tool_calls"] = [
+            llm.ToolInput(
+                tool_name=tc["name"],
+                tool_args=tc["args"],
+                id=tc["id"],
+                external=(tc["name"] in _external),
+            )
+            for tc in tool_calls
+        ]
+        yield delta
         return
 
+    if substantive:
+        return
+
+    # Nothing HA counts as content: only thinking blocks, or a tool call that
+    # was dropped, or an empty stream. ChatLog builds an AssistantContent only
+    # for a delta carrying content, thinking_content, tool_calls or native —
+    # `native` is the one it never shows the user and never serialises.
     delta = {"role": "assistant"} if first else {}
-    delta["tool_calls"] = [
-        llm.ToolInput(
-            tool_name=tc["name"],
-            tool_args=tc["args"],
-            id=tc["id"],
-            external=(tc["name"] in _external),
-        )
-        for tc in tool_calls
-    ]
+    delta["native"] = EMPTY_RESPONSE_NATIVE
     yield delta
 
 

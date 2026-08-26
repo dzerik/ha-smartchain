@@ -540,6 +540,50 @@ class OptionsFlow(config_entries.OptionsFlow):
         )
 
 
+def _live_llm_apis(
+    stored: Any,
+    registered: list[selector.SelectOptionDict],
+    unique_id: str,
+) -> list[str] | None:
+    """Return the stored LLM-API selection, minus ids nothing registers any more.
+
+    The stored model a few lines below is handled the opposite way round — it is
+    *added* to its dropdown — and the difference is the registry, not the taste.
+    `ENGINE_MODELS` and a provider's `/models` answer are both incomplete lists
+    of a set we do not own, so a model missing from them is very likely real.
+    `llm.async_get_apis` is not a list of that kind: it *is* the set of APIs that
+    exist in this Home Assistant right now. An id absent from it names nothing,
+    and picking it makes `chat_log.async_provide_llm_data` raise, so the agent
+    answers every sentence with an error. Widening the picker to hold it would
+    also serve a form that voluptuous then refuses to validate — the select
+    rejects its own suggested value and the whole agent becomes unsavable.
+
+    So a dead id is dropped, and the drop is announced at WARNING with the id in
+    it. Dropping it silently would repeat, one level up, exactly the bug this
+    prefill was added to fix: a save that quietly rewrites a field nobody
+    touched. The user still decides — the form shows what survived and writes it
+    only when they press save.
+
+    ``None`` in, ``None`` out: an agent that never chose an API must not be
+    handed a suggested empty list, which is a value where there was none.
+    """
+    if not stored:
+        return None
+
+    selection = [stored] if isinstance(stored, str) else list(stored)
+    live = {option["value"] for option in registered}
+    kept = [api_id for api_id in selection if api_id in live]
+    dropped = [api_id for api_id in selection if api_id not in live]
+    if dropped:
+        LOGGER.warning(
+            "Agent on %s has LLM API(s) %s that no integration registers any more; "
+            "they are not offered in the form and saving it will let them go",
+            unique_id,
+            ", ".join(dropped),
+        )
+    return kept
+
+
 def subentry_schema(
     hass,
     unique_id: str,
@@ -567,6 +611,7 @@ def subentry_schema(
     hass_apis: list[selector.SelectOptionDict] = [
         selector.SelectOptionDict(value=api.id, label=api.name) for api in llm.async_get_apis(hass)
     ]
+    suggested_apis = _live_llm_apis(options.get(CONF_LLM_HASS_API), hass_apis, unique_id)
 
     schema = vol.Schema(
         {
@@ -597,8 +642,9 @@ def subentry_schema(
                 # the `use_builtin and not llm_hass_api` branch and the sentence
                 # goes to Home Assistant's own agent. No default is set on
                 # purpose: an empty selection must stay clearable, and
-                # `normalize_model_input` drops it.
-                description={"suggested_value": options.get(CONF_LLM_HASS_API)},
+                # `normalize_model_input` drops it. The value is filtered
+                # against the live registry first — see `_live_llm_apis`.
+                description={"suggested_value": suggested_apis},
             ): selector.SelectSelector(
                 selector.SelectSelectorConfig(
                     options=hass_apis,

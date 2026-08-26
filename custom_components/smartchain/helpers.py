@@ -47,9 +47,19 @@ def _find_smartchain_client(hass: HomeAssistant, agent_id: str | None):
 
     Delegates to the existing `_find_client(hass, entity_id)` helper that
     SmartChain registers in `hass.data[DOMAIN]["find_client"]` during
-    `async_setup`. Falls back to the first available SmartChain client when
-    no specific agent_id is provided or the lookup misses.
+    `async_setup`. With no `agent_id` that helper picks the first available
+    client; with one it either resolves that agent or raises. There is no
+    fallback across the two: a named agent that resolves to nothing used to be
+    answered by whichever client came first, so a caller asking a GigaChat
+    agent for a structured object could be answered by an OpenAI one, with a
+    different model and system prompt and no sign of the swap in the result.
+
+    The raise is converted back to None so `async_generate_structured` reports
+    it as the `RuntimeError` its docstring promises downstream integrations —
+    and that error names the agent_id, so the miss is still visible.
     """
+    from homeassistant.exceptions import HomeAssistantError  # noqa: PLC0415
+
     from .const import DOMAIN  # noqa: PLC0415
 
     domain_data = hass.data.get(DOMAIN) or {}
@@ -57,7 +67,10 @@ def _find_smartchain_client(hass: HomeAssistant, agent_id: str | None):
     if finder is None:
         # SmartChain hasn't finished async_setup yet — defensive bail-out.
         return None
-    return finder(hass, agent_id)
+    try:
+        return finder(hass, agent_id)
+    except HomeAssistantError:
+        return None
 
 
 async def async_generate_structured(  # noqa: UP047
