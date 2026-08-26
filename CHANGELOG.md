@@ -7,6 +7,81 @@ project follows [Semantic Versioning](https://semver.org/).
 
 > **Note:** `5.0.1`–`5.0.7` were released without changelog entries and are not
 > reconstructed here.
+>
+> **Note:** the `5.4.0` section below is a roll-up: it covers `5.4.0` through
+> `5.4.7`, which were developed on one branch and are not separated here.
+
+## [5.4.9] - unreleased
+
+### Documentation
+- **The user guide told people to click controls that no longer exist.** Four
+  subsystems changed between `5.1.0` and `5.4.8` and `docs/USAGE.md` /
+  `docs/USAGE-ru.md` had not been touched. Corrected in both languages:
+  - `verify_ssl` and `profanity` were listed as **agent** options. They left the
+    agent form in `5.4.1` and the `3 -> 4` migration deletes them from an
+    agent's storage; they are connection settings on the entry. The agent-options
+    table now ends where the form does, and a new **§4.2** documents the two
+    connection settings, where they are edited, why they moved and what the
+    migration does with a value an agent already stored.
+  - **§10.1** said to toggle "Enable multi-agent tools". That switch was deleted
+    in `5.4.0`. The section now says to tick `ask_agents` and `critique_response`
+    in the agent's **Tools** list, and says plainly that on a migrated agent both
+    are **off** — the old switch defaulted to off, so the migration wrote down an
+    agent that never had them. Same for `get_state_history` in **§6.1**.
+  - **§12** said administrators see five panel tabs. There are six — Agents,
+    Embeddings, Stores, Settings, Tools, Camera — and Embeddings is the one that
+    can disappear, which the section now explains rather than leaving as a
+    surprise.
+  - **§9.1** routed embeddings-binding setup through the Devices & Services
+    three-dot menu and never mentioned the **Embeddings tab**, which is what a
+    user needs before the Stores form will accept anything. Both routes are now
+    given, the tab first, with the dependency stated where it bites.
+- **§3 is rewritten as "Hubs and agents".** It described sub-entries as "multiple
+  agents per provider" and pointed at a menu item ("Add sub-entry") that has not
+  existed since there were four sub-entry types. It now states the `5.1.0` model
+  — a config entry is a connection and nothing else — tabulates the four
+  sub-entry kinds against their real menu names and their sections, and records
+  that a hub with no agents is a valid state and what the `1 -> 2` migration does
+  to a `5.0.x` entry that had one.
+- Swept the chapters the changed subsystems touch. Newly documented, all of it
+  reachable behaviour that had no entry anywhere: the `(missing tool)` label and
+  the `invalid_data: allowed_tools` dead end it fixed (§7.5); what a migrated
+  `allowed_tools` list actually contains (§7.5); the storability guard and why a
+  templated target is now safe to re-save (§7.0.1); a broken `tools.yaml` no
+  longer disabling UI-built tools and stores, and the banner that reports it
+  (§7.7); a disabled imported tool no longer waking its `tools.yaml` twin (§7.7);
+  a store save that reports whether the store started (§9.2); a sub-entry write
+  that no longer reloads the hub (§9.2); the agent form's `model_user` field,
+  which the options table had never listed (§4). Six new troubleshooting entries
+  answer the questions the four stale passages would have produced.
+- `README.md` / `README-ru.md`: the panel is described as the six tabs it has
+  rather than "a camera analysis tab"; the configuration model is the hub/agent
+  split; Quick Start's agent fields match the form; the "What's new" table gains
+  `5.1.0` through `5.4.x`; the test badge is current. The Russian overview also
+  stopped claiming SmartChain ships an AI panel for generating and deploying
+  automations from a text description — that feature was removed in `4.0.0`.
+
+## [5.4.8] - unreleased
+
+### Fixed
+- **Switching on one ready-made tool reloaded the whole hub.** Measured on a copy
+  of a real install: installing three presets cost 3 `async_setup_entry` cycles,
+  3 unloads, 6 `conversation.* → offline` transitions and 6 embedding-dimension
+  probes — each probe a fresh OAuth exchange under a 30 s timeout — and an Assist
+  request landing in one of those windows failed. `update_listener` was doing two
+  different jobs and paying for both on every write: a reload is what a change to
+  the *entry* needs, while a tool, store or embeddings binding needs none of it
+  (`custom_tools_for` reads the live registry at request time, so a tool switched
+  on is in the next message without the entity being touched). Each half is now
+  gated on its own fingerprint — `_entry_fingerprint` over everything a reload
+  would pick up, defined by exclusion so a field added later is reloaded for by
+  default, and the subsystem fingerprint moved inside `_reload_registry` under
+  the rebuild lock, where two paths reacting to one write can no longer both read
+  it stale. After: 0 setup cycles, 0 unloads, 0 entity transitions, 3 rebuilds
+  and 3 probes for three presets. Handlers that edit `tools.yaml` still rebuild
+  ungated, since no fingerprint can see the file, and a skipped rebuild returns
+  the standing `tools.yaml` error rather than clearing the Tools-tab banner on a
+  file that is still broken.
 
 ## [5.4.0] - unreleased
 
