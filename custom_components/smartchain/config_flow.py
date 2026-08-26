@@ -70,6 +70,7 @@ from .const import (
     ENGINE_MODELS,
     ENTITY_DEFAULT_PRESET,
     ENTITY_PRESETS,
+    ENTITY_SOURCE_TYPE,
     ID_ANTHROPIC,
     ID_DEEPSEEK,
     ID_GIGACHAT,
@@ -81,9 +82,18 @@ from .const import (
     ID_OPENROUTER,
     ID_TOGETHER,
     ID_YANDEX_GPT,
+    MEMORY_BACKEND_TYPES,
+    MEMORY_DEFAULT_BACKEND,
+    MEMORY_DEFAULT_RETENTION_DAYS,
+    MEMORY_IDENTIFIER_PATTERN,
+    MEMORY_SECRET_FIELDS,
+    MEMORY_SOURCE_TYPE_NONE,
+    MEMORY_SOURCE_TYPES,
+    MEMORY_STORE_NAME_PATTERN,
     OPENAI_COMPATIBLE,
     SUBENTRY_TYPE_CONVERSATION,
     SUBENTRY_TYPE_EMBEDDINGS,
+    SUBENTRY_TYPE_MEMORY_STORE,
     UNIQUE_ID,
     UNIQUE_ID_GIGACHAT,
 )
@@ -335,6 +345,11 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Return supported subentry types, filtered by provider capability."""
         types: dict[str, type[ConfigSubentryFlow]] = {
             SUBENTRY_TYPE_CONVERSATION: ConversationSubentryFlow,
+            # Not gated on a provider capability, unlike embeddings: a store
+            # binds to an embeddings *title*, which may well live on another
+            # config entry, so a provider that cannot embed can still host the
+            # store that uses one that can.
+            SUBENTRY_TYPE_MEMORY_STORE: MemoryStoreSubentryFlow,
         }
         engine = config_entry.data.get(CONF_ENGINE) or ID_GIGACHAT
         if supports(engine, CAPABILITY_EMBEDDINGS):
@@ -720,3 +735,391 @@ def _resolve_embeddings_model(user_input: dict[str, Any]) -> str:
     if custom:
         return custom
     return (user_input.get("model") or "").strip()
+
+
+# ----- memory stores -----------------------------------------------------
+
+
+# The reason each store-form rejection can give, keyed the way a config flow
+# needs it (`errors={"base": key}`) and phrased the way the panel needs it.
+# One table, so the flow dialog and the websocket command cannot disagree
+# about why something was refused.
+STORE_ERROR_TEXT: dict[str, str] = {
+    "invalid_name": (
+        "a store name must be lowercase letters, digits and underscores, "
+        "starting with a letter or underscore"
+    ),
+    "name_taken": "another memory store already uses this name",
+    "embeddings_required": "pick which embeddings binding this store uses",
+    "embeddings_unknown": "no embeddings binding has that name",
+    "embeddings_ambiguous": (
+        "that embeddings title is claimed by more than one binding, so it "
+        "resolves to nothing; rename one of them first"
+    ),
+    "dsn_required": "the pgvector backend needs a connection string",
+    "url_required": "the qdrant backend needs a server URL",
+    "invalid_identifier": (
+        "must be lowercase letters, digits and underscores, starting with a letter or underscore"
+    ),
+}
+
+# Fields whose value never travels back to the client. `dsn` is a PostgreSQL
+# connection string, which embeds a password; `api_key` is a qdrant token.
+# Both are served as `<field>_set: bool` and an empty submission on an existing
+# store means "keep what is stored".
+STORE_SECRET_FIELDS = MEMORY_SECRET_FIELDS
+
+# Which extra fields each backend declares. Data-driven so the form, the
+# validator and `store_config_from_subentry` cannot drift.
+STORE_BACKEND_FIELDS: dict[str, tuple[str, ...]] = {
+    "sqlite_numpy": ("path",),
+    "sqlite_vec": ("path",),
+    "pgvector": ("dsn", "table"),
+    "qdrant": ("url", "api_key", "collection", "verify_ssl"),
+}
+
+
+def embeddings_binding_options(hass, *, keep: str | None = None) -> list[selector.SelectOptionDict]:
+    """The embeddings titles a store may bind to, ambiguity spelled out.
+
+    A title claimed by two subentries resolves to None in
+    `embeddings_subentries_by_title` and silently unbinds every store that
+    named it. Such a title is still offered — hiding it would leave a user
+    editing an already-bound store unable to see why it stopped working — but
+    it is labelled, and `validate_store_input` refuses it on the way in. Warn
+    before writing, never after.
+
+    `keep` is a title the caller must be able to submit even when no binding
+    carries it any more: without it, editing a store whose binding was deleted
+    would fail the selector's own membership check and become unsavable.
+    """
+    from .tools.memory.registry import embeddings_subentries_by_title
+
+    available = embeddings_subentries_by_title(hass)
+    options = [
+        selector.SelectOptionDict(
+            value=title,
+            label=(title if available[title] is not None else f"{title} (duplicated title)"),
+        )
+        for title in sorted(available)
+    ]
+    if keep and keep not in available:
+        options.append(selector.SelectOptionDict(value=keep, label=f"{keep} (missing binding)"))
+    return options
+
+
+def memory_store_subentry_schema(hass, defaults: Mapping[str, Any] | None = None) -> vol.Schema:
+    """The store form, conditioned on the backend and source already chosen.
+
+    Every backend carries different settings and an entity index has no use
+    for retention or conversation ingest, so a flat form would show a dozen
+    fields that do not apply and accept combinations the schema below rejects.
+    Instead the schema is rebuilt from whatever `backend_type` / `source_type`
+    the caller currently holds — for the panel that is the in-progress form
+    value (see `reactive` in `ws_store_schema`), for the config-flow dialog it
+    is the answer given on the previous step.
+
+    Because irrelevant fields are simply not declared, voluptuous's default
+    PREVENT_EXTRA does the mutual-exclusion work for free: an entity-source
+    store that submits `retention_days` is rejected by the schema itself,
+    exactly as `tools/schema.py::_validate_memory` rejects it in YAML.
+
+    `dsn` and `api_key` are declared but never pre-filled — see
+    STORE_SECRET_FIELDS.
+    """
+    current = dict(defaults or {})
+    backend_type = current.get("backend_type") or MEMORY_DEFAULT_BACKEND
+    if backend_type not in MEMORY_BACKEND_TYPES:
+        backend_type = MEMORY_DEFAULT_BACKEND
+    source_type = current.get("source_type") or MEMORY_SOURCE_TYPE_NONE
+    if source_type not in MEMORY_SOURCE_TYPES:
+        source_type = MEMORY_SOURCE_TYPE_NONE
+
+    def suggest(key: str, fallback: Any = None) -> dict[str, Any]:
+        return {"suggested_value": current.get(key, fallback)}
+
+    fields: dict[Any, Any] = {
+        vol.Required("name", description=suggest("name", "")): selector.TextSelector(),
+        vol.Required("embeddings", description=suggest("embeddings")): selector.SelectSelector(
+            selector.SelectSelectorConfig(
+                mode=SelectSelectorMode("dropdown"),
+                options=embeddings_binding_options(hass, keep=current.get("embeddings")),
+            ),
+        ),
+        vol.Optional(
+            "description", description=suggest("description", ""), default=""
+        ): selector.TextSelector(),
+        vol.Optional(
+            "backend_type", description=suggest("backend_type", backend_type), default=backend_type
+        ): selector.SelectSelector(
+            selector.SelectSelectorConfig(
+                mode=SelectSelectorMode("dropdown"), options=MEMORY_BACKEND_TYPES
+            ),
+        ),
+        vol.Optional(
+            "source_type", description=suggest("source_type", source_type), default=source_type
+        ): selector.SelectSelector(
+            selector.SelectSelectorConfig(
+                mode=SelectSelectorMode("dropdown"), options=MEMORY_SOURCE_TYPES
+            ),
+        ),
+    }
+
+    if "path" in STORE_BACKEND_FIELDS[backend_type]:
+        fields[vol.Optional("path", description=suggest("path", ""))] = selector.TextSelector()
+    if backend_type == "pgvector":
+        # No suggested value: a DSN carries the database password.
+        fields[vol.Optional("dsn")] = selector.TextSelector(
+            selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)
+        )
+        fields[vol.Optional("table", description=suggest("table", ""))] = selector.TextSelector()
+    if backend_type == "qdrant":
+        fields[vol.Optional("url", description=suggest("url", ""))] = selector.TextSelector()
+        # No suggested value: this is the qdrant token.
+        fields[vol.Optional("api_key")] = selector.TextSelector(
+            selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)
+        )
+        fields[vol.Optional("collection", description=suggest("collection", ""))] = (
+            selector.TextSelector()
+        )
+        fields[
+            vol.Optional("verify_ssl", description=suggest("verify_ssl", True), default=True)
+        ] = bool
+
+    if source_type == ENTITY_SOURCE_TYPE:
+        fields[
+            vol.Optional(
+                "preset",
+                description=suggest("preset", ENTITY_DEFAULT_PRESET),
+                default=ENTITY_DEFAULT_PRESET,
+            )
+        ] = selector.SelectSelector(
+            selector.SelectSelectorConfig(
+                mode=SelectSelectorMode("dropdown"), options=ENTITY_PRESETS
+            ),
+        )
+        fields[
+            vol.Optional("index_states", description=suggest("index_states", False), default=False)
+        ] = bool
+        for key in ("include", "exclude"):
+            fields[vol.Optional(key, description=suggest(key, []), default=list)] = (
+                selector.SelectSelector(
+                    selector.SelectSelectorConfig(options=[], multiple=True, custom_value=True),
+                )
+            )
+    else:
+        fields[
+            vol.Optional(
+                "retention_days",
+                description=suggest("retention_days", MEMORY_DEFAULT_RETENTION_DAYS),
+                default=MEMORY_DEFAULT_RETENTION_DAYS,
+            )
+        ] = NumberSelector(NumberSelectorConfig(min=0, max=3650, step=1, mode="box"))
+        fields[
+            vol.Optional(
+                "ingest_conversation",
+                description=suggest("ingest_conversation", True),
+                default=True,
+            )
+        ] = bool
+        # Deliberately no logbook-ingest switch. `tools/memory/ingest.py`
+        # reaches for `logbook._get_events` / `logbook.humanify`, which the
+        # installed Home Assistant no longer exposes, so the poller is a
+        # runtime no-op. A toggle here would promise something the code cannot
+        # do; the YAML `ingest_logbook:` block still parses for anyone who set
+        # it before, and starts working again the day the fetcher does.
+
+    return vol.Schema(fields)
+
+
+def validate_store_input(
+    hass,
+    data: Mapping[str, Any],
+    *,
+    subentry_id: str | None = None,
+) -> tuple[str, str] | None:
+    """`(field, error_key)` for the first problem found, or None.
+
+    Shared by `MemoryStoreSubentryFlow` and `ws_store_save` so a store created
+    through Home Assistant's own dialog and one created through the panel are
+    held to the same rules — including the rules the voluptuous schema cannot
+    express: the name pattern (`vol.Match` does not serialise, so the pattern
+    cannot live in the schema the panel renders), cross-store name uniqueness,
+    and "this backend needs this field".
+
+    Never raises and never echoes a submitted value back; the caller pairs the
+    returned key with `STORE_ERROR_TEXT`.
+    """
+    import re
+
+    from .tools.memory.registry import embeddings_subentries_by_title
+    from .tools.memory.subentry_source import store_subentries
+
+    name = str(data.get("name") or "").strip()
+    if not re.match(MEMORY_STORE_NAME_PATTERN, name):
+        return "name", "invalid_name"
+
+    for _entry, subentry in store_subentries(hass):
+        if subentry.subentry_id != subentry_id and subentry.title == name:
+            return "name", "name_taken"
+
+    title = str(data.get("embeddings") or "").strip()
+    if not title:
+        return "embeddings", "embeddings_required"
+    available = embeddings_subentries_by_title(hass)
+    if title not in available:
+        return "embeddings", "embeddings_unknown"
+    if available[title] is None:
+        return "embeddings", "embeddings_ambiguous"
+
+    backend_type = data.get("backend_type") or MEMORY_DEFAULT_BACKEND
+    if backend_type == "pgvector" and not str(data.get("dsn") or "").strip():
+        return "dsn", "dsn_required"
+    if backend_type == "qdrant" and not str(data.get("url") or "").strip():
+        return "url", "url_required"
+
+    for key in ("table", "collection"):
+        value = str(data.get(key) or "").strip()
+        if value and not re.match(MEMORY_IDENTIFIER_PATTERN, value):
+            # These land in pgvector DDL and a qdrant URL path and cannot be
+            # parameterised, which is why the YAML schema constrains them too.
+            return key, "invalid_identifier"
+
+    return None
+
+
+def merge_store_secrets(
+    submitted: Mapping[str, Any],
+    stored: Mapping[str, Any] | None,
+    declared: set[str] | None = None,
+) -> dict[str, Any]:
+    """Carry a stored credential forward when the form submitted an empty one.
+
+    The form never receives `dsn` or `api_key` back, so an untouched edit
+    submits them empty. Treating that as "clear it" would silently break the
+    store on the first unrelated edit — so empty means "keep", and clearing a
+    credential is done by switching the backend or deleting the store.
+
+    `declared` is the field set the *current* schema declares. Without it,
+    switching a store from pgvector to qdrant would carry the old `dsn`
+    forward into a backend that has no use for it, leaving a database password
+    in storage for a store that no longer connects to a database.
+    """
+    out = dict(submitted)
+    for key in STORE_SECRET_FIELDS:
+        if declared is not None and key not in declared:
+            out.pop(key, None)
+            continue
+        if not str(out.get(key) or "").strip():
+            out.pop(key, None)
+            kept = (stored or {}).get(key)
+            if kept:
+                out[key] = kept
+    return out
+
+
+class MemoryStoreSubentryFlow(ConfigSubentryFlow):
+    """Add or reconfigure a memory store from Home Assistant's own dialog.
+
+    Two steps rather than one: which fields a store needs depends on the
+    backend and on whether it indexes entities, and a config-flow form cannot
+    change shape while it is open. Step one asks the questions that decide the
+    shape; step two asks the rest. The panel gets the same schema in a single
+    reactive form (see `ws_store_schema`), from the same builder.
+    """
+
+    def __init__(self) -> None:
+        self._basics: dict[str, Any] = {}
+        self._reconfigure = False
+
+    # -- step 1 ------------------------------------------------------------
+
+    async def async_step_user(self, user_input: dict[str, Any] | None = None) -> SubentryFlowResult:
+        return await self._async_step_basics("user", user_input)
+
+    async def async_step_reconfigure(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        self._reconfigure = True
+        return await self._async_step_basics("reconfigure", user_input)
+
+    async def _async_step_basics(
+        self, step_id: str, user_input: dict[str, Any] | None
+    ) -> SubentryFlowResult:
+        defaults = self._stored_defaults()
+        schema = _memory_store_basics_schema(self.hass, defaults)
+
+        if user_input is None:
+            return self.async_show_form(step_id=step_id, data_schema=schema)
+
+        self._basics = dict(user_input)
+        return await self._async_show_details()
+
+    # -- step 2 ------------------------------------------------------------
+
+    async def async_step_details(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        if user_input is None:
+            return await self._async_show_details()
+
+        stored = self._stored_defaults()
+        submitted = {**self._basics, **user_input}
+        declared = {
+            str(key.schema) for key in memory_store_subentry_schema(self.hass, submitted).schema
+        }
+        data = merge_store_secrets(submitted, stored, declared)
+        subentry_id = self._current_subentry_id()
+        error = validate_store_input(self.hass, data, subentry_id=subentry_id)
+        if error is not None:
+            return await self._async_show_details(error=error[1])
+
+        title = str(data.pop("name")).strip()
+        if self._reconfigure:
+            return self.async_update_and_abort(
+                self._get_entry(), self._get_reconfigure_subentry(), title=title, data=data
+            )
+        return self.async_create_entry(title=title, data=data)
+
+    async def _async_show_details(self, *, error: str | None = None) -> SubentryFlowResult:
+        defaults = {**self._stored_defaults(), **self._basics}
+        full = memory_store_subentry_schema(self.hass, defaults)
+        basics = _memory_store_basics_schema(self.hass, defaults)
+        declared = {str(key.schema) for key in basics.schema}
+        rest = vol.Schema(
+            {key: value for key, value in full.schema.items() if str(key.schema) not in declared}
+        )
+        return self.async_show_form(
+            step_id="details",
+            data_schema=rest,
+            errors={"base": error} if error else None,
+        )
+
+    # -- helpers -----------------------------------------------------------
+
+    def _current_subentry_id(self) -> str | None:
+        """The subentry being reconfigured, or None while creating.
+
+        Deliberately *not* named `_reconfigure_subentry_id`: `ConfigSubentryFlow`
+        already owns that name, and shadowing it with a method turned every
+        reconfigure into `UnknownSubEntry` — HA's own `_get_reconfigure_subentry`
+        reads the attribute and got a bound method instead of an id.
+        """
+        if not self._reconfigure:
+            return None
+        return self._get_reconfigure_subentry().subentry_id
+
+    def _stored_defaults(self) -> dict[str, Any]:
+        if not self._reconfigure:
+            return {}
+        subentry = self._get_reconfigure_subentry()
+        return {**subentry.data, "name": subentry.title}
+
+
+def _memory_store_basics_schema(hass, defaults: Mapping[str, Any] | None = None) -> vol.Schema:
+    """The five fields that decide what the rest of the store form looks like."""
+    full = memory_store_subentry_schema(hass, defaults)
+    wanted = ("name", "embeddings", "description", "backend_type", "source_type")
+    return vol.Schema(
+        {key: value for key, value in full.schema.items() if str(key.schema) in wanted}
+    )

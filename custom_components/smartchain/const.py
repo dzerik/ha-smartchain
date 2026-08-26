@@ -362,6 +362,22 @@ MEMORY_SQLITE_SOFT_LIMIT = 50_000
 MEMORY_DEFAULT_QDRANT_COLLECTION = "smartchain_memory"
 MEMORY_DEFAULT_PG_TABLE = "smartchain_memory"
 
+# Memory stores as config subentries (v5.2.0)
+# A store used to be configurable only by editing the `memory:` block of
+# tools.yaml. It is now also a subentry type, which is what keeps `dsn` and
+# `api_key` — real credentials — out of a browser-visible text file.
+SUBENTRY_TYPE_MEMORY_STORE = "memory_store"
+# The store subentry's own `source_type` field: `none` is a plain memory store,
+# `entities` turns it into an index of the home. Kept separate from
+# ENTITY_SOURCE_TYPE so the "no source" case has a name the form can offer.
+# (MEMORY_SOURCE_TYPES is assembled further down, once ENTITY_SOURCE_TYPE
+# exists — a forward reference here would raise NameError on import.)
+MEMORY_SOURCE_TYPE_NONE = "none"
+# Fields of a store subentry that hold a credential. They are write-only: a
+# schema result reports `<field>_set: bool` instead of the value, and an empty
+# submission on an existing store means "keep what is stored", never "clear it".
+MEMORY_SECRET_FIELDS = ("dsn", "api_key")
+
 # Provider capabilities (v5.0.0)
 CAPABILITY_CHAT = "chat"
 CAPABILITY_EMBEDDINGS = "embeddings"
@@ -383,6 +399,10 @@ ENGINE_EMBEDDING_MODELS = {
 
 # Entity indexing (v5.0.0)
 ENTITY_SOURCE_TYPE = "entities"
+# The store subentry's `source_type` options, in the order the form offers
+# them. Built from ENTITY_SOURCE_TYPE rather than repeating the literal, so a
+# store created in the UI and one written in YAML cannot drift apart.
+MEMORY_SOURCE_TYPES = [MEMORY_SOURCE_TYPE_NONE, ENTITY_SOURCE_TYPE]
 ENTITY_PRESETS = ["minimal", "optimal", "maximal", "paranoid"]
 ENTITY_DEFAULT_PRESET = "optimal"
 ENTITY_TOOL_NAME = "search_entities"

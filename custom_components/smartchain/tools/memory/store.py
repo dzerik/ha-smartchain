@@ -66,6 +66,12 @@ class MemoryStore:
         self.backend = backend
         self.is_available = False
         self.dim: int | None = None
+        # Why `async_setup` gave up, in text safe to show a user: a
+        # BackendInitError message (already scrubbed by every backend that
+        # raises one) or a bare exception type. Never `str(err)` for an
+        # unexpected exception — an embeddings provider's error can carry the
+        # API key. `None` until a setup has actually failed.
+        self.unavailable_reason: str | None = None
 
     async def async_setup(self) -> None:
         """Probe the embedding dimension and initialise the backend.
@@ -81,6 +87,10 @@ class MemoryStore:
                 "dimension probe; this store is disabled"
             )
             self.is_available = False
+            self.unavailable_reason = (
+                "the embeddings provider did not answer the dimension probe; "
+                "see the Home Assistant log"
+            )
             return
 
         dim = len(probe)
@@ -88,14 +98,22 @@ class MemoryStore:
             await self.backend.initialize(dim)
         except BackendInitError as err:
             LOGGER.error("SmartChain memory backend %s disabled: %s", self.backend.name, err)
+            # Safe to carry: every backend that raises BackendInitError builds
+            # its message from literal text, never from a dsn or an api_key.
+            self.unavailable_reason = str(err)
             self.is_available = False
             return
-        except Exception:  # noqa: BLE001
+        except Exception as err:  # noqa: BLE001
             LOGGER.exception("SmartChain memory backend %s failed to start", self.backend.name)
+            self.unavailable_reason = (
+                f"the {self.backend.name} backend raised {type(err).__name__} while "
+                "starting; see the Home Assistant log"
+            )
             self.is_available = False
             return
 
         self.dim = dim
+        self.unavailable_reason = None
         self.is_available = True
 
     async def add(

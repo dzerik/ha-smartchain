@@ -16,6 +16,14 @@ import { callWS, showToast } from "../services.js";
  *             .showRefresh (default true — "Refresh models" is meaningless on
  *              a form whose schema has no model in it)
  *
+ * Some forms change shape as they are filled in: a memory store on the qdrant
+ * backend asks for different fields than one on sqlite. A schema command can
+ * say so by returning `reactive: ["<field>", ...]`; when one of those fields
+ * changes value this component re-requests the schema, passing the values
+ * entered so far as `data`. The list of such fields comes from the backend
+ * like everything else, so no field name is declared here either. A command
+ * that returns no `reactive` key behaves exactly as before.
+ *
  * Events:
  *   sc-loaded      — detail: the full schema-command result (schema, data,
  *                    labels, and whatever else that command returns, e.g.
@@ -46,6 +54,14 @@ export class ScConfigForm extends HTMLElement {
     this._fieldErrors = null;
     this._showCancel = true;
     this._showRefresh = true;
+    // Field names whose value changes the shape of the form — supplied by the
+    // schema command, never known here. Empty for every command that does not
+    // send one, which is what keeps this inert for the other tabs.
+    this._reactive = [];
+    // Guards the reload a reactive change triggers: `_apply` assigns
+    // `form.data`, and an <ha-form> that answers that with its own
+    // value-changed would otherwise start a reload loop.
+    this._reloading = false;
     // Guards only the *automatic* load triggered by property arrival (see
     // _loadIfReady) — it does not affect explicit calls to load(), which is
     // how the Refresh control keeps working after the first load.
@@ -123,12 +139,17 @@ export class ScConfigForm extends HTMLElement {
     if (!this._hass || !this._entryId || !this._commands) return;
     const payload = { entry_id: this._entryId, refresh };
     if (this._subentryId) payload.subentry_id = this._subentryId;
+    // Only sent once the backend has said this form is reactive — a command
+    // that does not declare `data` would reject it as an extra key.
+    if (this._reactive.length) payload.data = this._data;
+    this._reloading = true;
     try {
       const result = await callWS(this._hass, this._commands.schema, payload);
       this._schema = result.schema;
       this._data = result.data || {};
       this._labels = result.labels || {};
       this._descriptions = result.descriptions || {};
+      this._reactive = Array.isArray(result.reactive) ? result.reactive : [];
       this._fieldErrors = null;
       this._apply();
       this.dispatchEvent(
@@ -138,6 +159,8 @@ export class ScConfigForm extends HTMLElement {
       // Leave whatever schema/data we already had in place — a failed
       // refresh should not blank out a form the user was mid-edit on.
       showToast(err.message || "Could not load the form", "error");
+    } finally {
+      this._reloading = false;
     }
   }
 
@@ -197,6 +220,15 @@ export class ScConfigForm extends HTMLElement {
       .filter((name) => declared.has(name));
   }
 
+  /**
+   * Did one of the backend-declared reactive fields actually change value?
+   * <ha-form> fires value-changed on every keystroke, so comparing the whole
+   * object would reload the form while the user types.
+   */
+  _reactiveChanged(previous, next) {
+    return this._reactive.some((name) => (previous || {})[name] !== (next || {})[name]);
+  }
+
   _render() {
     this.innerHTML = `
       <style>
@@ -212,7 +244,11 @@ export class ScConfigForm extends HTMLElement {
       </div>
     `;
     this.querySelector("ha-form").addEventListener("value-changed", (ev) => {
+      const previous = this._data;
       this._data = ev.detail.value;
+      // A field the backend named as reactive decides which other fields
+      // exist, so the schema is asked for again rather than guessed at here.
+      if (!this._reloading && this._reactiveChanged(previous, this._data)) this.load();
     });
 
     this.querySelector("#sc-form-save").addEventListener("click", () => this._trySave());

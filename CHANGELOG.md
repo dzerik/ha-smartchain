@@ -8,6 +8,58 @@ project follows [Semantic Versioning](https://semver.org/).
 > **Note:** `5.0.1`–`5.0.7` were released without changelog entries and are not
 > reconstructed here.
 
+## [5.2.0] - unreleased
+
+### Added
+- **Memory and vector stores are configurable from the UI.** A store is now a
+  `memory_store` config sub-entry — add one from **Settings > Devices & Services >
+  SmartChain > Add memory store**, or from the new **Stores** tab in the SmartChain
+  panel. The form covers everything the `memory:` block of `tools.yaml` covered:
+  the embeddings binding, the description, all four vector backends and their
+  settings, retention, conversation ingest, and the entity-index source with its
+  preset and include/exclude lists.
+- **A store's credentials stop passing through a browser-visible text file.**
+  `backend.dsn` (a PostgreSQL connection string, password included) and
+  `backend.api_key` (a qdrant token) written in `tools.yaml` are handed to the
+  browser by `smartchain/tools/get`, which serves that file's raw text. In a
+  sub-entry they live in `.storage` and are **write-only**: no schema, overview or
+  error response ever carries one back, only whether one is held. Leaving the
+  field empty when editing keeps the stored value; switching backend drops it.
+- **Failure visibility.** `MemoryRegistry` contains a failing store so the others
+  still start, which used to mean a store that never came up was
+  indistinguishable from a working one anywhere but the log. It now records why,
+  a new `smartchain/store/status` command reports it, and the Stores tab shows a
+  health line per store — including for stores that still live in `tools.yaml`.
+- New websocket commands `smartchain/store/schema`, `/save`, `/delete` and
+  `/status`, all admin-only. `smartchain/overview` gained a `stores` list per
+  entry.
+
+### Changed
+- **`tools.yaml` is now one source of stores, not the only one.** An existing
+  `memory:` block keeps working exactly as before. When both a file and a
+  sub-entry define a store of the same name the **sub-entry wins** — it is the one
+  the UI can edit — and the shadowing is reported, both as a warning in the log
+  and in the panel, rather than left to be discovered.
+- `<sc-config-form>` learned reactive schemas: a schema command may return
+  `reactive: ["<field>", ...]`, and changing one of those fields re-requests the
+  schema with the values entered so far. That is what lets one store form ask for
+  a DSN or a qdrant URL without a wizard. Commands that return no `reactive` key
+  are unaffected.
+
+### Fixed
+- Adding, editing or deleting an **embeddings** binding through the panel did not
+  rebuild the memory registry, so the change did nothing until
+  `smartchain.reload_tools` or a restart, with no error to explain why. Both the
+  embeddings and the new store commands now rebuild and report a rebuild failure
+  alongside the successful write.
+
+### Known limitations
+- The store form has **no logbook-ingest switch**. `tools/memory/ingest.py`
+  depends on `logbook._get_events` / `logbook.humanify`, which the installed Home
+  Assistant no longer exposes, so the poller is a runtime no-op — a toggle would
+  advertise something the code cannot do. The YAML `ingest_logbook:` block still
+  parses for anyone who set it, and starts working again the day the fetcher does.
+
 ## [5.1.0] - unreleased
 
 ### ⚠ BREAKING CHANGES

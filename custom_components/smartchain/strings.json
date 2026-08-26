@@ -173,6 +173,95 @@
       "error": {
         "model_required": "Select a model or enter a custom name"
       }
+    },
+    "memory_store": {
+      "entry_type": "Memory store",
+      "initiate_flow": {
+        "user": "Add memory store",
+        "reconfigure": "Reconfigure memory store"
+      },
+      "step": {
+        "user": {
+          "title": "Add memory store",
+          "description": "The name, the embeddings binding and the backend. The last two answers decide what the next step asks for.",
+          "data": {
+            "name": "Store name",
+            "embeddings": "Embeddings binding",
+            "description": "Description (shown to the model)",
+            "backend_type": "Vector backend",
+            "source_type": "What this store holds"
+          },
+          "data_description": {
+            "name": "Lowercase letters, digits and underscores, starting with a letter or underscore. This is the name search_memory and smartchain.clear_memory refer to, and for a file-based backend it is also the database filename — renaming a store points it at a fresh, empty one.",
+            "embeddings": "Which embeddings binding turns text into vectors for this store. Stores resolve a binding by its title, so a title used twice resolves to nothing at all.",
+            "description": "One line telling the model what lives in this store, so it can choose between several. Shown in the search_memory tool description.",
+            "backend_type": "Where the vectors are kept. sqlite_numpy needs nothing installed and is the right default; sqlite_vec is faster on large stores; pgvector and qdrant put the vectors on a server you already run.",
+            "source_type": "'none' is a memory store: conversation turns go in, search_memory reads them back. 'entities' turns it into a semantic index of your home for search_entities — the two cannot be combined, because retention would delete the index by age."
+          }
+        },
+        "reconfigure": {
+          "title": "Reconfigure memory store",
+          "description": "The name, the embeddings binding and the backend. The last two answers decide what the next step asks for.",
+          "data": {
+            "name": "Store name",
+            "embeddings": "Embeddings binding",
+            "description": "Description (shown to the model)",
+            "backend_type": "Vector backend",
+            "source_type": "What this store holds"
+          },
+          "data_description": {
+            "name": "Lowercase letters, digits and underscores, starting with a letter or underscore. This is the name search_memory and smartchain.clear_memory refer to, and for a file-based backend it is also the database filename — renaming a store points it at a fresh, empty one.",
+            "embeddings": "Which embeddings binding turns text into vectors for this store. Stores resolve a binding by its title, so a title used twice resolves to nothing at all.",
+            "description": "One line telling the model what lives in this store, so it can choose between several. Shown in the search_memory tool description.",
+            "backend_type": "Where the vectors are kept. sqlite_numpy needs nothing installed and is the right default; sqlite_vec is faster on large stores; pgvector and qdrant put the vectors on a server you already run.",
+            "source_type": "'none' is a memory store: conversation turns go in, search_memory reads them back. 'entities' turns it into a semantic index of your home for search_entities — the two cannot be combined, because retention would delete the index by age."
+          }
+        },
+        "details": {
+          "title": "Store settings",
+          "description": "The settings that depend on the backend and on what the store holds.",
+          "data": {
+            "path": "Database file (leave empty for the default)",
+            "dsn": "PostgreSQL connection string",
+            "table": "Table name",
+            "url": "Qdrant server URL",
+            "api_key": "Qdrant API key",
+            "collection": "Collection name",
+            "verify_ssl": "Verify the server's SSL certificate",
+            "retention_days": "Delete memories older than (days, 0 = never)",
+            "ingest_conversation": "Store conversation turns automatically",
+            "preset": "Which entities the index covers",
+            "index_states": "Also record each entity's current state",
+            "include": "Always include (a domain, or a full entity id)",
+            "exclude": "Never include (a domain, or a full entity id)"
+          },
+          "data_description": {
+            "path": "An absolute path to the SQLite file. Leave empty to keep it in Home Assistant's .storage directory, named after the store.",
+            "dsn": "postgresql://user:password@host/database. Stored with Home Assistant's other credentials and never shown again — leave empty when editing to keep the one already saved.",
+            "table": "Lowercase letters, digits and underscores. It is written straight into SQL and cannot be quoted, which is why the shape is restricted.",
+            "url": "https://host:6333 — the base URL of the Qdrant server.",
+            "api_key": "Never shown again once saved — leave empty when editing to keep the one already stored. Leave empty on a server that needs no key.",
+            "collection": "Lowercase letters, digits and underscores. It becomes part of a URL path and cannot be escaped, which is why the shape is restricted.",
+            "verify_ssl": "Turn off only for a server with a self-signed certificate; doing so removes protection against an intercepted connection.",
+            "retention_days": "Older memories are deleted once a day. 0 keeps everything forever, which on a busy install grows without limit.",
+            "ingest_conversation": "When on, every exchange with an agent is embedded into this store so the agent can recall it later. Turn off for a store you fill yourself.",
+            "preset": "How much of the home the index covers, smallest to largest. 'optimal' deliberately leaves out device_tracker: presence data is the most sensitive domain and indexing sends it to the embeddings provider.",
+            "index_states": "Records the current state alongside each entity, refreshed periodically. It makes filtering possible; it does not make states searchable by meaning.",
+            "include": "Added on top of the preset. Accepts a bare domain (sensor) or a full entity id (sensor.kitchen_temperature).",
+            "exclude": "Applied last and wins over both the preset and the include list."
+          }
+        }
+      },
+      "error": {
+        "invalid_name": "A store name must be lowercase letters, digits and underscores, starting with a letter or underscore.",
+        "name_taken": "Another memory store already uses this name.",
+        "embeddings_required": "Pick which embeddings binding this store uses.",
+        "embeddings_unknown": "No embeddings binding has that name.",
+        "embeddings_ambiguous": "That embeddings title is claimed by more than one binding, so it resolves to nothing. Rename one of them first.",
+        "dsn_required": "The pgvector backend needs a connection string.",
+        "url_required": "The qdrant backend needs a server URL.",
+        "invalid_identifier": "Must be lowercase letters, digits and underscores, starting with a letter or underscore."
+      }
     }
   }
 }

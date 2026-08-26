@@ -17,7 +17,7 @@ This document covers every SmartChain feature with a running example for each. F
 9. [Long-term memory / RAG](#9-long-term-memory--rag)
 10. [Multi-agent orchestration](#10-multi-agent-orchestration)
 11. [AI Task entity](#11-ai-task-entity)
-12. [Sidebar panel — camera analysis](#12-sidebar-panel--camera-analysis)
+12. [Sidebar panel](#12-sidebar-panel)
 13. [Skills system](#13-skills-system)
 14. [Troubleshooting](#14-troubleshooting)
 
@@ -450,9 +450,15 @@ Model lists are fetched live from the provider where possible and filtered by pu
 
 Recommended starting point: **Ollama + `nomic-embed-text`** — local, free, privacy-friendly. Cloud providers receive the full text of everything you embed.
 
-### 9.2. Step 2 — declare stores in `tools.yaml`
+### 9.2. Step 2 — declare stores
 
-A **store** binds one embeddings sub-entry to one vector backend and carries its own retention and ingest settings. The smallest working configuration is two lines:
+A **store** binds one embeddings sub-entry to one vector backend and carries its own retention and ingest settings. There are two ways to create one, and they build the same thing.
+
+**In the UI *(v5.2.0+)*, which is the recommended way.** **Settings > Devices & Services > SmartChain > Add memory store**, or the **Stores** tab of the SmartChain panel. Every option below is a field on that form, and the Stores tab additionally shows whether each configured store actually came up.
+
+Prefer the UI when the backend needs a credential. `backend.dsn` embeds a PostgreSQL password and `backend.api_key` is a qdrant token; written in `tools.yaml` they are handed to your browser whenever the panel's Tools tab opens that file. A store sub-entry keeps them in `.storage` and never serves them back — the form shows an empty field and "leave empty to keep the stored one".
+
+**In `tools.yaml`**, which keeps working unchanged. The smallest working configuration is two lines:
 
 ```yaml
 memory:
@@ -506,7 +512,11 @@ memory:
 | `ingest_logbook` | no | disabled | `enabled` (bool), `domains` (list), `poll_interval_minutes` (5–1440, default 60). |
 | `source` | no | absent | Turns the store into an entity index instead of a conversation store, see §9.10. Present means the three keys above are rejected. |
 
-Call `smartchain.reload_tools` after editing. Validation errors are raised there with a message naming the offending key, and the previous configuration stays live.
+Call `smartchain.reload_tools` after editing. Validation errors are raised there with a message naming the offending key, and the previous configuration stays live. A store created in the UI needs no reload — the command that writes it rebuilds the registry itself.
+
+> **A store defined in both places resolves in favour of the sub-entry** *(v5.2.0+)*, because the sub-entry is the one the UI can edit; losing to a file the panel cannot safely rewrite would make the UI a read-only display of something it appears to control. The shadowing is never silent: it is logged as a warning, reported by `smartchain/store/status`, and shown on the Stores tab. Delete the block from `tools.yaml` once you have moved a store.
+
+> **A store form has no logbook-ingest switch.** `ingest_logbook` above still parses, but the poller reaches for `logbook._get_events` / `logbook.humanify`, which the installed Home Assistant no longer exposes — it is a runtime no-op today. Shipping a live toggle over that would advertise something the code cannot do, so the field exists in YAML only, and starts working again the day the fetcher does.
 
 > **`!secret` works in `tools.yaml`.** SmartChain reads the file through Home Assistant's YAML loader with a secrets store rooted at the configuration directory, so a `!secret` tag resolves from `<config>/smartchain/secrets.yaml` if present and otherwise from `<config>/secrets.yaml` — the same lookup HA uses for `configuration.yaml`. A pgvector `dsn` or a Qdrant `api_key` belongs there rather than in `tools.yaml`:
 >
@@ -1056,11 +1066,22 @@ For downstream integrations, `smartchain.async_generate_structured()` is re-expo
 
 ---
 
-## 12. Sidebar panel — camera analysis
+## 12. Sidebar panel
 
-Click **SmartChain AI** in the HA sidebar to open the panel. Pick any camera entity, type a question, and the LLM returns a description. The result is mirrored to `sensor.smartchain_last_analysis` (proper SensorEntity since v4.0.2) and the `smartchain_image_analyzed` event for automation use.
+Click **SmartChain AI** in the HA sidebar. Administrators see five tabs; everyone else sees **Camera** only.
 
-The panel calls `smartchain.analyze_image` under the hood — same behaviour as the service.
+| Tab | What it is for |
+|---|---|
+| **Agents** | Create, edit, duplicate and delete conversation agents across every provider. |
+| **Embeddings** | Embeddings bindings (§9.1). Hidden entirely when no configured provider can embed. Warns before a rename or delete that would unbind a store. |
+| **Stores** *(v5.2.0+)* | Memory and vector stores (§9.2), plus a health line per configured store — including the ones that still live in `tools.yaml` and cannot be edited here. |
+| **Settings** | The entry's connection settings. Most providers have none and the tab says so. |
+| **Tools** | The `tools.yaml` editor, with server-side validation, a backup and a rollback. |
+| **Camera** | Pick any camera entity, type a question, get a description. |
+
+The **Camera** tab calls `smartchain.analyze_image` under the hood — same behaviour as the service. Its result is mirrored to `sensor.smartchain_last_analysis` (a proper SensorEntity since v4.0.2) and to the `smartchain_image_analyzed` event for automation use.
+
+Every form in the panel is rendered from a schema the backend serialises, so the panel itself declares no field names and a field added to a config flow appears there with no frontend change.
 
 ---
 

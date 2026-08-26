@@ -597,3 +597,150 @@ async def test_bare_exception_from_create_backend_skips_only_that_store(
     assert registry.names() == ["good"]
     assert "bad" in caplog.text
     await registry.shutdown()
+
+
+# --- failure visibility ---------------------------------------------------
+#
+# `build` contains a failing store so the others still start. That containment
+# used to be total: nothing downstream could tell a *configured* store from a
+# *live* one, so every command that touched memory reported success over a
+# subsystem that never came up, and the only trace was a log line.
+
+
+async def test_a_missing_binding_is_recorded_as_a_failure(
+    hass: HomeAssistant, tmp_path, patched_store
+) -> None:
+    _entry_with_embeddings(hass, ["Embed A"])
+    registry = MemoryRegistry(hass)
+    await registry.build(
+        MemorySettings(
+            stores=[
+                StoreConfig(name="live", embeddings="Embed A"),
+                StoreConfig(name="orphan", embeddings="Nothing Named This"),
+            ]
+        ),
+        tmp_path,
+    )
+    assert registry.names() == ["live"]
+    assert "Nothing Named This" in registry.failures["orphan"]
+    assert "live" not in registry.failures
+    await registry.shutdown()
+
+
+async def test_a_backend_failure_is_recorded_with_a_safe_reason(
+    hass: HomeAssistant, tmp_path
+) -> None:
+    """BackendInitError messages are built from literal text by every backend
+    that raises one, which is why the message itself may travel."""
+    _entry_with_embeddings(hass, ["Embed A"])
+
+    with (
+        patch(
+            "custom_components.smartchain.tools.memory.registry.create_embeddings_from_subentry",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "custom_components.smartchain.tools.memory.registry.create_backend",
+            side_effect=BackendInitError("pgvector could not connect"),
+        ),
+    ):
+        registry = MemoryRegistry(hass)
+        await registry.build(
+            MemorySettings(stores=[StoreConfig(name="pg", embeddings="Embed A")]), tmp_path
+        )
+
+    assert registry.failures["pg"] == "pgvector could not connect"
+
+
+async def test_an_unexpected_failure_records_the_type_only(hass: HomeAssistant, tmp_path) -> None:
+    """A pydantic ValidationError renders `input_value`, which on this path is
+    the provider credential — so the type name is all that is kept."""
+    _entry_with_embeddings(hass, ["Embed A"])
+
+    with patch(
+        "custom_components.smartchain.tools.memory.registry.create_embeddings_from_subentry",
+        side_effect=ValueError("api_key=sk-super-secret is malformed"),
+    ):
+        registry = MemoryRegistry(hass)
+        await registry.build(
+            MemorySettings(stores=[StoreConfig(name="oops", embeddings="Embed A")]), tmp_path
+        )
+
+    assert "sk-super-secret" not in registry.failures["oops"]
+    assert "ValueError" in registry.failures["oops"]
+
+
+async def test_status_lists_live_and_failed_stores_together(
+    hass: HomeAssistant, tmp_path, patched_store
+) -> None:
+    _entry_with_embeddings(hass, ["Embed A"])
+    registry = MemoryRegistry(hass)
+    await registry.build(
+        MemorySettings(
+            stores=[
+                StoreConfig(name="live", embeddings="Embed A"),
+                StoreConfig(name="orphan", embeddings="gone"),
+            ]
+        ),
+        tmp_path,
+        {"live": "subentry", "orphan": "yaml"},
+    )
+    rows = {row["name"]: row for row in registry.status()}
+    assert rows["live"]["ok"] is True
+    assert rows["live"]["source"] == "subentry"
+    assert rows["orphan"]["ok"] is False
+    assert rows["orphan"]["source"] == "yaml"
+    await registry.shutdown()
+
+
+async def test_a_rebuild_clears_the_previous_failures(
+    hass: HomeAssistant, tmp_path, patched_store
+) -> None:
+    """A registry that kept a stale failure would report a store as broken long
+    after the user fixed it."""
+    _entry_with_embeddings(hass, ["Embed A"])
+    registry = MemoryRegistry(hass)
+    await registry.build(
+        MemorySettings(stores=[StoreConfig(name="s", embeddings="gone")]), tmp_path
+    )
+    assert registry.failures
+    await registry.build(
+        MemorySettings(stores=[StoreConfig(name="s", embeddings="Embed A")]), tmp_path
+    )
+    assert registry.failures == {}
+    await registry.shutdown()
+
+
+async def test_a_store_that_did_not_come_up_reports_the_store_s_own_reason(
+    hass: HomeAssistant, tmp_path
+) -> None:
+    _entry_with_embeddings(hass, ["Embed A"])
+
+    def _factory(hass_, embeddings, backend):
+        st = MagicMock()
+        st.is_available = False
+        st.unavailable_reason = "the embeddings provider did not answer"
+        st.async_setup = AsyncMock()
+        st.close = AsyncMock()
+        return st
+
+    with (
+        patch(
+            "custom_components.smartchain.tools.memory.registry.MemoryStore",
+            side_effect=_factory,
+        ),
+        patch(
+            "custom_components.smartchain.tools.memory.registry.create_embeddings_from_subentry",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "custom_components.smartchain.tools.memory.registry.create_backend",
+            return_value=MagicMock(),
+        ),
+    ):
+        registry = MemoryRegistry(hass)
+        await registry.build(
+            MemorySettings(stores=[StoreConfig(name="s", embeddings="Embed A")]), tmp_path
+        )
+
+    assert registry.failures["s"] == "the embeddings provider did not answer"

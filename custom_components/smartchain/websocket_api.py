@@ -34,8 +34,12 @@ from .const import (
     CONF_ENGINE,
     DOMAIN,
     ID_GIGACHAT,
+    MEMORY_DEFAULT_BACKEND,
+    MEMORY_SECRET_FIELDS,
+    MEMORY_SOURCE_TYPE_NONE,
     SUBENTRY_TYPE_CONVERSATION,
     SUBENTRY_TYPE_EMBEDDINGS,
+    SUBENTRY_TYPE_MEMORY_STORE,
     UNIQUE_ID,
 )
 from .tools.loader import LoaderError, load_tools_file
@@ -58,6 +62,10 @@ def async_register(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_embeddings_schema)
     websocket_api.async_register_command(hass, ws_embeddings_save)
     websocket_api.async_register_command(hass, ws_embeddings_delete)
+    websocket_api.async_register_command(hass, ws_store_schema)
+    websocket_api.async_register_command(hass, ws_store_save)
+    websocket_api.async_register_command(hass, ws_store_delete)
+    websocket_api.async_register_command(hass, ws_store_status)
     websocket_api.async_register_command(hass, ws_overview)
     websocket_api.async_register_command(hass, ws_tools_get)
     websocket_api.async_register_command(hass, ws_tools_validate)
@@ -535,6 +543,11 @@ def _describe_entry(hass: HomeAssistant, entry: ConfigEntry) -> dict[str, Any]:
             for subentry in entry.subentries.values()
             if subentry.subentry_type == SUBENTRY_TYPE_EMBEDDINGS
         ],
+        "stores": [
+            _describe_store(registry, subentry)
+            for subentry in entry.subentries.values()
+            if subentry.subentry_type == SUBENTRY_TYPE_MEMORY_STORE
+        ],
     }
 
 
@@ -551,6 +564,30 @@ def _describe_agent(subentry: Any) -> dict[str, Any]:
         "title": subentry.title,
         "model": model,
         "tool_count": None if all_tools else len(allowed),
+    }
+
+
+def _describe_store(registry: Any, subentry: Any) -> dict[str, Any]:
+    """Public description of one memory store subentry.
+
+    Assembled field by field for the same reason `_describe_entry` is:
+    `subentry.data` holds `dsn` and `api_key`, so forwarding it wholesale —
+    now or by a later edit — would put a database password on the wire. Only
+    whether a credential is held travels, never the credential.
+    """
+    data = subentry.data
+    name = subentry.title
+    failures = getattr(registry, "failures", {}) if registry else {}
+    live = bool(registry) and name in registry.stores
+    return {
+        "subentry_id": subentry.subentry_id,
+        "title": name,
+        "embeddings": data.get("embeddings", ""),
+        "backend_type": data.get("backend_type", MEMORY_DEFAULT_BACKEND),
+        "source_type": data.get("source_type", MEMORY_SOURCE_TYPE_NONE),
+        "secrets_set": {field: bool(data.get(field)) for field in MEMORY_SECRET_FIELDS},
+        "ok": live,
+        "reason": None if live else failures.get(name),
     }
 
 
@@ -761,11 +798,20 @@ async def ws_embeddings_save(
             unique_id=None,
         )
         hass.config_entries.async_add_subentry(entry, new)
-        connection.send_result(msg["id"], {"subentry_id": new.subentry_id})
+        # A store binds to this title, and nothing rebuilds the memory registry
+        # on its own — without this the new binding did nothing until
+        # `smartchain.reload_tools` or a restart, with no error to explain why.
+        reload_error = await _rebuild_after_subentry_write(hass)
+        connection.send_result(
+            msg["id"], {"subentry_id": new.subentry_id, "reload_error": reload_error}
+        )
         return
 
     hass.config_entries.async_update_subentry(entry, subentry, data=stored, title=title)
-    connection.send_result(msg["id"], {"subentry_id": subentry.subentry_id})
+    reload_error = await _rebuild_after_subentry_write(hass)
+    connection.send_result(
+        msg["id"], {"subentry_id": subentry.subentry_id, "reload_error": reload_error}
+    )
 
 
 def _resolve_embeddings(
@@ -807,7 +853,305 @@ async def ws_embeddings_delete(
     bound_stores = registry.stores_bound_to(subentry.title)
 
     hass.config_entries.async_remove_subentry(entry, subentry.subentry_id)
-    connection.send_result(msg["id"], {"bound_stores": bound_stores})
+    reload_error = await _rebuild_after_subentry_write(hass)
+    connection.send_result(msg["id"], {"bound_stores": bound_stores, "reload_error": reload_error})
+
+
+async def _rebuild_after_subentry_write(hass: HomeAssistant) -> str | None:
+    """Rebuild the tool/MCP/memory registry after a subentry changed.
+
+    Adding a memory store or an embeddings binding used to do nothing until
+    `smartchain.reload_tools` or a restart — the store simply was not there,
+    with no error to explain why. `async_add_subentry` fires no event the
+    memory subsystem listens for, so the rebuild has to be explicit.
+
+    Never raises: the write already happened and reporting it as a failure
+    would be a lie. A tools.yaml that no longer loads, or an MCP server that
+    will not start, comes back as a safe reason string for the panel to show
+    beside the successful save — via `_safe_loader_error`, so a `!secret` that
+    a validation error interpolated cannot travel with it.
+    """
+    from . import _reload_registry
+
+    try:
+        await _reload_registry(hass)
+    except Exception as err:  # noqa: BLE001 — the write succeeded regardless
+        LOGGER.warning(  # detail stays server-side
+            "registry rebuild after a subentry change failed: %s", err
+        )
+        return _safe_loader_error(err)
+    return None
+
+
+def _store_defaults(subentry: Any) -> dict[str, Any]:
+    """Stored values for the store form. The title *is* the store name."""
+    return {**subentry.data, "name": subentry.title}
+
+
+def _resolve_store(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> tuple[ConfigEntry, Any] | None:
+    """Entry and store subentry named by the message, or None after an error."""
+    entry = _get_entry(hass, msg["entry_id"])
+    if entry is None:
+        connection.send_error(msg["id"], "not_found", "Unknown config entry")
+        return None
+    subentry = entry.subentries.get(msg["subentry_id"])
+    if subentry is None or subentry.subentry_type != SUBENTRY_TYPE_MEMORY_STORE:
+        connection.send_error(msg["id"], "not_found", "Unknown memory store")
+        return None
+    return entry, subentry
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "smartchain/store/schema",
+        vol.Required("entry_id"): str,
+        vol.Optional("subentry_id"): str,
+        vol.Optional("data"): dict,
+        vol.Optional("refresh", default=False): bool,
+    }
+)
+@websocket_api.async_response
+async def ws_store_schema(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Serialise the memory-store form, reshaped around the choices made so far.
+
+    Which fields a store has depends on its backend and on whether it indexes
+    entities, and `<ha-form>` cannot change shape by itself. So this command
+    accepts the in-progress form values in `data` and rebuilds the schema
+    around them; `reactive` tells the panel which fields are worth a round
+    trip. The panel therefore still declares no field name of its own — the
+    list of fields that reshape the form comes from here, like everything else.
+
+    `dsn` and `api_key` are never served from storage — only `secrets_set`
+    says whether one is held. A value the *client itself* just sent comes back
+    (it is already the client's own), so a credential typed before switching
+    backends is not silently dropped.
+    """
+    from .config_flow import memory_store_subentry_schema
+
+    entry = _get_entry(hass, msg["entry_id"])
+    if entry is None:
+        connection.send_error(msg["id"], "not_found", "Unknown config entry")
+        return
+
+    stored: dict[str, Any] = {}
+    subentry_id = msg.get("subentry_id")
+    if subentry_id is not None:
+        subentry = entry.subentries.get(subentry_id)
+        if subentry is None or subentry.subentry_type != SUBENTRY_TYPE_MEMORY_STORE:
+            connection.send_error(msg["id"], "not_found", "Unknown memory store")
+            return
+        stored = _store_defaults(subentry)
+
+    draft = dict(msg.get("data") or {})
+    defaults = {**stored, **draft}
+    schema = memory_store_subentry_schema(hass, defaults)
+
+    # Same trap as ws_agent_schema (see F1): only serve fields the schema still
+    # declares, or <ha-form> echoes a stale key back and PREVENT_EXTRA rejects
+    # the save forever.
+    declared = {str(key.schema) for key in schema.schema}
+    served = {
+        name: value
+        for name, value in defaults.items()
+        if name in declared and (name not in MEMORY_SECRET_FIELDS or name in draft)
+    }
+
+    from .tools.memory.registry import embeddings_subentries_by_title
+
+    available = embeddings_subentries_by_title(hass)
+
+    connection.send_result(
+        msg["id"],
+        {
+            "schema": voluptuous_serialize.convert(schema, custom_serializer=cv.custom_serializer),
+            "data": served,
+            "labels": await async_field_labels(
+                hass, "config_subentries", subentry_type=SUBENTRY_TYPE_MEMORY_STORE
+            ),
+            "descriptions": await async_field_descriptions(
+                hass, "config_subentries", subentry_type=SUBENTRY_TYPE_MEMORY_STORE
+            ),
+            # Changing one of these changes which fields exist, so the panel
+            # asks for the schema again rather than guessing.
+            "reactive": ["backend_type", "source_type"],
+            "secrets_set": {field: bool(stored.get(field)) for field in MEMORY_SECRET_FIELDS},
+            # A title claimed twice resolves to nothing (see
+            # embeddings_subentries_by_title). Named here so the tab can warn
+            # before a write rather than explain a dead store afterwards.
+            "embeddings_ambiguous": sorted(
+                title for title, binding in available.items() if binding is None
+            ),
+            "embeddings_available": sorted(available),
+        },
+    )
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "smartchain/store/save",
+        vol.Required("entry_id"): str,
+        vol.Optional("subentry_id"): str,
+        vol.Required("data"): dict,
+    }
+)
+@websocket_api.async_response
+async def ws_store_save(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Create or update a memory store, then rebuild the registry.
+
+    Validated with exactly the schema `ws_store_schema` served and exactly the
+    rules the config-flow dialog applies (`validate_store_input`), so a store
+    made here and one made through Devices & Services are the same store.
+
+    Nothing about the submission is echoed back: `msg["data"]` can carry a
+    database password, so no error message is built from a submitted value —
+    `_describe_invalid` reports field names only, and a rule failure reports a
+    field name plus fixed text from `STORE_ERROR_TEXT`.
+    """
+    from .config_flow import (
+        STORE_ERROR_TEXT,
+        memory_store_subentry_schema,
+        merge_store_secrets,
+        validate_store_input,
+    )
+
+    entry = _get_entry(hass, msg["entry_id"])
+    if entry is None:
+        connection.send_error(msg["id"], "not_found", "Unknown config entry")
+        return
+
+    subentry_id = msg.get("subentry_id")
+    subentry = None
+    if subentry_id is not None:
+        subentry = entry.subentries.get(subentry_id)
+        if subentry is None or subentry.subentry_type != SUBENTRY_TYPE_MEMORY_STORE:
+            connection.send_error(msg["id"], "not_found", "Unknown memory store")
+            return
+
+    stored = _store_defaults(subentry) if subentry is not None else {}
+    submitted = dict(msg["data"])
+    # The schema's *shape* follows the submission, not what is stored: a save
+    # that switches the backend must be validated against the new backend's
+    # fields. Only the two shaping keys are taken on trust here, and the
+    # selectors in the schema reject an unknown value for either.
+    shape = {
+        **stored,
+        "backend_type": submitted.get("backend_type") or MEMORY_DEFAULT_BACKEND,
+        "source_type": submitted.get("source_type") or MEMORY_SOURCE_TYPE_NONE,
+    }
+    schema = memory_store_subentry_schema(hass, shape)
+
+    try:
+        data = dict(schema(submitted))
+    except vol.Invalid as err:
+        connection.send_error(msg["id"], "invalid_data", _describe_invalid(err))
+        return
+
+    declared = {str(key.schema) for key in schema.schema}
+    data = merge_store_secrets(data, stored, declared)
+
+    error = validate_store_input(hass, data, subentry_id=subentry_id)
+    if error is not None:
+        field, key = error
+        connection.send_error(
+            msg["id"], "invalid_data", f"invalid_data: {field} — {STORE_ERROR_TEXT[key]}"
+        )
+        return
+
+    title = str(data.pop("name")).strip()
+
+    if subentry is None:
+        new = ConfigSubentry(
+            data=data,
+            subentry_type=SUBENTRY_TYPE_MEMORY_STORE,
+            title=title,
+            unique_id=None,
+        )
+        hass.config_entries.async_add_subentry(entry, new)
+        result_id = new.subentry_id
+    else:
+        hass.config_entries.async_update_subentry(entry, subentry, data=data, title=title)
+        result_id = subentry.subentry_id
+
+    reload_error = await _rebuild_after_subentry_write(hass)
+    connection.send_result(
+        msg["id"],
+        {
+            "subentry_id": result_id,
+            "reload_error": reload_error,
+            # A YAML store of the same name is now ignored. Reported rather
+            # than left to a log line nobody reads.
+            "shadows_yaml": title in (hass.data.get(DOMAIN, {}).get("store_shadowed") or []),
+        },
+    )
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "smartchain/store/delete",
+        vol.Required("entry_id"): str,
+        vol.Required("subentry_id"): str,
+    }
+)
+@websocket_api.async_response
+async def ws_store_delete(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Remove a memory store and rebuild the registry.
+
+    The vectors themselves are not deleted: a file-based backend keeps its
+    `.db` beside the others and a remote one keeps its table or collection, so
+    re-creating the store under the same name finds its contents again. Saying
+    otherwise would be the more dangerous default.
+    """
+    resolved = _resolve_store(hass, connection, msg)
+    if resolved is None:
+        return
+    entry, subentry = resolved
+    name = subentry.title
+
+    hass.config_entries.async_remove_subentry(entry, subentry.subentry_id)
+    reload_error = await _rebuild_after_subentry_write(hass)
+    connection.send_result(msg["id"], {"name": name, "reload_error": reload_error})
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): "smartchain/store/status"})
+@websocket_api.async_response
+async def ws_store_status(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Which configured stores are actually live, and why the others are not.
+
+    `MemoryRegistry.build` contains it when one store fails so the rest still
+    come up — which used to mean a failure left no trace outside the log, and
+    every command that touched memory reported success over a subsystem that
+    never started.
+    """
+    registry: MemoryRegistry | None = hass.data.get(DOMAIN, {}).get("memory")
+    connection.send_result(
+        msg["id"],
+        {
+            "stores": registry.status() if registry is not None else [],
+            "shadowed_yaml": list(hass.data.get(DOMAIN, {}).get("store_shadowed") or []),
+        },
+    )
 
 
 def _read_tools_file(path: Path) -> dict[str, Any]:

@@ -74,7 +74,7 @@ SmartChain — кастомная интеграция Home Assistant, пред�
 - **AI Task** — генерация структурированных данных в автоматизациях
 
 **Панель SmartChain AI**
-- Боковая панель с вкладкой анализа камеры
+- Боковая панель: вкладки Agents, Embeddings, Stores, Settings, Tools и анализ камеры
 - Выбор любой камеры HA и постановка вопроса LLM на естественном языке о снимке
 - Результат публикуется в событие `smartchain_image_analyzed` и сенсор `sensor.smartchain_last_analysis`
 
@@ -122,7 +122,7 @@ SmartChain — кастомная интеграция Home Assistant, пред�
 **Настройки > Голосовые ассистенты > Добавить** — выберите SmartChain как conversation agent.
 
 ### 5. Открытие панели SmartChain AI
-Нажмите **SmartChain AI** в боковой панели Home Assistant — откроется панель анализа камеры.
+Нажмите **SmartChain AI** в боковой панели Home Assistant. Администратору доступны вкладки **Agents**, **Embeddings**, **Stores** (хранилища памяти и векторов, со строкой состояния по каждому), **Settings**, **Tools** и **Camera**; всем остальным — только Camera.
 
 ![SmartChain AI Panel - Analyze Camera](img_1.png)
 

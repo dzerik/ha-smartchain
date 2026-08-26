@@ -130,7 +130,9 @@ simply provides no conversation entity.
 **Settings > Voice Assistants > Add** — select your SmartChain entity as the conversation agent.
 
 ### 5. Open SmartChain AI Panel
-Click **SmartChain AI** in the Home Assistant sidebar to open the camera analysis panel.
+Click **SmartChain AI** in the Home Assistant sidebar. Administrators get tabs for
+**Agents**, **Embeddings**, **Stores** (memory and vector stores, with a health line
+per store), **Settings**, **Tools** and **Camera**; everyone else sees Camera only.
 
 ![SmartChain AI Panel - Analyze Camera](img_1.png)
 

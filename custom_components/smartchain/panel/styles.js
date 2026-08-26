@@ -166,7 +166,7 @@ export const SC_STYLES = `
     color: var(--primary-text-color, #212121);
   }
   sc-camera-tab { display: block; max-width: 800px; margin: 0 auto; }
-  sc-agents-tab, sc-embeddings-tab, sc-settings-tab, sc-tools-tab { display: block; max-width: 1100px; margin: 0 auto; }
+  sc-agents-tab, sc-embeddings-tab, sc-stores-tab, sc-settings-tab, sc-tools-tab { display: block; max-width: 1100px; margin: 0 auto; }
 
   /* ========== Agents Tab ========== */
   .sc-entry { margin-bottom: 24px; }
@@ -223,6 +223,26 @@ export const SC_STYLES = `
   }
   @media (max-width: 600px) {
     .sc-embed-row { grid-template-columns: 1fr; gap: 4px; }
+  }
+
+  /* ========== Stores Tab ========== */
+  .sc-store-list { list-style: none; margin: 0 0 12px; padding: 0; }
+  .sc-store-status {
+    display: grid;
+    grid-template-columns: 1fr 1fr 2fr;
+    gap: 12px; align-items: baseline;
+    padding: 8px 0 8px 10px;
+    border-left: 3px solid var(--divider-color, #e0e0e0);
+    border-bottom: 1px solid var(--divider-color, #e0e0e0);
+  }
+  .sc-store-status.sc-ok { border-left-color: var(--success-color, #43a047); }
+  .sc-store-status.sc-bad { border-left-color: var(--error-color, #db4437); }
+  .sc-store-name { font-weight: 500; }
+  .sc-store-origin { color: var(--secondary-text-color); font-size: 13px; }
+  .sc-store-reason { color: var(--secondary-text-color); font-size: 13px; }
+  .sc-store-status.sc-bad .sc-store-reason { color: var(--error-color, #db4437); }
+  @media (max-width: 600px) {
+    .sc-store-status { grid-template-columns: 1fr; gap: 4px; }
   }
 
   /* ========== Settings Tab ========== */

@@ -18,6 +18,31 @@ from .store import MemoryStore
 LOGGER = logging.getLogger(__name__)
 
 
+def embeddings_subentries_by_title(
+    hass: HomeAssistant,
+) -> dict[str, tuple[ConfigEntry, ConfigSubentry] | None]:
+    """Collect embeddings subentries by title across all SmartChain entries.
+
+    A title claimed by more than one subentry maps to None, so the caller can
+    refuse to bind rather than pick an arbitrary one.
+
+    Module-level rather than a method because the store form needs the same
+    answer before a MemoryRegistry exists — and because a second copy of this
+    walk is a second place for the "duplicated title unbinds silently" rule to
+    stop applying.
+    """
+    found: dict[str, tuple[ConfigEntry, ConfigSubentry] | None] = {}
+    for entry in hass.config_entries.async_entries(DOMAIN):
+        for subentry in (entry.subentries or {}).values():
+            if subentry.subentry_type != SUBENTRY_TYPE_EMBEDDINGS:
+                continue
+            if subentry.title in found:
+                found[subentry.title] = None
+            else:
+                found[subentry.title] = (entry, subentry)
+    return found
+
+
 class MemoryRegistry:
     """Maps store names to live MemoryStore instances.
 
@@ -32,25 +57,25 @@ class MemoryRegistry:
         self._retention: dict[str, RetentionTask] = {}
         self._pollers: dict[str, MemoryLogbookPoller] = {}
         self.indexers: dict[str, EntityIndexer] = {}
+        # Store name -> why it is not live. Every `continue` in build() records
+        # one. Without this nothing downstream could tell a *configured* store
+        # from a *live* one, so `tools/save` reported success over a memory
+        # subsystem that never came up and the only trace was a log line.
+        #
+        # Message text only, never an exception's repr: the catch-all handlers
+        # below log the type alone because a pydantic ValidationError renders
+        # `input_value`, which on these paths is the provider credential.
+        self.failures: dict[str, str] = {}
+        # Store name -> "yaml" | "subentry", supplied by the caller that merged
+        # the two sources. Purely descriptive; the panel uses it to say which
+        # stores it can edit.
+        self.sources: dict[str, str] = {}
 
     # ----- construction -----
 
     def _embeddings_subentries(self) -> dict[str, tuple[ConfigEntry, ConfigSubentry] | None]:
-        """Collect embeddings subentries by title across all SmartChain entries.
-
-        A title claimed by more than one subentry maps to None, so the caller
-        can refuse to bind rather than pick an arbitrary one.
-        """
-        found: dict[str, tuple[ConfigEntry, ConfigSubentry] | None] = {}
-        for entry in self.hass.config_entries.async_entries(DOMAIN):
-            for subentry in (entry.subentries or {}).values():
-                if subentry.subentry_type != SUBENTRY_TYPE_EMBEDDINGS:
-                    continue
-                if subentry.title in found:
-                    found[subentry.title] = None
-                else:
-                    found[subentry.title] = (entry, subentry)
-        return found
+        """Embeddings subentries by title — see `embeddings_subentries_by_title`."""
+        return embeddings_subentries_by_title(self.hass)
 
     def stores_bound_to(self, title: str) -> list[str]:
         """Names of configured memory stores bound to this embeddings title.
@@ -60,9 +85,30 @@ class MemoryRegistry:
         """
         return [name for name, config in self._configs.items() if config.embeddings == title]
 
-    async def build(self, settings: MemorySettings, storage_dir: Path) -> None:
-        """Construct every configured store. Never raises."""
+    def _fail(self, name: str, reason: str) -> None:
+        """Record why a store is configured but not live.
+
+        `reason` is written by the caller and is always literal text or an
+        already-scrubbed message — never `str(err)` for an unexpected
+        exception, for the reason spelled out on `self.failures`.
+        """
+        self.failures[name] = reason
+
+    async def build(
+        self,
+        settings: MemorySettings,
+        storage_dir: Path,
+        sources: dict[str, str] | None = None,
+    ) -> None:
+        """Construct every configured store. Never raises.
+
+        `sources` is the optional store-name -> "yaml" / "subentry" map from
+        whoever merged the two configuration sources; it is carried, not
+        interpreted.
+        """
         available = self._embeddings_subentries()
+        self.failures.clear()
+        self.sources = dict(sources or {})
 
         for config in settings.stores:
             binding = available.get(config.embeddings, "__missing__")
@@ -75,6 +121,10 @@ class MemoryRegistry:
                     config.embeddings,
                     sorted(available) or "none",
                 )
+                self._fail(
+                    config.name,
+                    f"no embeddings binding is named {config.embeddings!r}",
+                )
                 continue
             if binding is None:
                 LOGGER.error(
@@ -82,6 +132,11 @@ class MemoryRegistry:
                     "title is duplicated across config entries. Rename one of them.",
                     config.name,
                     config.embeddings,
+                )
+                self._fail(
+                    config.name,
+                    f"the embeddings title {config.embeddings!r} is claimed by more "
+                    "than one binding; rename one of them",
                 )
                 continue
 
@@ -98,6 +153,7 @@ class MemoryRegistry:
                 embeddings = create_embeddings_from_subentry(self.hass, entry, subentry)
             except EmbeddingsConfigError as err:
                 LOGGER.error("Memory store %r disabled: %s", config.name, err)
+                self._fail(config.name, str(err))
                 continue
             except Exception as err:  # noqa: BLE001 — per-store isolation
                 # Type only. An unexpected error here can be a pydantic
@@ -108,12 +164,17 @@ class MemoryRegistry:
                     config.name,
                     type(err).__name__,
                 )
+                self._fail(
+                    config.name,
+                    f"unexpected {type(err).__name__} while building embeddings",
+                )
                 continue
 
             try:
                 backend = create_backend(self.hass, config.backend, config.name, storage_dir)
             except BackendInitError as err:
                 LOGGER.error("Memory store %r disabled: %s", config.name, err)
+                self._fail(config.name, str(err))
                 continue
             except Exception as err:  # noqa: BLE001 — per-store isolation
                 # Type only, for the same reason: BackendConfig carries `dsn`
@@ -122,6 +183,10 @@ class MemoryRegistry:
                     "Memory store %r disabled: unexpected %s while building the backend",
                     config.name,
                     type(err).__name__,
+                )
+                self._fail(
+                    config.name,
+                    f"unexpected {type(err).__name__} while building the backend",
                 )
                 continue
 
@@ -132,6 +197,10 @@ class MemoryRegistry:
                     LOGGER.error(
                         "Memory store %r did not come up; see earlier log lines.",
                         config.name,
+                    )
+                    self._fail(
+                        config.name,
+                        store.unavailable_reason or "the store did not come up",
                     )
                     continue
 
@@ -173,6 +242,7 @@ class MemoryRegistry:
                     config.name,
                     type(err).__name__,
                 )
+                self._fail(config.name, f"unexpected {type(err).__name__} while starting it")
                 # This store was registered (and may have come up) before the
                 # failure, so both the registration and any partially-started
                 # tasks must be unwound — a `KeyError` in describe() or
@@ -210,6 +280,8 @@ class MemoryRegistry:
         self._retention.clear()
         self._pollers.clear()
         self.indexers.clear()
+        self.failures.clear()
+        self.sources.clear()
 
     # ----- lookup -----
 
@@ -227,6 +299,36 @@ class MemoryRegistry:
     def describe(self) -> list[tuple[str, str]]:
         """(name, description) pairs, for the search_memory tool schema."""
         return [(name, self._configs[name].description) for name in self.stores]
+
+    def status(self) -> list[dict[str, object]]:
+        """Every *configured* store and whether it is live.
+
+        Live stores first, then the ones that failed — `self.stores` holds only
+        the former, and a caller that read that alone (as everything did before
+        `failures` existed) would report a healthy subsystem while none of it
+        came up. `reason` is `None` for a live store and safe text otherwise.
+        """
+        rows: list[dict[str, object]] = [
+            {
+                "name": name,
+                "ok": True,
+                "reason": None,
+                "source": self.sources.get(name),
+                "entity_index": name in self.indexers,
+            }
+            for name in self.stores
+        ]
+        rows.extend(
+            {
+                "name": name,
+                "ok": False,
+                "reason": reason,
+                "source": self.sources.get(name),
+                "entity_index": False,
+            }
+            for name, reason in self.failures.items()
+        )
+        return rows
 
     def stores_for_conversation_ingest(self) -> list[MemoryStore]:
         return [

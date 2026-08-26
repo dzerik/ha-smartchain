@@ -31,6 +31,7 @@ from .tools.loader import LoaderError, load_tools_file
 from .tools.mcp import MCPManager
 from .tools.memory.entity_context import SkeletonCache
 from .tools.memory.registry import MemoryRegistry
+from .tools.memory.subentry_source import merge_store_sources, stores_from_subentries
 
 __all__ = ["async_generate_structured"]
 from .const import (
@@ -337,7 +338,13 @@ def _memory_persist_dir(hass: HomeAssistant) -> Path:
 
 
 async def _reload_registry(hass: HomeAssistant) -> int:
-    """Re-read tools.yaml into the registry. Raises LoaderError on failure."""
+    """Re-read tools.yaml into the registry. Raises LoaderError on failure.
+
+    Memory stores now have two sources: the `memory:` block of tools.yaml and
+    `memory_store` config subentries. Both are read here and merged by
+    `merge_store_sources`, which is also where a name defined in both is
+    resolved — in favour of the subentry — and logged.
+    """
     path = _tools_yaml_path(hass)
     # The config dir is what lets HA's YAML loader resolve `!secret` against
     # secrets.yaml — without it the whole file fails on the first such tag.
@@ -356,9 +363,13 @@ async def _reload_registry(hass: HomeAssistant) -> int:
     # build() may have registered and started retention / logbook tasks for the
     # stores it got through before raising, and discarding the object without a
     # shutdown() would leak those timers for the life of the process.
+    settings, sources, shadowed = merge_store_sources(
+        result.memory_settings.stores, stores_from_subentries(hass)
+    )
+    hass.data[DOMAIN]["store_shadowed"] = shadowed
     new_memory = MemoryRegistry(hass)
     try:
-        await new_memory.build(result.memory_settings, _memory_persist_dir(hass))
+        await new_memory.build(settings, _memory_persist_dir(hass), sources)
     except Exception:  # noqa: BLE001
         await new_memory.shutdown()
         LOGGER.exception("memory rebuild failed; keeping the previous registry")
