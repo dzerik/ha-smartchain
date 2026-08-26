@@ -1,6 +1,9 @@
 """The SmartChain integration."""
 
+import asyncio
 import base64
+import hashlib
+import json
 import logging
 from pathlib import Path
 from typing import Any
@@ -62,6 +65,9 @@ from .const import (
     SERVICE_RELOAD_TOOLS,
     SIGNAL_NEW_ANALYSIS,
     SUBENTRY_TYPE_CONVERSATION,
+    SUBENTRY_TYPE_EMBEDDINGS,
+    SUBENTRY_TYPE_MEMORY_STORE,
+    SUBENTRY_TYPE_TOOL,
     TOOLS_YAML_PATH,
 )
 
@@ -82,8 +88,111 @@ except (ImportError, AttributeError):
 
 
 async def update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Update listener."""
+    """Reload the entry, and rebuild the shared subsystems if a subentry moved.
+
+    The reload is what an options change needs. The rebuild is what a
+    *subentry* change needs, and it is here because Home Assistant's own
+    subentry dialogs — the four types offered under Settings › Devices &
+    Services — write through `async_add_subentry` / `async_update_and_abort`
+    and call no rebuild path of their own. The panel's websocket handlers do
+    call one; the config-flow dialogs never did, so a tool or a memory store
+    created through HA's own UI did nothing until `smartchain.reload_tools` or
+    a restart, with no error anywhere. On a single-entry install it appeared to
+    work only by accident: unloading the last entry sets `subsystems_stopped`
+    and the following setup rebuilds. With two entries configured that flag is
+    never set and nothing rebuilds at all.
+
+    Gated on a fingerprint rather than run unconditionally, because every
+    rebuild bounces every MCP server and reopens every memory backend: an
+    options save that touched no subentry must not do that. The fingerprint
+    also makes the websocket path cost one rebuild rather than two — by the
+    time this listener runs, that path has usually already rebuilt and
+    recorded the new fingerprint, so there is nothing left to do.
+
+    Ordered after the reload on purpose: `async_reload` may itself tear the
+    subsystems down and rebuild them (the `subsystems_stopped` path), and a
+    rebuild that ran first would simply be discarded by it.
+    """
     await hass.config_entries.async_reload(entry.entry_id)
+
+    if _subsystem_fingerprint(hass) == hass.data.get(DOMAIN, {}).get("subentry_fingerprint"):
+        return
+    try:
+        await _reload_registry(hass)
+    except LoaderError as err:
+        # The rebuild happened regardless; only tools.yaml failed to load, and
+        # it is logged safely (never `str(err)` on a user surface — see
+        # `_handle_reload_tools`). There is no caller to raise at: a config
+        # entry update listener's exception goes nowhere a user would see.
+        LOGGER.error("SmartChain tools.yaml load failed after a subentry change: %s", err)
+
+
+# Subentry types the shared subsystems (tool registry, MCP, memory) are built
+# from. A conversation subentry is not one of them: it configures an agent,
+# which the entry reload already rebuilds.
+_SUBSYSTEM_SUBENTRY_TYPES = frozenset(
+    {SUBENTRY_TYPE_TOOL, SUBENTRY_TYPE_MEMORY_STORE, SUBENTRY_TYPE_EMBEDDINGS}
+)
+
+
+@callback
+def _subsystem_fingerprint(hass: HomeAssistant) -> str:
+    """Digest of every subentry the shared subsystems read.
+
+    Order-independent (the parts are sorted) so that reloading an entry, which
+    rebuilds `entry.subentries` as a fresh mapping, does not by itself look
+    like a change.
+
+    Subentry `data` can hold a credential — a qdrant key, a PostgreSQL DSN, a
+    REST header. This value is a one-way digest kept in `hass.data` and is
+    never returned, logged or sent anywhere; nothing else may start reporting
+    it.
+    """
+    parts: list[str] = []
+    for entry in hass.config_entries.async_entries(DOMAIN):
+        for subentry in (entry.subentries or {}).values():
+            if subentry.subentry_type not in _SUBSYSTEM_SUBENTRY_TYPES:
+                continue
+            parts.append(
+                json.dumps(
+                    [
+                        subentry.subentry_id,
+                        subentry.subentry_type,
+                        subentry.title,
+                        dict(subentry.data),
+                    ],
+                    sort_keys=True,
+                    default=repr,
+                )
+            )
+    return hashlib.sha256("\n".join(sorted(parts)).encode()).hexdigest()
+
+
+@callback
+def _rebuild_lock(hass: HomeAssistant) -> asyncio.Lock:
+    """The one lock every rebuild and every teardown of the shared subsystems takes.
+
+    `hass.config_entries.async_add_subentry` is `_async_update_entry`, which
+    fires every update listener as a *background task* — so `update_listener`
+    and the rebuild a websocket handler awaits after the same write used to run
+    concurrently. Both call `_reload_registry`, which stops and restarts the
+    one `MCPManager`, calls `replace_all` on the one `ToolRegistry`, and builds
+    a `MemoryRegistry` to swap into `hass.data[DOMAIN]["memory"]`. Interleaved,
+    both passes read the *same* old registry before either installs its new
+    one, so the first new registry is never shut down: its retention, logbook
+    and entity-index tasks keep running for the life of the process, against
+    the same backend file the live registry is now using, ingesting every
+    conversation turn twice.
+
+    Created lazily rather than at import: the lock must belong to the running
+    event loop, and a module-level `asyncio.Lock()` would be shared across the
+    loops a test session creates.
+    """
+    domain_data = hass.data.setdefault(DOMAIN, {})
+    lock = domain_data.get("rebuild_lock")
+    if lock is None:
+        lock = domain_data["rebuild_lock"] = asyncio.Lock()
+    return lock
 
 
 async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -515,7 +624,28 @@ def _memory_persist_dir(hass: HomeAssistant) -> Path:
 
 
 async def _reload_registry(hass: HomeAssistant) -> int:
+    """Serialise `_rebuild_subsystems`. Every caller goes through here.
+
+    The rebuild is not re-entrant and there are several ways to start two at
+    once — the loudest being that `async_add_subentry` fires `update_listener`
+    as a background task while a websocket handler awaits its own rebuild after
+    the same write. `_rebuild_lock` carries the full account of what interleaves
+    and what it costs.
+
+    Deliberately a wrapper around a private body rather than a lock taken
+    inside it: the teardown in `async_unload_entry` needs the same lock, and
+    keeping the acquisition at the boundary makes it impossible for a rebuild
+    to acquire it twice and deadlock against itself.
+    """
+    async with _rebuild_lock(hass):
+        return await _rebuild_subsystems(hass)
+
+
+async def _rebuild_subsystems(hass: HomeAssistant) -> int:
     """Re-read tools.yaml into the registry. Raises LoaderError on failure.
+
+    Callers use `_reload_registry`, which holds `_rebuild_lock` for the whole
+    of this; nothing here may be run concurrently with itself.
 
     Both tools and memory stores now have two sources: tools.yaml and config
     subentries. Each pair is merged by its own `merge_*_sources`, which is also
@@ -620,6 +750,15 @@ async def _reload_registry(hass: HomeAssistant) -> int:
     skeleton: SkeletonCache | None = hass.data[DOMAIN].get("entity_skeleton")
     if skeleton is not None:
         skeleton.invalidate()
+
+    # Record what this pass built from, so `update_listener` can tell a
+    # subentry change (rebuild) from an options change (nothing to do). Set
+    # here rather than at the call site so that *every* rebuild updates it —
+    # including the one `async_setup_entry` runs after a teardown, which is
+    # what stops the listener rebuilding a second time straight after.
+    # Recorded even when tools.yaml failed to load: the subentries are live
+    # regardless, and re-running the rebuild would not fix the file.
+    hass.data[DOMAIN]["subentry_fingerprint"] = _subsystem_fingerprint(hass)
 
     # Everything the subentries define is now live. Only now does the file's
     # failure propagate, so the caller still learns about it through the exact
@@ -980,19 +1119,28 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     remaining = [
         e for e in hass.config_entries.async_entries(DOMAIN) if e.entry_id != entry.entry_id
     ]
-    if not remaining:
-        manager: MCPManager | None = hass.data.get(DOMAIN, {}).get("mcp_manager")
-        if manager is not None:
-            await manager.stop()
-        memory: MemoryRegistry | None = hass.data.get(DOMAIN, {}).get("memory")
-        if memory is not None:
-            await memory.shutdown()
-        skeleton: SkeletonCache | None = hass.data.get(DOMAIN, {}).get("entity_skeleton")
-        if skeleton is not None:
-            await skeleton.stop()
+    # `hass.data[DOMAIN]` is read up front rather than through `.get(DOMAIN, {})`
+    # three times, so that taking the rebuild lock — which has to `setdefault`
+    # the domain dict to store itself — cannot turn "the domain was never set
+    # up" into "the domain exists and is marked stopped".
+    domain_data: dict[str, Any] | None = hass.data.get(DOMAIN)
+    if not remaining and domain_data is not None:
+        # Under the rebuild lock: this stops the very MCP manager, memory
+        # registry and skeleton cache a `_reload_registry` in flight is
+        # starting, and the two interleaved would leave the subsystems half
+        # torn down and half rebuilt. See `_rebuild_lock`.
+        async with _rebuild_lock(hass):
+            manager: MCPManager | None = domain_data.get("mcp_manager")
+            if manager is not None:
+                await manager.stop()
+            memory: MemoryRegistry | None = domain_data.get("memory")
+            if memory is not None:
+                await memory.shutdown()
+            skeleton: SkeletonCache | None = domain_data.get("entity_skeleton")
+            if skeleton is not None:
+                await skeleton.stop()
         # Mark the teardown so the next `async_setup_entry` rebuilds all three —
         # a reload of the only config entry must not leave memory, MCP and the
         # entity skeleton cache dead for the rest of the HA run.
-        if DOMAIN in hass.data:
-            hass.data[DOMAIN]["subsystems_stopped"] = True
+        domain_data["subsystems_stopped"] = True
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
