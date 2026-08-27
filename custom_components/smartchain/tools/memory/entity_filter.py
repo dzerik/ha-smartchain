@@ -92,6 +92,28 @@ def resolve_candidates(
         area = area_reg.async_get_area(area_id)
         return area.name if area else ""
 
+    def _visible_name(entry) -> str:
+        """The name the person sees, in the order they would expect it.
+
+        `entry.name` is their own rename and outranks everything. After that
+        comes `friendly_name`, which is what Home Assistant composes and shows
+        everywhere — and the only name there is for the entity that represents
+        a device: with `has_entity_name`, an integration leaves `original_name`
+        unset on it and lets the device supply the words. Reading the registry
+        alone falls through to the entity_id there, and the skeleton then hands
+        the model `light.kuhonnyj_svet` while USAGE promises it friendly names
+        and no ids.
+
+        The state-machine branch below has always read `friendly_name`. Having
+        the registry branch read something else is the disagreement being fixed
+        here; the fallback order itself is unchanged behind it.
+        """
+        if entry.name:
+            return entry.name
+        state = hass.states.get(entry.entity_id)
+        friendly = state.attributes.get("friendly_name") if state else None
+        return friendly or entry.original_name or entry.entity_id
+
     raw: dict[str, tuple[EntityCandidate, str, bool, bool]] = {}
 
     for entry in ent_reg.entities.values():
@@ -103,7 +125,7 @@ def resolve_candidates(
             EntityCandidate(
                 entity_id=entry.entity_id,
                 domain=domain,
-                name=entry.name or entry.original_name or entry.entity_id,
+                name=_visible_name(entry),
                 area=_area_name(area_id),
                 device=(device.name_by_user or device.name) if device else "",
                 device_class=device_class,

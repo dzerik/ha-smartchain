@@ -11,6 +11,19 @@ project follows [Semantic Versioning](https://semver.org/).
 > **Note:** the `5.4.0` section below is a roll-up: it covers `5.4.0` through
 > `5.4.7`, which were developed on one branch and are not separated here.
 
+## [5.6.2] - unreleased
+
+### Fixed
+- **The model was told a lamp's entity_id where its name should have been.**
+  With `has_entity_name`, an integration leaves `original_name` unset on the
+  entity that stands for the device and lets Home Assistant compose
+  `friendly_name` from it — so reading the registry alone fell through to the
+  id, and the entity skeleton offered `light.kuhonnyj_svet` for a lamp the
+  person calls "Кухонный свет", while `USAGE` promised friendly names and no
+  ids. The state-machine half of the same function had always read
+  `friendly_name`; only the registry half did not. An explicit rename still
+  wins over both.
+
 ## [5.6.1] - unreleased
 
 ### Fixed

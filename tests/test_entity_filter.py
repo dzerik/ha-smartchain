@@ -258,3 +258,86 @@ def test_area_and_device_are_derived_from_the_device_registry(hass: HomeAssistan
     ]
     assert cand.area == "Кухня"
     assert cand.device == "User given name"
+
+
+def test_name_prefers_the_friendly_name_a_person_actually_sees(hass: HomeAssistant) -> None:
+    """The main entity of a device carries no name of its own.
+
+    With `has_entity_name`, an integration leaves `original_name` unset on the
+    entity that represents the device itself and lets Home Assistant compose
+    `friendly_name` from the device. Reading the registry alone therefore falls
+    all the way through to the entity_id, and the skeleton then offers the model
+    `light.kuhonnyj_svet` for a lamp the person calls "Кухонный свет" — while
+    promising, in USAGE, that it carries friendly names and no ids.
+
+    The state-machine branch of this same function has always read
+    `friendly_name`; only the registry branch did not. Two naming rules in one
+    file is the disagreement, not the fallback order.
+    """
+    entry = _entry("light.kuhonnyj_svet")
+    entry.name = None
+    entry.original_name = None
+
+    ent_reg = MagicMock()
+    ent_reg.entities = {entry.entity_id: entry}
+    area_reg = MagicMock()
+    area_reg.async_get_area.return_value = None
+    dev_reg = MagicMock()
+    dev_reg.async_get.return_value = None
+
+    hass.states.async_set(entry.entity_id, "on", {"friendly_name": "Кухонный свет"})
+
+    with (
+        patch(
+            "custom_components.smartchain.tools.memory.entity_filter.er.async_get",
+            return_value=ent_reg,
+        ),
+        patch(
+            "custom_components.smartchain.tools.memory.entity_filter.ar.async_get",
+            return_value=area_reg,
+        ),
+        patch(
+            "custom_components.smartchain.tools.memory.entity_filter.dr.async_get",
+            return_value=dev_reg,
+        ),
+    ):
+        cand = resolve_candidates(hass, EntitySourceConfig(preset="paranoid"))[entry.entity_id]
+
+    assert cand.name == "Кухонный свет"
+
+
+def test_a_renamed_entity_keeps_the_name_the_person_gave_it(hass: HomeAssistant) -> None:
+    """`entry.name` is an explicit rename and outranks the composed one.
+
+    Guards the fallback order against being "just read friendly_name": a person
+    who renamed the entity in the registry must see that name, not whatever the
+    integration composed before them.
+    """
+    entry = _entry("light.kuhonnyj_svet", name="Люстра")
+
+    ent_reg = MagicMock()
+    ent_reg.entities = {entry.entity_id: entry}
+    area_reg = MagicMock()
+    area_reg.async_get_area.return_value = None
+    dev_reg = MagicMock()
+    dev_reg.async_get.return_value = None
+
+    hass.states.async_set(entry.entity_id, "on", {"friendly_name": "Кухонный свет"})
+
+    with (
+        patch(
+            "custom_components.smartchain.tools.memory.entity_filter.er.async_get",
+            return_value=ent_reg,
+        ),
+        patch(
+            "custom_components.smartchain.tools.memory.entity_filter.ar.async_get",
+            return_value=area_reg,
+        ),
+        patch(
+            "custom_components.smartchain.tools.memory.entity_filter.dr.async_get",
+            return_value=dev_reg,
+        ),
+    ):
+        cand = resolve_candidates(hass, EntitySourceConfig(preset="paranoid"))[entry.entity_id]
+
+    assert cand.name == "Люстра"
