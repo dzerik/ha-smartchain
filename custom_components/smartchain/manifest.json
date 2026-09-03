@@ -20,9 +20,10 @@
     "langchain-ollama>=0.3.0,<2",
     "langchain-openai>=0.3.0,<2",
     "mcp>=1.0,<2",
+    "probatio>=0.11.4",
     "voluptuous-openapi>=0.4.1",
     "voluptuous-serialize>=2.6.0",
     "yandex-cloud-ml-sdk>=0.19.1"
   ],
-  "version": "5.6.4"
+  "version": "5.6.5"
 }

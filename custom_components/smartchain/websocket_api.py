@@ -17,6 +17,7 @@ from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
+import probatio
 import voluptuous as vol
 import voluptuous_serialize
 import yaml
@@ -105,6 +106,38 @@ def _get_entry(hass: HomeAssistant, entry_id: str) -> ConfigEntry | None:
     if entry is None or entry.domain != DOMAIN:
         return None
     return entry
+
+
+def _pick_converter(config_validation: Any) -> tuple[Any, Any]:
+    """Return the schema converter this Home Assistant speaks, and its sentinel.
+
+    `cv.custom_serializer` describes the types a plain converter cannot, and
+    returns an `UNSUPPORTED` sentinel for the ones it cannot either. The
+    converter recognises that sentinel *by identity*, and there are two of them:
+    Home Assistant used `voluptuous-serialize` through 2026.8 and switched to
+    `probatio` in 2026.9, whose `UNSUPPORTED` is a different object.
+
+    Pairing the wrong two fails silently and expensively. The converter does not
+    recognise the other library's sentinel, so it treats it as a serialised
+    value and puts the object into the payload; the websocket layer then meets
+    something JSON cannot encode, and every form in the panel answers "Invalid
+    JSON in response". That is what a 2026.9 upgrade did to a working install.
+
+    So the choice follows *Home Assistant*, not what happens to be installed —
+    both libraries can be present at once, and on 2026.9 the older one still
+    imports perfectly well while producing exactly this breakage. The tell is
+    `config_validation` importing `to_field_list`: that is the line in Home
+    Assistant that decides which sentinel `custom_serializer` will hand back.
+    """
+    if hasattr(config_validation, "to_field_list"):
+        return probatio.to_field_list, probatio.UNSUPPORTED
+    return voluptuous_serialize.convert, voluptuous_serialize.UNSUPPORTED
+
+
+def _to_field_list(schema: vol.Schema) -> list[dict[str, Any]]:
+    """Serialise a form schema for `<ha-form>`, the way this HA would itself."""
+    convert, _sentinel = _pick_converter(cv)
+    return convert(schema, custom_serializer=cv.custom_serializer)
 
 
 async def _models_for(
@@ -448,7 +481,7 @@ async def ws_agent_schema(
     connection.send_result(
         msg["id"],
         {
-            "schema": voluptuous_serialize.convert(schema, custom_serializer=cv.custom_serializer),
+            "schema": _to_field_list(schema),
             "data": served,
             "labels": await async_field_labels(
                 hass, "config_subentries", subentry_type=SUBENTRY_TYPE_CONVERSATION
@@ -748,7 +781,7 @@ async def ws_settings_get(
     connection.send_result(
         msg["id"],
         {
-            "schema": voluptuous_serialize.convert(schema, custom_serializer=cv.custom_serializer),
+            "schema": _to_field_list(schema),
             "data": served,
             "empty": not schema.schema,
             "labels": await async_field_labels(hass, "options"),
@@ -1081,7 +1114,7 @@ async def ws_embeddings_schema(
     connection.send_result(
         msg["id"],
         {
-            "schema": voluptuous_serialize.convert(schema, custom_serializer=cv.custom_serializer),
+            "schema": _to_field_list(schema),
             "data": served,
             "labels": await async_field_labels(
                 hass, "config_subentries", subentry_type=SUBENTRY_TYPE_EMBEDDINGS
@@ -1420,7 +1453,7 @@ async def ws_store_schema(
     connection.send_result(
         msg["id"],
         {
-            "schema": voluptuous_serialize.convert(schema, custom_serializer=cv.custom_serializer),
+            "schema": _to_field_list(schema),
             "data": served,
             "labels": await async_field_labels(
                 hass, "config_subentries", subentry_type=SUBENTRY_TYPE_MEMORY_STORE
@@ -2381,7 +2414,7 @@ async def ws_tool_schema(
     connection.send_result(
         msg["id"],
         {
-            "schema": voluptuous_serialize.convert(schema, custom_serializer=cv.custom_serializer),
+            "schema": _to_field_list(schema),
             "data": served,
             "labels": await async_field_labels(
                 hass, "config_subentries", subentry_type=SUBENTRY_TYPE_TOOL

@@ -11,6 +11,21 @@ project follows [Semantic Versioning](https://semver.org/).
 > **Note:** the `5.4.0` section below is a roll-up: it covers `5.4.0` through
 > `5.4.7`, which were developed on one branch and are not separated here.
 
+## [5.6.5] - unreleased
+
+### Fixed
+- **Every panel form broke on Home Assistant 2026.9.** `cv.custom_serializer`
+  answers "I cannot describe this one" with an `UNSUPPORTED` sentinel that the
+  converter recognises by identity — and 2026.9 changed which library that
+  sentinel comes from, moving from `voluptuous-serialize` to `probatio`. The
+  old converter still imported and ran; it simply did not recognise the new
+  library's sentinel, treated it as a serialised value, and put the object into
+  the payload, where the websocket layer met something JSON cannot encode. The
+  panel showed "Invalid JSON in response" for every form, naming neither the
+  field nor the cause. The converter is now chosen by what Home Assistant
+  itself imports rather than by what happens to be installed, so both eras work
+  and a third one will announce itself instead of corrupting a payload.
+
 ## [5.6.4] - unreleased
 
 ### Fixed
