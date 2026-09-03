@@ -22,7 +22,7 @@
     "mcp>=1.0,<2",
     "voluptuous-openapi>=0.4.1",
     "voluptuous-serialize>=2.6.0",
-    "yandexcloud>=0.295.0"
+    "yandex-cloud-ml-sdk>=0.19.1"
   ],
-  "version": "5.6.3"
+  "version": "5.6.4"
 }

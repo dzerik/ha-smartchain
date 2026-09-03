@@ -14,7 +14,7 @@
 [![CI](https://img.shields.io/github/actions/workflow/status/dzerik/ha-smartchain/ci.yml?label=CI&branch=main)](https://github.com/dzerik/ha-smartchain/actions/workflows/ci.yml)
 [![HACS validation](https://img.shields.io/github/actions/workflow/status/dzerik/ha-smartchain/hacs.yml?label=HACS&branch=main)](https://github.com/dzerik/ha-smartchain/actions/workflows/hacs.yml)
 [![Hassfest](https://img.shields.io/github/actions/workflow/status/dzerik/ha-smartchain/hassfest.yml?label=Hassfest&branch=main)](https://github.com/dzerik/ha-smartchain/actions/workflows/hassfest.yml)
-[![Home Assistant](https://img.shields.io/badge/Home%20Assistant-2024.12%2B-blue)](https://www.home-assistant.io)
+[![Home Assistant](https://img.shields.io/badge/Home%20Assistant-2025.7%2B-blue)](https://www.home-assistant.io)
 
 [![Open via HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=dzerik&repository=ha-smartchain&category=integration)
 
@@ -86,7 +86,7 @@ Embeddings for long-term memory and the entity index are available from GigaChat
 ## Installation
 
 ### Requirements
-- Home Assistant 2024.12.0+
+- Home Assistant 2025.7.0+
 - [HACS](https://hacs.xyz/) installed
 
 ### Install via HACS

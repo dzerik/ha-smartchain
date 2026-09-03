@@ -26,7 +26,7 @@
 ## 1. Установка
 
 **Требования:**
-- Home Assistant 2024.12.0 или новее
+- Home Assistant 2025.7.0 или новее
 - [HACS](https://hacs.xyz/)
 
 **Через HACS:**

@@ -26,7 +26,7 @@ This document covers every SmartChain feature with a running example for each. F
 ## 1. Installation
 
 **Requirements:**
-- Home Assistant 2024.12.0 or newer
+- Home Assistant 2025.7.0 or newer
 - [HACS](https://hacs.xyz/) installed
 
 **Via HACS:**

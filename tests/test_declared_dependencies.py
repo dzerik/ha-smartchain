@@ -104,6 +104,52 @@ def test_every_module_level_import_is_one_we_can_count_on() -> None:
     )
 
 
+def _all_imports() -> dict[str, set[str]]:
+    """Every import, at any depth — lazy ones included.
+
+    A lazy import cannot stop setup, so it is out of scope for the guard above.
+    It is exactly in scope here: a requirement we ask Home Assistant to install
+    is a promise that some code uses it, and a lazy import is the easiest place
+    for that promise to quietly stop being true.
+    """
+    stdlib = set(sys.stdlib_module_names)
+    found: dict[str, set[str]] = {}
+    for path in sorted(COMPONENT.rglob("*.py")):
+        tree = ast.parse(path.read_text(), filename=str(path))
+        for node in ast.walk(tree):
+            names = []
+            if isinstance(node, ast.Import):
+                names = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                names = [node.module]
+            for name in names:
+                top = name.split(".")[0]
+                if top in stdlib or top in ("homeassistant", "custom_components"):
+                    continue
+                found.setdefault(top, set()).add(f"{path.relative_to(COMPONENT)}:{node.lineno}")
+    return found
+
+
+def test_every_requirement_is_one_some_code_imports() -> None:
+    """The other direction, and the one that caught `yandexcloud`.
+
+    Home Assistant installs everything `manifest.json` lists, on every
+    installation, before the integration starts. A requirement nothing imports
+    is not merely tidy-up: it is a package the user pays to download for
+    nothing, and — worse — it reads as proof that the feature it belongs to has
+    its dependency handled. `yandexcloud` was declared for years while the
+    Yandex embeddings actually import `yandex_cloud_ml_sdk`, which is a
+    different distribution and was declared nowhere, so that provider failed at
+    the first call with the very error the requirement looked like it prevented.
+    """
+    imported = set(_all_imports())
+    unused = sorted(module for module in _declared() if module not in imported)
+    assert not unused, (
+        "declared in manifest.json, imported nowhere — either the code that "
+        f"needed it is gone, or the module it provides is not the one we import: {unused}"
+    )
+
+
 def test_the_allowlist_does_not_outlive_its_entries() -> None:
     """An entry that nothing imports any more is a claim no one is checking.
 

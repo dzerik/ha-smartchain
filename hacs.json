@@ -1,7 +1,7 @@
 {
   "name": "SmartChain",
   "render_readme": true,
-  "homeassistant": "2024.12.0",
+  "homeassistant": "2025.7.0",
   "hacs": "2.0.0",
   "zip_release": true,
   "filename": "smartchain.zip",

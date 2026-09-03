@@ -11,6 +11,29 @@ project follows [Semantic Versioning](https://semver.org/).
 > **Note:** the `5.4.0` section below is a roll-up: it covers `5.4.0` through
 > `5.4.7`, which were developed on one branch and are not separated here.
 
+## [5.6.4] - unreleased
+
+### Fixed
+- **Yandex embeddings had never had their dependency declared.** `manifest.json`
+  asked for `yandexcloud`, which nothing imports; the code imports
+  `yandex_cloud_ml_sdk`, which is a different distribution and was asked for
+  nowhere. Every installation paid to download a package it did not use, and
+  the provider it looked like it covered failed at the first call with exactly
+  the error the requirement appeared to prevent.
+- **The declared Home Assistant minimum was four releases too low.** `hacs.json`
+  and six places in the docs said 2024.12.0; the code has needed `ConfigSubentry`
+  (2025.2) and `async_provide_llm_data` (~2025.7) for some time, so HACS was
+  happy to install onto versions where setup could only fail. Now 2025.7.0.
+  Note what that number is and is not: it is derived from the imports, not from
+  testing — CI exercises 2026.8, and 2026.9 is where the missing
+  `voluptuous-serialize` was found.
+
+### Added
+- The dependency guard gained its other half: a requirement that nothing
+  imports now fails the suite. Both directions matter — the first caught a
+  module we used without asking for, this one caught a module we asked for
+  without using.
+
 ## [5.6.3] - unreleased
 
 ### Fixed
