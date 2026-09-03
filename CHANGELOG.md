@@ -11,6 +11,24 @@ project follows [Semantic Versioning](https://semver.org/).
 > **Note:** the `5.4.0` section below is a roll-up: it covers `5.4.0` through
 > `5.4.7`, which were developed on one branch and are not separated here.
 
+## [5.6.3] - unreleased
+
+### Fixed
+- **The integration would not load on Home Assistant 2026.9.** `websocket_api.py`
+  imports `voluptuous_serialize`, which was a Home Assistant core dependency for
+  years and is not one any more — so setup died with `ModuleNotFoundError`
+  before registering anything: no agents, no panel, `/smartchain` answering 404.
+  It is declared now, along with `voluptuous_openapi`, which we import the same
+  way and which arrived by the same route. Both are asked for by name rather
+  than borrowed from whatever Home Assistant happens to install.
+
+### Added
+- A test that walks every module-level import in the component and fails unless
+  the module is declared in `manifest.json` or named in an allowlist that says
+  who supplies it and why. The suite could not see this bug: its own
+  environment installs Home Assistant, which installed the module. Provenance
+  is the thing worth asserting, not presence.
+
 ## [5.6.2] - unreleased
 
 ### Fixed
