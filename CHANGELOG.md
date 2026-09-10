@@ -11,6 +11,22 @@ project follows [Semantic Versioning](https://semver.org/).
 > **Note:** the `5.4.0` section below is a roll-up: it covers `5.4.0` through
 > `5.4.7`, which were developed on one branch and are not separated here.
 
+## [5.6.6b2] - unreleased
+
+### Fixed
+- **A tick-box in the entity settings turned dynamic context off, silently.**
+  `RegistryEntry.aliases` is `list[str | ComputedNameType]` — beside the words
+  a person typed there can be a sentinel meaning "the computed full name is an
+  alias too", stored as `null` and read back as `COMPUTED_NAME`. Read as
+  strings it failed two ways: alone it passed `sorted()`, reached `_fold` and
+  raised `AttributeError: 'ComputedNameType' object has no attribute
+  'casefold'` inside `build_retrieved_context`, whose `except` reduces that to
+  one log line — so the home simply stopped getting a retrieved block. Beside a
+  real alias it never got that far, because `sorted()` cannot order a sentinel
+  against a string, and the whole catalogue build died instead of one entity.
+  The sentinel is dropped now: what it points at is the computed name, which is
+  already the candidate's `name` and already ranked.
+
 ## [5.6.6] - unreleased
 
 ### Fixed

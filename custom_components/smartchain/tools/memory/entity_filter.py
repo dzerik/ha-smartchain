@@ -73,6 +73,29 @@ def _preset_allows(
     return False
 
 
+def _alias_strings(aliases: object) -> tuple[str, ...]:
+    """The aliases that are words, sorted.
+
+    `RegistryEntry.aliases` is `list[str | ComputedNameType]`: alongside the
+    words a person typed there can be a sentinel meaning "the entity's computed
+    full name is an alias too" — stored as `null`, read back as
+    `COMPUTED_NAME`, and put there by a checkbox in the UI.
+
+    Taking the list for strings failed twice over. A lone sentinel passed
+    `sorted()` (nothing to compare it with), travelled into the candidate and
+    reached `_fold`, which asked it for `.casefold`; that is inside
+    `build_retrieved_context`, whose `except` reduces it to one log line, so
+    dynamic entity context went quietly dead for that home. A sentinel *beside*
+    a real alias never got that far — `sorted()` cannot order it against a
+    string, and the whole catalogue build died instead of one entity.
+
+    Dropping it loses nothing. What it points at is the computed name, which is
+    already the candidate's `name` and already ranked; carrying it as a second
+    copy would only double its weight.
+    """
+    return tuple(sorted(alias for alias in (aliases or ()) if isinstance(alias, str)))
+
+
 def _selected(selectors: list[str], entity_id: str, domain: str) -> bool:
     """A selector is a bare domain or a full entity_id."""
     return entity_id in selectors or domain in selectors
@@ -129,7 +152,7 @@ def resolve_candidates(
                 area=_area_name(area_id),
                 device=(device.name_by_user or device.name) if device else "",
                 device_class=device_class,
-                aliases=tuple(sorted(entry.aliases or ())),
+                aliases=_alias_strings(entry.aliases),
             ),
             _category_value(entry.entity_category),
             entry.hidden_by is not None,

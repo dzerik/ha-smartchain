@@ -341,3 +341,95 @@ def test_a_renamed_entity_keeps_the_name_the_person_gave_it(hass: HomeAssistant)
         cand = resolve_candidates(hass, EntitySourceConfig(preset="paranoid"))[entry.entity_id]
 
     assert cand.name == "Люстра"
+
+
+def test_the_computed_name_alias_marker_is_not_mistaken_for_a_name(
+    hass: HomeAssistant,
+) -> None:
+    """Home Assistant stores a sentinel in `aliases`, not only strings.
+
+    `RegistryEntry.aliases` is typed `list[str | ComputedNameType]`. The
+    sentinel means "the entity's computed full name is also one of its
+    aliases" — it is written to storage as `null` and read back as
+    `COMPUTED_NAME`. Anyone who ticks that box in the UI gets one in the list.
+
+    We took every alias for a string, so it travelled into `EntityCandidate`
+    and reached `_fold`, which asked it for `.casefold` and got
+    `AttributeError: 'ComputedNameType' object has no attribute 'casefold'`.
+    That is inside `build_retrieved_context`, whose `except` turns it into one
+    line of log — so dynamic entity context simply stopped working, silently,
+    for that home.
+
+    Dropping it loses nothing: what the sentinel points at is the computed
+    name, which is already the candidate's `name` and already ranked.
+    """
+    from homeassistant.helpers.entity_registry import COMPUTED_NAME
+
+    entry = _entry("light.ceiling", name="Потолок")
+    entry.aliases = [COMPUTED_NAME]
+
+    ent_reg = MagicMock()
+    ent_reg.entities = {entry.entity_id: entry}
+    area_reg = MagicMock()
+    area_reg.async_get_area.return_value = None
+    dev_reg = MagicMock()
+    dev_reg.async_get.return_value = None
+
+    with (
+        patch(
+            "custom_components.smartchain.tools.memory.entity_filter.er.async_get",
+            return_value=ent_reg,
+        ),
+        patch(
+            "custom_components.smartchain.tools.memory.entity_filter.ar.async_get",
+            return_value=area_reg,
+        ),
+        patch(
+            "custom_components.smartchain.tools.memory.entity_filter.dr.async_get",
+            return_value=dev_reg,
+        ),
+    ):
+        cand = resolve_candidates(hass, EntitySourceConfig(preset="paranoid"))[entry.entity_id]
+
+    assert cand.aliases == ()
+    assert all(isinstance(alias, str) for alias in cand.aliases)
+
+
+def test_a_real_alias_beside_the_marker_survives_it(hass: HomeAssistant) -> None:
+    """The louder half of the same defect, which no home had hit yet.
+
+    A list holding both a string and the sentinel does not even reach `_fold`:
+    `sorted()` raises `TypeError: '<' not supported between instances of
+    'ComputedNameType' and 'str'` while the catalogue is being built, which
+    takes down the whole sweep rather than one entity. The user's alias has to
+    come through unharmed.
+    """
+    from homeassistant.helpers.entity_registry import COMPUTED_NAME
+
+    entry = _entry("light.ceiling", name="Потолок")
+    entry.aliases = ["люстра", COMPUTED_NAME, "верхний свет"]
+
+    ent_reg = MagicMock()
+    ent_reg.entities = {entry.entity_id: entry}
+    area_reg = MagicMock()
+    area_reg.async_get_area.return_value = None
+    dev_reg = MagicMock()
+    dev_reg.async_get.return_value = None
+
+    with (
+        patch(
+            "custom_components.smartchain.tools.memory.entity_filter.er.async_get",
+            return_value=ent_reg,
+        ),
+        patch(
+            "custom_components.smartchain.tools.memory.entity_filter.ar.async_get",
+            return_value=area_reg,
+        ),
+        patch(
+            "custom_components.smartchain.tools.memory.entity_filter.dr.async_get",
+            return_value=dev_reg,
+        ),
+    ):
+        cand = resolve_candidates(hass, EntitySourceConfig(preset="paranoid"))[entry.entity_id]
+
+    assert cand.aliases == ("верхний свет", "люстра")
