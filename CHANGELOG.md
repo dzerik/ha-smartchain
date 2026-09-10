@@ -11,6 +11,30 @@ project follows [Semantic Versioning](https://semver.org/).
 > **Note:** the `5.4.0` section below is a roll-up: it covers `5.4.0` through
 > `5.4.7`, which were developed on one branch and are not separated here.
 
+## [5.6.6] - unreleased
+
+### Fixed
+- **A sentence the built-in agent could not answer broke the turn.** With
+  `process_builtin_sentences` on — the default — Home Assistant's own agent is
+  offered the sentence first, and `DefaultAgent` appends its reply to the chat
+  log on *every* path, including the one where it recognised nothing. It
+  appends it to *our* log, because `async_get_chat_log` hands a nested caller
+  the log already open for that conversation id. So the model was handed a
+  conversation ending in an assistant message that said "I do not understand".
+  GigaChat 3 rejects that outright — `422 INVALID_PARAMS: functions or
+  thinking_functions should only appeal in user, function messages` — and the
+  person saw an error for a sentence the model never received. Other providers
+  accept the shape and quietly reason from a reply nobody gave. The non-answer
+  is now removed before falling through, and the mirror case is fixed with it:
+  a sentence the built-in agent *did* handle was being stored twice, once by
+  Home Assistant and once by us.
+- **Every error log said `provider=unknown`.** The guard reading the engine id
+  asked `isinstance(data, dict)`, and Home Assistant wraps entry data in a
+  `MappingProxyType`, which is not a `dict`. It therefore rejected every real
+  entry, on the one field whose job is to say which of eleven providers failed.
+  The suite passed throughout: a `MagicMock` entry carries a plain dict, so
+  nothing ever asked the guard the question production asks.
+
 ## [5.6.5] - unreleased
 
 ### Fixed

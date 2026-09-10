@@ -4,7 +4,7 @@ import base64
 import json
 import logging
 import time
-from collections.abc import AsyncIterable
+from collections.abc import AsyncIterable, Mapping
 from pathlib import Path
 from typing import Any, Literal
 
@@ -203,7 +203,13 @@ class SmartChainConversationEntity(ConversationEntity):
         on a half-migrated one, and a log line about a failure must not fail.
         """
         data = getattr(self.entry, "data", None) or {}
-        engine = data.get(CONF_ENGINE) if isinstance(data, dict) else None
+        # `Mapping`, not `dict`: Home Assistant wraps entry data in a
+        # `MappingProxyType`, which fails `isinstance(..., dict)`. Written as
+        # `dict` this guard rejected every real entry and reported
+        # `provider=unknown` on all of them, while every test passed — a
+        # `MagicMock` entry carries a plain dict, so nothing ever asked it the
+        # question production asks.
+        engine = data.get(CONF_ENGINE) if isinstance(data, Mapping) else None
         return engine or "unknown"
 
     @property
@@ -431,17 +437,30 @@ class SmartChainConversationEntity(ConversationEntity):
             from homeassistant.components.conversation import agent_manager
 
             default_agent = agent_manager.async_get_agent(self.hass, None)
+            # `async_get_chat_log` hands a nested caller the log already on the
+            # contextvar when the conversation id matches — and ours does, since
+            # we are the caller that opened it. So the built-in agent writes
+            # into *this* log, and `DefaultAgent` appends its reply on every
+            # path, after the intent match has already failed. Remember where
+            # the turn stood so both outcomes can be put right.
+            before_builtin = len(chat_log.content)
             default_response = await default_agent.async_process(user_input)
 
             if default_response.response.intent:
-                speech = default_response.response.speech.get("plain", {}).get("speech", "")
-                chat_log.async_add_assistant_content_without_tools(
-                    AssistantContent(
-                        agent_id=user_input.agent_id,
-                        content=speech,
-                    )
-                )
+                # It answered, and Home Assistant has already stored that answer
+                # for us. Adding our own copy is what put the same sentence in
+                # the log twice, and two identical `AIMessage`s in the next
+                # request read to the model as the assistant repeating itself.
                 return default_response
+
+            # It understood nothing — but said so, in the log, as the assistant.
+            # Left there it is a reply that was never given: it ends the
+            # conversation we are about to hand the model, it outlives the turn,
+            # and long-term memory ingests it as an answer. GigaChat 3 refuses
+            # the shape outright ("functions ... should only appeal in user,
+            # function messages"), which is how it was found; the other
+            # providers accept it and quietly reason from it.
+            del chat_log.content[before_builtin:]
 
         client = self._client
         tools: list[dict[str, Any]] = (

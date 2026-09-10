@@ -297,3 +297,52 @@ def test_the_generic_sentence_is_written_down_exactly_once() -> None:
         if GENERIC_LLM_ERROR in path.read_text(encoding="utf-8")
     ]
     assert holders == ["const.py"], f"the sentence is spelled out in more than one place: {holders}"
+
+
+async def test_the_provider_is_named_when_the_entry_is_a_real_one(
+    hass: HomeAssistant,
+) -> None:
+    """`entry.data` is a `MappingProxyType` in Home Assistant, not a `dict`.
+
+    The guard around this read was written as `isinstance(data, dict)`, which a
+    mappingproxy fails — so every log line in production said
+    `provider=unknown`, on the one field whose whole job is to say which of
+    eleven providers broke. Every test passed, because a `MagicMock` entry
+    carries a plain dict and the guard was never asked the real question.
+
+    So this builds `entry.data` the way `ConfigEntry.__init__` does. The guard
+    itself is worth keeping — a half-migrated entry really can arrive without
+    the key, and a line about a failure must not fail — it just has to admit
+    the type Home Assistant actually uses.
+    """
+    from types import MappingProxyType
+
+    entry = MagicMock()
+    entry.entry_id = "test_entry"
+    entry.data = MappingProxyType({CONF_ENGINE: ID_GIGACHAT, "api_key": "secret"})
+    entry.options = {}
+    entry.runtime_data = MagicMock()
+    ent = SmartChainConversationEntity(entry)
+    ent.hass = hass
+
+    assert ent._engine == ID_GIGACHAT
+
+
+async def test_an_entry_without_usable_data_still_names_something(
+    hass: HomeAssistant,
+) -> None:
+    """The reason the guard exists, kept under test on both shapes.
+
+    A stub entry has no `data` at all and a half-migrated one can hold something
+    that is not a mapping. Neither may raise: this value is only ever read while
+    building a sentence about a failure that has already happened.
+    """
+    for broken in (None, "not-a-mapping", 42):
+        entry = MagicMock()
+        entry.data = broken
+        entry.options = {}
+        entry.runtime_data = MagicMock()
+        ent = SmartChainConversationEntity(entry)
+        ent.hass = hass
+
+        assert ent._engine == "unknown"
