@@ -2240,7 +2240,7 @@ wheels = [
 
 [[package]]
 name = "ha-smartchain"
-version = "5.6.6b1"
+version = "5.6.6b3"
 source = { virtual = "." }
 
 [package.dev-dependencies]
@@ -2263,12 +2263,18 @@ dev = [
     { name = "langchain-openai", version = "1.6.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.13.2'" },
     { name = "mcp", version = "1.12.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.13.2'" },
     { name = "mcp", version = "1.29.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.13.2'" },
+    { name = "probatio" },
     { name = "pytest-homeassistant-custom-component", version = "0.13.215", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.13.2'" },
     { name = "pytest-homeassistant-custom-component", version = "0.13.316", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.13.2' and python_full_version < '3.14.2'" },
     { name = "pytest-homeassistant-custom-component", version = "0.13.357", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.14.2'" },
     { name = "pyturbojpeg" },
     { name = "ruff" },
     { name = "sqlite-vec" },
+    { name = "voluptuous-openapi", version = "0.0.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.13.2'" },
+    { name = "voluptuous-openapi", version = "0.2.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.13.2' and python_full_version < '3.14.2'" },
+    { name = "voluptuous-openapi", version = "0.4.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.14.2'" },
+    { name = "voluptuous-serialize", version = "2.6.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.13.2'" },
+    { name = "voluptuous-serialize", version = "2.7.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.13.2'" },
 ]
 
 [package.metadata]
@@ -2286,10 +2292,13 @@ dev = [
     { name = "langchain-ollama", specifier = ">=0.3.0,<2" },
     { name = "langchain-openai", specifier = ">=0.3.0,<2" },
     { name = "mcp", specifier = ">=1.0,<2" },
+    { name = "probatio", specifier = ">=0.11.4" },
     { name = "pytest-homeassistant-custom-component", specifier = ">=0.13" },
     { name = "pyturbojpeg", specifier = ">=2.0" },
     { name = "ruff", specifier = ">=0.15" },
     { name = "sqlite-vec", specifier = ">=0.1" },
+    { name = "voluptuous-openapi" },
+    { name = "voluptuous-serialize" },
 ]
 
 [[package]]
@@ -4289,6 +4298,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/f9/e2/3e91f31a7d2b083fe6ef3fa267035b518369d9511ffab804f839851d2779/pluggy-1.6.0.tar.gz", hash = "sha256:7dcc130b76258d33b90f61b658791dede3486c3e6bfb003ee5c9bfb396dd22f3", size = 69412, upload-time = "2025-05-15T12:30:07.975Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/54/20/4d324d65cc6d9205fabedc306948156824eb9f0ee1633355a8f7ec5c66bf/pluggy-1.6.0-py3-none-any.whl", hash = "sha256:e920276dd6813095e9377c0bc5566d94c932c33b27a3e3945d8389c374dd4746", size = 20538, upload-time = "2025-05-15T12:30:06.134Z" },
+]
+
+[[package]]
+name = "probatio"
+version = "0.12.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/bc/75/ed2300cef9badd3f9235b37af1d31e7b83d2f90a701784b7e113ded0ba37/probatio-0.12.2.tar.gz", hash = "sha256:9c8de343f951552d762474fb71f5035c434012357cdfb2221aa090df274f49cc", size = 375748, upload-time = "2026-09-13T17:50:39.978Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/68/97/27f31b324a3ad019511e51ba8127b4a2a44c530cf42192c18b40f9ae0a1c/probatio-0.12.2-py3-none-any.whl", hash = "sha256:db6e9767e59cb659f3f00259d74ec2fd478e25bddcacd8323a2a45ecb607d11a", size = 225365, upload-time = "2026-09-13T17:50:37.387Z" },
 ]
 
 [[package]]

@@ -24,6 +24,7 @@ import ast
 import json
 import pathlib
 import sys
+import tomllib
 
 COMPONENT = pathlib.Path(__file__).parent.parent / "custom_components" / "smartchain"
 
@@ -160,3 +161,35 @@ def test_the_allowlist_does_not_outlive_its_entries() -> None:
     imported = set(_third_party_module_level_imports())
     stale = sorted(set(SUPPLIED_BY_OTHERS) - imported)
     assert not stale, f"listed as supplied by others, but nothing imports them: {stale}"
+
+
+def _dev_group() -> set[str]:
+    """The dev dependency group, reduced the same way as `_declared`."""
+    pyproject = tomllib.loads((COMPONENT.parent.parent / "pyproject.toml").read_text())
+    out = set()
+    for requirement in pyproject["dependency-groups"]["dev"]:
+        for separator in (">=", "<=", "==", ">", "<", "~=", "!=", "["):
+            requirement = requirement.split(separator)[0]
+        out.add(requirement.strip().replace("-", "_").lower())
+    return out
+
+
+def test_every_requirement_loaded_at_import_time_is_one_ci_installs() -> None:
+    """The third list: what the suite's own environment is built from.
+
+    Home Assistant installs `manifest.json`; `uv sync` installs `pyproject.toml`
+    and nothing else. `probatio` went into the first and never the second, so
+    every machine that already had it stayed green and CI, which builds its
+    environment from the lock file, could not even collect the tests that
+    import `websocket_api.py`.
+
+    Only module-level imports are held to this: they run when a test module is
+    collected. A lazy one (the Yandex SDK) is mocked where it is reached.
+    """
+    in_dev = _dev_group()
+    loaded = set(_third_party_module_level_imports())
+    missing = sorted(module for module in _declared() & loaded if module not in in_dev)
+    assert not missing, (
+        "declared in manifest.json and imported at module level, but absent from "
+        f"the dev group in pyproject.toml, so CI never installs them: {missing}"
+    )
