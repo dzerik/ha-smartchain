@@ -22,6 +22,7 @@ a service call.
 
 import json
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 import pytest
 import voluptuous as vol
@@ -253,16 +254,26 @@ async def test_every_subentry_write_goes_through_the_guard(
     _config_entries_still_writable(hass)
 
 
-async def test_the_guard_normalises_on_the_way_through(hass: HomeAssistant, tools_dir: Path):
+async def test_the_guard_normalises_on_the_way_through(
+    hass: HomeAssistant, tools_dir: Path, mock_llm_client
+):
     entry = await _entry(hass)
-    subentry_id = _write_subentry(
-        hass,
-        entry,
-        None,
-        subentry_type=SUBENTRY_TYPE_CONVERSATION,
-        data={CONF_CHAT_MODEL: "gpt-4.1", "prompt": Template("{{ ha_name }}", hass)},
-        title="agent",
-    )
+    # Adding a subentry reloads the entry; a real ChatOpenAI would open a probe
+    # socket there, which only some plugin orders let through.
+    with patch(
+        "custom_components.smartchain.get_client",
+        new_callable=AsyncMock,
+        return_value=mock_llm_client,
+    ):
+        subentry_id = _write_subentry(
+            hass,
+            entry,
+            None,
+            subentry_type=SUBENTRY_TYPE_CONVERSATION,
+            data={CONF_CHAT_MODEL: "gpt-4.1", "prompt": Template("{{ ha_name }}", hass)},
+            title="agent",
+        )
+        await hass.async_block_till_done()
     assert entry.subentries[subentry_id].data["prompt"] == "{{ ha_name }}"
     _config_entries_still_writable(hass)
 
