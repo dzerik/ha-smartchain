@@ -400,3 +400,59 @@ describe("smartchain-panel: every tab that hosts a form is guarded", () => {
     expect(event.defaultPrevented).toBe(true);
   });
 });
+
+describe("smartchain-panel: the first time Home Assistant opens it", () => {
+  it("shows the tab even when hass arrives before the panel is in the page", async () => {
+    // Home Assistant's order, not the harness's: it creates the element, sets
+    // `panel` and `hass`, and only then appends it. So the first tab is written
+    // by innerHTML into a detached element, is not upgraded yet, and the
+    // `el.hass = ...` that follows lands on a plain HTMLElement.
+    const net = fakeHass({ "smartchain/overview": OVERVIEW, ...AGENT_SCHEMA });
+    net.hass.user = { is_admin: true };
+    const panel = document.createElement("smartchain-panel");
+    panel.panel = { config: { version: "9.9.9" } };
+    panel.hass = net.hass;
+    document.body.appendChild(panel);
+    await flush();
+
+    const agents = panel.querySelector("sc-agents-tab");
+    expect(agents).not.toBeNull();
+    expect(agents.textContent).toContain("Kitchen");
+  });
+});
+
+describe("smartchain-panel: created before its module finished loading", () => {
+  it("adopts the hass and panel Home Assistant set on the plain element", async () => {
+    // Home Assistant loads the module with <script type="module"> and builds
+    // the element on its `load` event. The module awaits its tab imports
+    // before `customElements.define`, and `load` does not wait for that — so
+    // on the very first visit the element is created as a plain HTMLElement,
+    // `hass` and `panel` land on it as own properties, and the later upgrade
+    // leaves them shadowing the class's setters. The panel stayed blank until
+    // the second visit, when the element was defined before it was created.
+    //
+    // jsdom cannot replay that order for a tag this file already defined, so
+    // this builds the state the upgrade leaves behind: own data properties on
+    // an upgraded instance, then the connection.
+    const net = fakeHass({ "smartchain/overview": OVERVIEW, ...AGENT_SCHEMA });
+    net.hass.user = { is_admin: true };
+    const panel = document.createElement("smartchain-panel");
+    for (const [key, value] of Object.entries({
+      panel: { config: { version: "9.9.9" } },
+      hass: net.hass,
+    })) {
+      Object.defineProperty(panel, key, { value, writable: true, configurable: true });
+    }
+    document.body.appendChild(panel);
+    await flush();
+
+    expect(Object.hasOwn(panel, "hass")).toBe(false);
+    expect(panel.querySelector("sc-agents-tab")?.textContent).toContain("Kitchen");
+    expect(panel.querySelector(".sc-version").textContent).toBe("v9.9.9");
+
+    // And Home Assistant's next update reaches the setter, not a shadow.
+    const later = { ...net.hass };
+    panel.hass = later;
+    expect(panel.querySelector("sc-agents-tab")._hass).toBe(later);
+  });
+});
