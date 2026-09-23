@@ -11,6 +11,22 @@ project follows [Semantic Versioning](https://semver.org/).
 > **Note:** the `5.4.0` section below is a roll-up: it covers `5.4.0` through
 > `5.4.7`, which were developed on one branch and are not separated here.
 
+## [5.6.6b4] - unreleased
+
+### Fixed
+- **The panel opened blank the first time, and fine every time after.**
+  Home Assistant loads a custom panel with `<script type="module">` and builds
+  the element on its `load` event — which, for a module, fires as soon as the
+  top-level `await` suspends, not when it finishes. Since 5.0.2 the panel
+  awaits its tab imports before `customElements.define`, so on the first visit
+  `smartchain-panel` was created as a plain element, Home Assistant set `hass`
+  and `panel` on it as own properties, and the upgrade that followed left them
+  shadowing the setters: `set hass` never ran and nothing was built. On the
+  next visit the element was already defined. The panel now takes such
+  properties back through its setters when it connects, and builds its tabs
+  only once it is in the page, so they are never written into a detached
+  subtree that no browser upgrades.
+
 ## [5.6.6b3] - unreleased
 
 ### Fixed

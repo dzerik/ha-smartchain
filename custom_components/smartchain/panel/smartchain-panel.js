@@ -63,6 +63,21 @@ class SmartChainPanel extends HTMLElement {
   // for a panel that is no longer on screen.
   connectedCallback() {
     window.addEventListener("beforeunload", this._onBeforeUnload);
+    // On the first visit Home Assistant creates this element before
+    // `customElements.define` has run: it builds the panel on the module
+    // script's `load` event, which fires as soon as the top-level `await`
+    // above suspends. `panel` and `hass` then land on the plain element as own
+    // properties, and after the upgrade they shadow the setters below — the
+    // panel stayed blank until the next visit. Take them back through the
+    // setters, `panel` first so the version is there to paint.
+    for (const key of ["panel", "hass"]) {
+      if (Object.hasOwn(this, key)) {
+        const value = this[key];
+        delete this[key];
+        this[key] = value;
+      }
+    }
+    if (this._hass && !this._initialized) this._apply();
   }
 
   disconnectedCallback() {
@@ -143,16 +158,25 @@ class SmartChainPanel extends HTMLElement {
   }
 
   set hass(hass) {
-    const first = !this._hass;
     this._hass = hass;
+    // Home Assistant sets `hass` before it appends the element. Building the
+    // tabs while detached would write them with innerHTML into a subtree no
+    // browser upgrades until it is connected, so the `.hass` pushed right
+    // after would shadow their setters the same way; connectedCallback builds
+    // instead.
+    if (this.isConnected) this._apply();
+  }
+
+  _apply() {
     if (!this._initialized) {
       this._initialize();
       this._initialized = true;
-    } else {
-      this._refreshTabs();
+      this._propagateHass();
+      this._loadOverview();
+      return;
     }
+    this._refreshTabs();
     this._propagateHass();
-    if (first) this._loadOverview();
   }
 
   // The overview (every SmartChain entry, its agents and its
