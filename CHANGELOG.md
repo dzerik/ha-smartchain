@@ -24,6 +24,12 @@ project follows [Semantic Versioning](https://semver.org/).
   covered only because Home Assistant still happened to bring them along. All
   three are in the dev group now, and `test_declared_dependencies.py` fails
   when a requirement imported at module level is missing from it.
+- **Two tests opened a socket, and only CI noticed.** Saving a subentry
+  reloads the entry, and both tests had `get_client` patched only around the
+  first setup — the reload built a real `ChatOpenAI`, whose constructor probes
+  socket options on a throwaway socket. Locally `pytest-socket`'s own setup hook
+  ran after Home Assistant's and lifted the block; in CI the order was the
+  other way round. The patch now covers the whole test.
 
 ## [5.6.6b2] - unreleased
 

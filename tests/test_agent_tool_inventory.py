@@ -540,6 +540,8 @@ async def test_the_reconfigure_flow_keeps_an_undeclared_key_too(
 
     entry = _entry(hass, ("Home", {CONF_ENABLE_MULTI_AGENT_TOOLS: True}))
     subentry_id = _agent(entry, "Home").subentry_id
+    # Patched for the whole test, not just the first setup: saving the
+    # reconfigure reloads the entry, and a real ChatOpenAI opens a probe socket.
     with patch(
         "custom_components.smartchain.get_client",
         new_callable=AsyncMock,
@@ -548,14 +550,15 @@ async def test_the_reconfigure_flow_keeps_an_undeclared_key_too(
         await hass.config_entries.async_setup(entry.entry_id)
         await hass.async_block_till_done()
 
-    result = await hass.config_entries.subentries.async_init(
-        (entry.entry_id, SUBENTRY_TYPE_CONVERSATION),
-        context={"source": "reconfigure", "subentry_id": subentry_id},
-    )
-    result = await hass.config_entries.subentries.async_configure(
-        result["flow_id"],
-        {CONF_CHAT_MODEL: "gpt-4.1-mini", CONF_PROMPT: "still tuned"},
-    )
+        result = await hass.config_entries.subentries.async_init(
+            (entry.entry_id, SUBENTRY_TYPE_CONVERSATION),
+            context={"source": "reconfigure", "subentry_id": subentry_id},
+        )
+        result = await hass.config_entries.subentries.async_configure(
+            result["flow_id"],
+            {CONF_CHAT_MODEL: "gpt-4.1-mini", CONF_PROMPT: "still tuned"},
+        )
+        await hass.async_block_till_done()
 
     assert result["type"] is FlowResultType.ABORT
     data = entry.subentries[subentry_id].data
