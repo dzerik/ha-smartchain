@@ -11,6 +11,20 @@ project follows [Semantic Versioning](https://semver.org/).
 > **Note:** the `5.4.0` section below is a roll-up: it covers `5.4.0` through
 > `5.4.7`, which were developed on one branch and are not separated here.
 
+## [5.6.6b3] - unreleased
+
+### Fixed
+- **CI could not collect the suite since 5.6.5.** `probatio` went into
+  `manifest.json` and never into the dev group of `pyproject.toml`, so it was
+  missing from `uv.lock`. Every machine that already had it stayed green; CI,
+  which builds its environment from the lock file alone, stopped at
+  `ModuleNotFoundError` while importing `websocket_api.py`, and every PR —
+  Dependabot's included — showed red for a reason that had nothing to do with
+  it. `voluptuous-openapi` and `voluptuous-serialize` sat in the same gap,
+  covered only because Home Assistant still happened to bring them along. All
+  three are in the dev group now, and `test_declared_dependencies.py` fails
+  when a requirement imported at module level is missing from it.
+
 ## [5.6.6b2] - unreleased
 
 ### Fixed

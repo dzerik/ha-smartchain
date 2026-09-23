@@ -1,6 +1,6 @@
 [project]
 name = "ha-smartchain"
-version = "5.6.6b2"
+version = "5.6.6b3"
 description = "SmartChain — multi-provider LLM conversation agent for Home Assistant"
 readme = "README.md"
 license = "MIT"
@@ -38,6 +38,15 @@ dev = [
     "home-assistant-intents>=2026.3.3",
     "jsonschema>=4.0",
     "mcp>=1.0,<2",
+    # Imported at module level by websocket_api.py, so collecting the tests
+    # needs them. manifest.json asks Home Assistant for them; this asks uv, and
+    # test_declared_dependencies.py keeps the two lists from drifting apart.
+    # The voluptuous pair carries no floor here: old pytest-homeassistant-
+    # custom-component releases pin them exactly, and a floor makes the lock
+    # unsolvable for the Python versions only those releases support.
+    "probatio>=0.11.4",
+    "voluptuous-openapi",
+    "voluptuous-serialize",
     # Test-only: lets the cross-backend conformance suite actually exercise the
     # sqlite_vec backend in CI. Deliberately NOT in manifest.json — the runtime
     # requires no new dependency, and sqlite_vec stays lazy-imported.
