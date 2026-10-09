@@ -17,8 +17,11 @@ So the invariant is not "voluptuous-serialize is installed" but "our converter
 and `cv.custom_serializer` come from the same library".
 """
 
+import importlib
 import json
+import sys
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import homeassistant.helpers.config_validation as cv
 import probatio
@@ -27,6 +30,18 @@ import voluptuous_serialize
 from homeassistant.helpers import selector
 
 from custom_components.smartchain.websocket_api import _pick_converter, _to_field_list
+
+
+def test_legacy_home_assistant_loads_without_probatio():
+    """HA before 2026.9 never installs probatio and uses the legacy converter."""
+    import custom_components.smartchain.websocket_api as module
+
+    with patch.dict(sys.modules, {"probatio": None}):
+        importlib.reload(module)
+        legacy = SimpleNamespace(custom_serializer=lambda schema: voluptuous_serialize.UNSUPPORTED)
+        converter, sentinel = module._pick_converter(legacy)
+        assert converter is voluptuous_serialize.convert
+        assert sentinel is voluptuous_serialize.UNSUPPORTED
 
 
 def test_our_converter_and_home_assistants_share_one_unsupported() -> None:

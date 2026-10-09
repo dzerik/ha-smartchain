@@ -17,7 +17,6 @@ from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
-import probatio
 import voluptuous as vol
 import voluptuous_serialize
 import yaml
@@ -130,6 +129,9 @@ def _pick_converter(config_validation: Any) -> tuple[Any, Any]:
     Assistant that decides which sentinel `custom_serializer` will hand back.
     """
     if hasattr(config_validation, "to_field_list"):
+        # HA 2026.9+ supplies probatio; older HA never reaches this branch.
+        import probatio
+
         return probatio.to_field_list, probatio.UNSUPPORTED
     return voluptuous_serialize.convert, voluptuous_serialize.UNSUPPORTED
 

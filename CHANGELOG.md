@@ -11,9 +11,15 @@ project follows [Semantic Versioning](https://semver.org/).
 > **Note:** the `5.4.0` section below is a roll-up: it covers `5.4.0` through
 > `5.4.7`, which were developed on one branch and are not separated here.
 
-## [5.6.6b5] - 2026-10-09
+## [5.6.6] - 2026-10-09
 
 ### Fixed
+- **Hassfest validation rejected duplicate Home Assistant dependencies.**
+  `home-assistant-intents` is supplied by the required Conversation integration;
+  `probatio` is supplied by HA 2026.9+ and is now imported only when that
+  serializer is actually used. Older Home Assistant keeps its legacy converter.
+- Release archives now include the Sigstore `.sigstore.json` bundle, and a
+  missing release asset fails publication instead of being silently skipped.
 - **SmartChain could not start on Home Assistant 2026.10.** The declared
   `yandex-cloud-ml-sdk` pulls in `yandexcloud`, which requires `protobuf<7`,
   while Home Assistant pins `protobuf==7.36.0`. Yandex embeddings and chat
@@ -22,9 +28,6 @@ project follows [Semantic Versioning](https://semver.org/).
 - Release automation now marks all numbered alpha, beta, and release-candidate
   tags as prereleases, including `b4`, `b5`, and `b10`.
 
-## [5.6.6b4] - unreleased
-
-### Fixed
 - **The panel opened blank the first time, and fine every time after.**
   Home Assistant loads a custom panel with `<script type="module">` and builds
   the element on its `load` event — which, for a module, fires as soon as the
@@ -38,9 +41,6 @@ project follows [Semantic Versioning](https://semver.org/).
   only once it is in the page, so they are never written into a detached
   subtree that no browser upgrades.
 
-## [5.6.6b3] - unreleased
-
-### Fixed
 - **CI could not collect the suite since 5.6.5.** `probatio` went into
   `manifest.json` and never into the dev group of `pyproject.toml`, so it was
   missing from `uv.lock`. Every machine that already had it stayed green; CI,
@@ -58,9 +58,6 @@ project follows [Semantic Versioning](https://semver.org/).
   ran after Home Assistant's and lifted the block; in CI the order was the
   other way round. The patch now covers the whole test.
 
-## [5.6.6b2] - unreleased
-
-### Fixed
 - **A tick-box in the entity settings turned dynamic context off, silently.**
   `RegistryEntry.aliases` is `list[str | ComputedNameType]` — beside the words
   a person typed there can be a sentinel meaning "the computed full name is an
@@ -74,9 +71,6 @@ project follows [Semantic Versioning](https://semver.org/).
   The sentinel is dropped now: what it points at is the computed name, which is
   already the candidate's `name` and already ranked.
 
-## [5.6.6] - unreleased
-
-### Fixed
 - **A sentence the built-in agent could not answer broke the turn.** With
   `process_builtin_sentences` on — the default — Home Assistant's own agent is
   offered the sentence first, and `DefaultAgent` appends its reply to the chat

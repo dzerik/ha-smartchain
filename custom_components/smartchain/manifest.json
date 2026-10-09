@@ -11,7 +11,6 @@
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/dzerik/ha-smartchain/issues",
   "requirements": [
-    "home-assistant-intents",
     "gigachat>=0.2.3,<0.3",
     "jsonschema>=4.0",
     "langchain-anthropic>=0.3.0,<2",
@@ -20,9 +19,8 @@
     "langchain-ollama>=0.3.0,<2",
     "langchain-openai>=0.3.0,<2",
     "mcp>=1.0,<2",
-    "probatio>=0.11.4",
     "voluptuous-openapi>=0.4.1",
     "voluptuous-serialize>=2.6.0"
   ],
-  "version": "5.6.6b5"
+  "version": "5.6.6"
 }

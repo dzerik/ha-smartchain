@@ -48,7 +48,7 @@ jobs:
             -x "*__pycache__*" "*.pyc" "*.pyo" "*__tests__*"
 
       # Keyless signing via Sigstore (OIDC, no secrets).
-      # Produces smartchain.zip.sigstore alongside the zip, which any
+      # Produces smartchain.zip.sigstore.json alongside the zip, which any
       # downstream consumer can verify with `sigstore verify identity`.
       - name: Sign release artifact (sigstore)
         uses: sigstore/gh-action-sigstore-python@v3.5.0
@@ -59,7 +59,8 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           generate_release_notes: true
+          fail_on_unmatched_files: true
           files: |
             smartchain.zip
-            smartchain.zip.sigstore
+            smartchain.zip.sigstore.json
           prerelease: ${{ fromJSON(steps.version.outputs.prerelease) }}

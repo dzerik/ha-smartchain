@@ -38,6 +38,7 @@ SUPPLIED_BY_OTHERS = {
     "voluptuous": "homeassistant core requirement",
     "yaml": "homeassistant core requirement (PyYAML)",
     "httpx": "homeassistant core requirement",
+    "home_assistant_intents": "supplied by the mandatory Home Assistant conversation integration",
     # Pulled in by the langchain packages manifest.json already asks for. It is
     # the reason those packages exist; a langchain that stopped depending on its
     # own core would be a different library.
@@ -55,7 +56,7 @@ def _third_party_module_level_imports() -> dict[str, set[str]]:
 
     An import inside a function fails when that path is taken, which is a
     different and much smaller failure than an integration that will not load.
-    `sqlite_vec`, `asyncpg` and `turbojpeg` are deliberately
+    `sqlite_vec`, `asyncpg`, `turbojpeg` and the modern HA serializer are deliberately
     written that way and are out of scope here.
     """
     stdlib = set(sys.stdlib_module_names)
