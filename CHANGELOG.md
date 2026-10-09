@@ -11,6 +11,17 @@ project follows [Semantic Versioning](https://semver.org/).
 > **Note:** the `5.4.0` section below is a roll-up: it covers `5.4.0` through
 > `5.4.7`, which were developed on one branch and are not separated here.
 
+## [5.6.6b5] - 2026-10-09
+
+### Fixed
+- **SmartChain could not start on Home Assistant 2026.10.** The declared
+  `yandex-cloud-ml-sdk` pulls in `yandexcloud`, which requires `protobuf<7`,
+  while Home Assistant pins `protobuf==7.36.0`. Yandex embeddings and chat
+  now call the REST API through httpx, so the conflicting SDK requirement
+  is removed without disabling either feature.
+- Release automation now marks all numbered alpha, beta, and release-candidate
+  tags as prereleases, including `b4`, `b5`, and `b10`.
+
 ## [5.6.6b4] - unreleased
 
 ### Fixed

@@ -6,7 +6,6 @@ from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from langchain_community.chat_models import ChatYandexGPT
 from langchain_core.messages import SystemMessage
 from langchain_gigachat import GigaChat
 from langchain_openai import ChatOpenAI
@@ -35,6 +34,7 @@ from .const import (
     OPENAI_COMPATIBLE,
     OpenAICompatible,
 )
+from .yandex_chat import ChatYandexGPT
 
 LOGGER = logging.getLogger(__name__)
 

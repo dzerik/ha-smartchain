@@ -42,6 +42,7 @@ SUPPLIED_BY_OTHERS = {
     # the reason those packages exist; a langchain that stopped depending on its
     # own core would be a different library.
     "langchain_core": "dependency of the declared langchain-* packages",
+    "tenacity": "required by langchain-core, pulled in by the declared langchain-* packages",
     # The default memory backend's maths. Not a Home Assistant requirement, but
     # its module is only imported when a memory store is actually built, so a
     # missing numpy degrades memory rather than stopping setup.
@@ -54,7 +55,7 @@ def _third_party_module_level_imports() -> dict[str, set[str]]:
 
     An import inside a function fails when that path is taken, which is a
     different and much smaller failure than an integration that will not load.
-    `sqlite_vec`, `asyncpg`, `turbojpeg` and the Yandex SDK are deliberately
+    `sqlite_vec`, `asyncpg` and `turbojpeg` are deliberately
     written that way and are out of scope here.
     """
     stdlib = set(sys.stdlib_module_names)
@@ -139,9 +140,9 @@ def test_every_requirement_is_one_some_code_imports() -> None:
     is not merely tidy-up: it is a package the user pays to download for
     nothing, and — worse — it reads as proof that the feature it belongs to has
     its dependency handled. `yandexcloud` was declared for years while the
-    Yandex embeddings actually import `yandex_cloud_ml_sdk`, which is a
-    different distribution and was declared nowhere, so that provider failed at
-    the first call with the very error the requirement looked like it prevented.
+    Yandex embeddings imported `yandex_cloud_ml_sdk`, a different distribution
+    that was declared nowhere. Both Yandex paths now use REST through httpx:
+    the SDK's protobuf constraint conflicts with Home Assistant 2026.10.
     """
     imported = set(_all_imports())
     unused = sorted(module for module in _declared() if module not in imported)
@@ -184,7 +185,7 @@ def test_every_requirement_loaded_at_import_time_is_one_ci_installs() -> None:
     import `websocket_api.py`.
 
     Only module-level imports are held to this: they run when a test module is
-    collected. A lazy one (the Yandex SDK) is mocked where it is reached.
+    collected. Optional lazy dependencies are mocked where they are reached.
     """
     in_dev = _dev_group()
     loaded = set(_third_party_module_level_imports())
