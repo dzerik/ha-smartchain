@@ -24,6 +24,7 @@ project follows [Semantic Versioning](https://semver.org/).
   Home Assistant while preserving configured headers, timeouts and TLS settings.
 - The project's default Python version is pinned to 3.13 for uv, avoiding
   accidental Python 3.15 CI environments and lengthy source builds of locked dependencies.
+  Test-only Hassil and intents versions now match the selected Home Assistant.
 
 ## [5.6.6] - 2026-10-09
 

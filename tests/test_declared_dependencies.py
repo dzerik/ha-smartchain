@@ -21,12 +21,32 @@ who supplies it and why that is safe.
 """
 
 import ast
+import importlib.metadata
 import json
 import pathlib
 import sys
 import tomllib
 
+import homeassistant
+from packaging.requirements import Requirement
+
 COMPONENT = pathlib.Path(__file__).parent.parent / "custom_components" / "smartchain"
+
+
+def test_ci_conversation_dependencies_match_its_home_assistant() -> None:
+    """Core metadata omits integration requirements, so the dev lock must supply them."""
+    manifest = pathlib.Path(homeassistant.__file__).parent / "components/conversation/manifest.json"
+    requirements = {
+        requirement.name: requirement
+        for value in json.loads(manifest.read_text())["requirements"]
+        if (requirement := Requirement(value)).name in {"hassil", "home-assistant-intents"}
+    }
+    for name in ("hassil", "home-assistant-intents"):
+        installed = importlib.metadata.version(name)
+        assert installed in requirements[name].specifier, (
+            f"Conversation requires {requirements[name]}, but the dev environment has {installed}"
+        )
+
 
 # Modules we do not declare, each with the reason we are allowed not to. A new
 # entry here is a decision to depend on someone else's dependency list, so it

@@ -343,8 +343,16 @@ def test_a_renamed_entity_keeps_the_name_the_person_gave_it(hass: HomeAssistant)
     assert cand.name == "Люстра"
 
 
+@pytest.fixture
+def computed_name_alias_marker() -> object:
+    """Use HA's sentinel when available; older HA still tests opaque non-string aliases."""
+    from homeassistant.helpers import entity_registry
+
+    return getattr(entity_registry, "COMPUTED_NAME", object())
+
+
 def test_the_computed_name_alias_marker_is_not_mistaken_for_a_name(
-    hass: HomeAssistant,
+    hass: HomeAssistant, computed_name_alias_marker: object
 ) -> None:
     """Home Assistant stores a sentinel in `aliases`, not only strings.
 
@@ -363,10 +371,8 @@ def test_the_computed_name_alias_marker_is_not_mistaken_for_a_name(
     Dropping it loses nothing: what the sentinel points at is the computed
     name, which is already the candidate's `name` and already ranked.
     """
-    from homeassistant.helpers.entity_registry import COMPUTED_NAME
-
     entry = _entry("light.ceiling", name="Потолок")
-    entry.aliases = [COMPUTED_NAME]
+    entry.aliases = [computed_name_alias_marker]
 
     ent_reg = MagicMock()
     ent_reg.entities = {entry.entity_id: entry}
@@ -395,7 +401,9 @@ def test_the_computed_name_alias_marker_is_not_mistaken_for_a_name(
     assert all(isinstance(alias, str) for alias in cand.aliases)
 
 
-def test_a_real_alias_beside_the_marker_survives_it(hass: HomeAssistant) -> None:
+def test_a_real_alias_beside_the_marker_survives_it(
+    hass: HomeAssistant, computed_name_alias_marker: object
+) -> None:
     """The louder half of the same defect, which no home had hit yet.
 
     A list holding both a string and the sentinel does not even reach `_fold`:
@@ -404,10 +412,8 @@ def test_a_real_alias_beside_the_marker_survives_it(hass: HomeAssistant) -> None
     takes down the whole sweep rather than one entity. The user's alias has to
     come through unharmed.
     """
-    from homeassistant.helpers.entity_registry import COMPUTED_NAME
-
     entry = _entry("light.ceiling", name="Потолок")
-    entry.aliases = ["люстра", COMPUTED_NAME, "верхний свет"]
+    entry.aliases = ["люстра", computed_name_alias_marker, "верхний свет"]
 
     ent_reg = MagicMock()
     ent_reg.entities = {entry.entity_id: entry}

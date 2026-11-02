@@ -34,8 +34,12 @@ dev = [
     # is where Sber serves GigaChat-3-Ultra. See manifest.json.
     "gigachat>=0.2.3,<0.3",
     "PyTurboJPEG>=2.0",
-    "hassil>=3.5.0",
-    "home-assistant-intents>=2026.3.3",
+    # Match Conversation's requirements in the HA versions selected by the
+    # pytest plugin lock. Newer Hassil removed modules imported by HA 2026.2.
+    "hassil==3.5.0; python_full_version < '3.14.2'",
+    "hassil==3.11.0; python_full_version >= '3.14.2'",
+    "home-assistant-intents==2026.1.28; python_full_version < '3.14.2'",
+    "home-assistant-intents==2026.7.30; python_full_version >= '3.14.2'",
     "jsonschema>=4.0",
     "mcp>=1.0,<3",
     # Schema tests exercise probatio even with a pre-2026.9 Home Assistant.

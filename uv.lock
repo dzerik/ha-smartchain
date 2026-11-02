@@ -2246,8 +2246,10 @@ source = { virtual = "." }
 [package.dev-dependencies]
 dev = [
     { name = "gigachat" },
-    { name = "hassil" },
-    { name = "home-assistant-intents" },
+    { name = "hassil", version = "3.5.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.14.2'" },
+    { name = "hassil", version = "3.11.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.14.2'" },
+    { name = "home-assistant-intents", version = "2026.1.28", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.14.2'" },
+    { name = "home-assistant-intents", version = "2026.7.30", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.14.2'" },
     { name = "jsonschema" },
     { name = "langchain-anthropic", version = "0.3.22", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.13.2'" },
     { name = "langchain-anthropic", version = "1.6.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.13.2'" },
@@ -2282,8 +2284,10 @@ dev = [
 [package.metadata.requires-dev]
 dev = [
     { name = "gigachat", specifier = ">=0.2.3,<0.3" },
-    { name = "hassil", specifier = ">=3.5.0" },
-    { name = "home-assistant-intents", specifier = ">=2026.3.3" },
+    { name = "hassil", marker = "python_full_version < '3.14.2'", specifier = "==3.5.0" },
+    { name = "hassil", marker = "python_full_version >= '3.14.2'", specifier = "==3.11.0" },
+    { name = "home-assistant-intents", marker = "python_full_version < '3.14.2'", specifier = "==2026.1.28" },
+    { name = "home-assistant-intents", marker = "python_full_version >= '3.14.2'", specifier = "==2026.7.30" },
     { name = "jsonschema", specifier = ">=4.0" },
     { name = "langchain-anthropic", specifier = ">=0.3.0,<2" },
     { name = "langchain-community", specifier = ">=0.3.0,<0.5" },
@@ -2499,12 +2503,37 @@ wheels = [
 
 [[package]]
 name = "hassil"
-version = "3.11.0"
+version = "3.5.0"
 source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "python_full_version >= '3.14' and python_full_version < '3.14.2' and sys_platform == 'win32'",
+    "python_full_version >= '3.14' and python_full_version < '3.14.2' and sys_platform != 'win32'",
+    "python_full_version >= '3.13.2' and python_full_version < '3.14' and sys_platform == 'win32'",
+    "python_full_version < '3.13.2' and sys_platform == 'win32'",
+    "python_full_version >= '3.13.2' and python_full_version < '3.14' and sys_platform != 'win32'",
+    "python_full_version < '3.13.2' and sys_platform != 'win32'",
+]
 dependencies = [
     { name = "pyyaml", version = "6.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.13.2'" },
-    { name = "pyyaml", version = "6.0.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.13.2'" },
-    { name = "unicode-rbnf" },
+    { name = "pyyaml", version = "6.0.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.13.2' and python_full_version < '3.14.2'" },
+    { name = "unicode-rbnf", marker = "python_full_version < '3.14.2'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/87/bf/9630f99bcc3dca337e3905571d1e06f0317fcc1aec2d3b5a0933b810f9cf/hassil-3.5.0.tar.gz", hash = "sha256:bed39573626d76bfc0681a709a6b64e4de82a680371bd29238473f6711392597", size = 61144, upload-time = "2025-12-02T20:21:08.435Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/7a/4e/94d688f7fb23b6e898922a077d7e32a6f412372ff285567d890a8791de7f/hassil-3.5.0-py3-none-any.whl", hash = "sha256:87b2a48164b2de1d693edbe4204b3a7c3b72dc7c5c3829774de8824ecc62ab96", size = 51788, upload-time = "2025-12-02T20:21:07.125Z" },
+]
+
+[[package]]
+name = "hassil"
+version = "3.11.0"
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "python_full_version >= '3.14.2' and sys_platform == 'win32'",
+    "python_full_version >= '3.14.2' and sys_platform != 'win32'",
+]
+dependencies = [
+    { name = "pyyaml", version = "6.0.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.14.2'" },
+    { name = "unicode-rbnf", marker = "python_full_version >= '3.14.2'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/76/8c/871fc02b0f8fc688bc73f422677e8be73d8d7e6acfb75fa6d52224103415/hassil-3.11.0.tar.gz", hash = "sha256:8e9f3e68491ab03f149c7b6ba0763f40ad571d1e60ec767942105246a3e267f5", size = 60771, upload-time = "2026-07-31T16:02:54.675Z" }
 wheels = [
@@ -2563,8 +2592,29 @@ wheels = [
 
 [[package]]
 name = "home-assistant-intents"
+version = "2026.1.28"
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "python_full_version >= '3.14' and python_full_version < '3.14.2' and sys_platform == 'win32'",
+    "python_full_version >= '3.14' and python_full_version < '3.14.2' and sys_platform != 'win32'",
+    "python_full_version >= '3.13.2' and python_full_version < '3.14' and sys_platform == 'win32'",
+    "python_full_version < '3.13.2' and sys_platform == 'win32'",
+    "python_full_version >= '3.13.2' and python_full_version < '3.14' and sys_platform != 'win32'",
+    "python_full_version < '3.13.2' and sys_platform != 'win32'",
+]
+sdist = { url = "https://files.pythonhosted.org/packages/3d/6c/20ef8f2c2b4ba8998164fedc1722f9451b146c554743154380554044fcfa/home_assistant_intents-2026.1.28.tar.gz", hash = "sha256:baa2f017535729bb2f68add51be6e9c703627e1bf7048a48c58f2e4afba9cda1", size = 2808562, upload-time = "2026-01-28T21:17:12.123Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/59/4d/4bf5493cdc54cfdab313ba9af8d2d57bb8896a1022ac5c524432d3237983/home_assistant_intents-2026.1.28-py3-none-any.whl", hash = "sha256:dd593fd1471e49e0d7b296d5ef0cce69c67a73adb30324b239933a2bf6c3ca71", size = 2836855, upload-time = "2026-01-28T21:17:10.111Z" },
+]
+
+[[package]]
+name = "home-assistant-intents"
 version = "2026.7.30"
 source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "python_full_version >= '3.14.2' and sys_platform == 'win32'",
+    "python_full_version >= '3.14.2' and sys_platform != 'win32'",
+]
 sdist = { url = "https://files.pythonhosted.org/packages/50/33/9595939981ed1df84d35687c0aa126bc1dcb3685582fc77da004cabf4a0c/home_assistant_intents-2026.7.30.tar.gz", hash = "sha256:e03d9d7fbf84139db7ba3c940091b02600c32db41ec89d8a023729e95b3b0f23", size = 537462, upload-time = "2026-07-30T15:15:08.482Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/78/48/ef3e92a7c47ce4a7d3272b10786b58821104d3d9574e9dce62c7dbf3208b/home_assistant_intents-2026.7.30-py3-none-any.whl", hash = "sha256:9e9f6cb787b47db87de7266656932d270135b7be2ef4c491e02086c874ed08a0", size = 561387, upload-time = "2026-07-30T15:15:06.674Z" },
