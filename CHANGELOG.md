@@ -22,6 +22,8 @@ project follows [Semantic Versioning](https://semver.org/).
 - Support MCP 2 alongside MCP 1, including its renamed result fields and
   httpx2-based transports. This removes the dependency conflict with current
   Home Assistant while preserving configured headers, timeouts and TLS settings.
+- The project's default Python version is pinned to 3.13 for uv, avoiding
+  accidental Python 3.15 CI environments and lengthy source builds of locked dependencies.
 
 ## [5.6.6] - 2026-10-09
 
