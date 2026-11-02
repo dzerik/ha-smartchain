@@ -15,12 +15,13 @@ factory is installed at `verify_ssl: false` and absent at `verify_ssl: true`.
 import ssl
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
 import pytest
 
+from custom_components.smartchain.tools.mcp import client as module
 from custom_components.smartchain.tools.mcp.client import (
     MCPClient,
     _insecure_httpx_factory,
+    _transport_httpx,
 )
 from custom_components.smartchain.tools.mcp.config import HTTPConfig, SSEConfig
 
@@ -82,6 +83,7 @@ async def test_sse_transport_installs_insecure_factory_only_when_disabled(
 
 
 @pytest.mark.parametrize("verify_ssl", [True, False])
+@pytest.mark.skipif(module.streamablehttp_client is None, reason="MCP 1 transport contract")
 async def test_http_transport_installs_insecure_factory_only_when_disabled(
     verify_ssl: bool,
 ) -> None:
@@ -127,6 +129,7 @@ async def test_http_transport_installs_insecure_factory_only_when_disabled(
 def test_insecure_factory_really_disables_certificate_verification() -> None:
     """The factory's whole purpose: an httpx client that does not check certs."""
     client = _insecure_httpx_factory()
+    assert isinstance(client, _transport_httpx().AsyncClient)
     context = client._transport._pool._ssl_context
     assert context.verify_mode == ssl.CERT_NONE
     assert context.check_hostname is False
@@ -134,8 +137,8 @@ def test_insecure_factory_really_disables_certificate_verification() -> None:
 
 def test_insecure_factory_forwards_headers_auth_and_timeout() -> None:
     """The mcp SDK hands the factory the per-request settings; none may be dropped."""
-    auth = httpx.BasicAuth("u", "p")
-    timeout = httpx.Timeout(5.0)
+    auth = _transport_httpx().BasicAuth("u", "p")
+    timeout = _transport_httpx().Timeout(5.0)
     client = _insecure_httpx_factory(
         headers={"Authorization": "Bearer s3cret"},
         timeout=timeout,

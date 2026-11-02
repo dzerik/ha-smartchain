@@ -19,6 +19,9 @@ project follows [Semantic Versioning](https://semver.org/).
   `llm.ToolResult` wrapper where required, while keeping older Home Assistant
   versions working. Tool results are read through the current API without
   deprecated-property warnings.
+- Support MCP 2 alongside MCP 1, including its renamed result fields and
+  httpx2-based transports. This removes the dependency conflict with current
+  Home Assistant while preserving configured headers, timeouts and TLS settings.
 
 ## [5.6.6] - 2026-10-09
 

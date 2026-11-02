@@ -1,8 +1,10 @@
 """Tests for MCPClient — thin wrapper over the mcp SDK."""
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from mcp.types import Tool
 
 from custom_components.smartchain.tools.mcp.client import MCPClient
 from custom_components.smartchain.tools.mcp.config import StdioConfig
@@ -12,19 +14,20 @@ from custom_components.smartchain.tools.mcp.config import StdioConfig
 def fake_session():
     """A fake mcp ClientSession with list_tools + call_tool mocked."""
     session = MagicMock()
-    fake_tool = MagicMock()
-    fake_tool.name = "read_file"
-    fake_tool.description = "Read a file"
-    fake_tool.inputSchema = {
-        "type": "object",
-        "properties": {"path": {"type": "string"}},
-        "required": ["path"],
-    }
+    fake_tool = Tool(
+        name="read_file",
+        description="Read a file",
+        inputSchema={
+            "type": "object",
+            "properties": {"path": {"type": "string"}},
+            "required": ["path"],
+        },
+    )
     session.list_tools = AsyncMock(return_value=MagicMock(tools=[fake_tool]))
     session.call_tool = AsyncMock(
-        return_value=MagicMock(
+        return_value=SimpleNamespace(
             isError=False,
-            content=[MagicMock(type="text", text="file contents")],
+            content=[SimpleNamespace(type="text", text="file contents")],
         )
     )
     session.initialize = AsyncMock()
@@ -57,9 +60,9 @@ async def test_call_tool_returns_text_content(fake_session) -> None:
 
 
 async def test_call_tool_error_result_returns_error_string(fake_session) -> None:
-    fake_session.call_tool.return_value = MagicMock(
+    fake_session.call_tool.return_value = SimpleNamespace(
         isError=True,
-        content=[MagicMock(type="text", text="permission denied")],
+        content=[SimpleNamespace(type="text", text="permission denied")],
     )
     cfg = StdioConfig(name="fs", command="npx")
     client = MCPClient(cfg)
@@ -70,9 +73,9 @@ async def test_call_tool_error_result_returns_error_string(fake_session) -> None
 
 
 async def test_call_tool_non_text_content_becomes_placeholder(fake_session) -> None:
-    fake_session.call_tool.return_value = MagicMock(
+    fake_session.call_tool.return_value = SimpleNamespace(
         isError=False,
-        content=[MagicMock(type="image", data="...")],
+        content=[SimpleNamespace(type="image", data="...")],
     )
     cfg = StdioConfig(name="fs", command="npx")
     client = MCPClient(cfg)

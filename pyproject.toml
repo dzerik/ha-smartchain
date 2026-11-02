@@ -37,7 +37,7 @@ dev = [
     "hassil>=3.5.0",
     "home-assistant-intents>=2026.3.3",
     "jsonschema>=4.0",
-    "mcp>=1.0,<2",
+    "mcp>=1.0,<3",
     # Schema tests exercise probatio even with a pre-2026.9 Home Assistant.
     # Runtime imports it only on modern HA, which supplies it itself.
     "probatio>=0.11.4",

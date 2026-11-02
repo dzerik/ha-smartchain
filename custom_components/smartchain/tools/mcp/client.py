@@ -11,38 +11,54 @@ from mcp.client.stdio import stdio_client
 
 try:
     from mcp.client.streamable_http import streamablehttp_client
-except ImportError:  # pragma: no cover — present in mcp>=1.6
+except ImportError:
     streamablehttp_client = None  # type: ignore[assignment]
+    try:
+        from mcp.client.streamable_http import streamable_http_client
+    except ImportError:  # pragma: no cover — MCP before 1.6 has neither transport
+        streamable_http_client = None
+else:
+    streamable_http_client = None
 
 from .config import HTTPConfig, MCPServerConfig, SSEConfig, StdioConfig
 
 LOGGER = logging.getLogger(__name__)
 
 
+def _transport_httpx() -> Any:
+    """Use the HTTP library required by the installed MCP transport."""
+    if streamable_http_client is not None:
+        import httpx2
+
+        return httpx2
+    return httpx
+
+
 def _insecure_httpx_factory(
     headers: dict[str, str] | None = None,
-    timeout: httpx.Timeout | None = None,
-    auth: httpx.Auth | None = None,
-) -> httpx.AsyncClient:
+    timeout: Any = None,
+    auth: Any = None,
+) -> Any:
     """httpx client factory used when ``verify_ssl: false`` is set.
 
     The mcp SDK accepts a ``httpx_client_factory`` callable matching the
     signature of ``mcp.shared._httpx_utils.create_mcp_http_client``.
     We use it to disable TLS certificate verification.
     """
+    http = _transport_httpx()
     kwargs: dict[str, Any] = {
         "follow_redirects": True,
         "verify": False,
     }
     if timeout is None:
-        kwargs["timeout"] = httpx.Timeout(30, read=300)
+        kwargs["timeout"] = http.Timeout(30, read=300)
     else:
         kwargs["timeout"] = timeout
     if headers is not None:
         kwargs["headers"] = headers
     if auth is not None:
         kwargs["auth"] = auth
-    return httpx.AsyncClient(**kwargs)
+    return http.AsyncClient(**kwargs)
 
 
 class MCPClient:
@@ -108,6 +124,20 @@ class MCPClient:
                 sse_kwargs["httpx_client_factory"] = _insecure_httpx_factory
             return await stack.enter_async_context(sse_client(cfg.url, **sse_kwargs))
         if isinstance(cfg, HTTPConfig):
+            if streamable_http_client is not None:
+                # MCP 2 takes an owned httpx2 client instead of transport kwargs.
+                # Enter it first so the transport closes before its HTTP client.
+                http = _transport_httpx()
+                http_client = await stack.enter_async_context(
+                    http.AsyncClient(
+                        headers=dict(cfg.headers) or None,
+                        timeout=http.Timeout(cfg.timeout, read=300),
+                        verify=cfg.verify_ssl,
+                    )
+                )
+                return await stack.enter_async_context(
+                    streamable_http_client(cfg.url, http_client=http_client)
+                )
             if streamablehttp_client is None:
                 raise RuntimeError(
                     "Streamable HTTP transport is not available in the installed mcp SDK."
@@ -130,11 +160,12 @@ class MCPClient:
         resp = await self._session.list_tools()
         out: list[dict[str, Any]] = []
         for tool in resp.tools:
+            schema = tool.input_schema if hasattr(tool, "input_schema") else tool.inputSchema
             out.append(
                 {
                     "name": tool.name,
                     "description": tool.description or "",
-                    "inputSchema": tool.inputSchema or {"type": "object", "properties": {}},
+                    "inputSchema": schema or {"type": "object", "properties": {}},
                 }
             )
         return out
@@ -155,7 +186,8 @@ class MCPClient:
             rendered = "[non-text content]"
         elif non_text:
             rendered = rendered + "\n[non-text content]"
-        if getattr(resp, "isError", False):
+        is_error = resp.is_error if hasattr(resp, "is_error") else getattr(resp, "isError", False)
+        if is_error:
             return f"Tool execution failed: {rendered}"
         return rendered
 
