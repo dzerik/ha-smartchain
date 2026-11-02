@@ -150,6 +150,25 @@ def _ha_tool_to_dict(tool: llm.Tool) -> dict[str, Any]:
     }
 
 
+def _make_tool_result_content(
+    *, agent_id: str, tool_call_id: str, tool_name: str, tool_result: Any
+) -> ToolResultContent:
+    """Construct a tool message across the HA 2026.10 result API change."""
+    if "result" in ToolResultContent.__dataclass_fields__:
+        return ToolResultContent(
+            agent_id=agent_id,
+            tool_call_id=tool_call_id,
+            tool_name=tool_name,
+            result=llm.ToolResult(data=tool_result),
+        )
+    return ToolResultContent(
+        agent_id=agent_id,
+        tool_call_id=tool_call_id,
+        tool_name=tool_name,
+        tool_result=tool_result,
+    )
+
+
 class SmartChainConversationEntity(ConversationEntity):
     """SmartChain conversation entity using ConversationEntity API."""
 
@@ -596,7 +615,7 @@ class SmartChainConversationEntity(ConversationEntity):
                             LOGGER.exception("search_memory dispatch failed")
                             result_text = "Memory lookup failed; see logs."
                         chat_log.async_add_assistant_content_without_tools(
-                            ToolResultContent(
+                            _make_tool_result_content(
                                 agent_id=user_input.agent_id,
                                 tool_call_id=tc.id,
                                 tool_name=tc.tool_name,
@@ -630,7 +649,7 @@ class SmartChainConversationEntity(ConversationEntity):
                             LOGGER.exception("search_entities dispatch failed")
                             result_text = "Entity lookup failed; see logs."
                         chat_log.async_add_assistant_content_without_tools(
-                            ToolResultContent(
+                            _make_tool_result_content(
                                 agent_id=user_input.agent_id,
                                 tool_call_id=tc.id,
                                 tool_name=tc.tool_name,
@@ -670,7 +689,7 @@ class SmartChainConversationEntity(ConversationEntity):
                             self.hass, custom_by_name[tc.tool_name], tc.tool_args
                         )
                         chat_log.async_add_assistant_content_without_tools(
-                            ToolResultContent(
+                            _make_tool_result_content(
                                 agent_id=user_input.agent_id,
                                 tool_call_id=tc.id,
                                 tool_name=tc.tool_name,
@@ -862,9 +881,12 @@ def _chatlog_to_langchain(
             elif content.content:
                 messages.append(AIMessage(content=content.content))
         elif isinstance(content, ToolResultContent):
+            # Modern HA keeps tool_result as a deprecated property. Read the
+            # wrapped payload directly to avoid a warning on every tool call.
+            result = content.result.data if hasattr(content, "result") else content.tool_result
             messages.append(
                 ToolMessage(
-                    content=json.dumps(content.tool_result),
+                    content=json.dumps(result),
                     tool_call_id=content.tool_call_id,
                     name=content.tool_name,
                 )
@@ -893,7 +915,7 @@ async def _handle_history_tool_calls(hass, chat_log: ChatLog, agent_id: str) -> 
                 tc.tool_args.get("hours", 1.0),
             )
             chat_log.async_add_assistant_content_without_tools(
-                ToolResultContent(
+                _make_tool_result_content(
                     agent_id=agent_id,
                     tool_call_id=tc.id,
                     tool_name=HISTORY_TOOL_NAME,
@@ -928,7 +950,7 @@ async def _handle_delegate_tool_calls(
                 tc.tool_args.get("message", ""),
             )
             chat_log.async_add_assistant_content_without_tools(
-                ToolResultContent(
+                _make_tool_result_content(
                     agent_id=agent_id,
                     tool_call_id=tc.id,
                     tool_name=DELEGATE_TOOL_NAME,
@@ -967,7 +989,7 @@ async def _handle_delegate_many_tool_calls(
                 LOGGER.exception("ask_agents dispatch failed")
                 result_text = "Tool execution failed; check Home Assistant logs."
             chat_log.async_add_assistant_content_without_tools(
-                ToolResultContent(
+                _make_tool_result_content(
                     agent_id=agent_id,
                     tool_call_id=tc.id,
                     tool_name=tc.tool_name,
@@ -1007,7 +1029,7 @@ async def _handle_critique_tool_calls(
                 LOGGER.exception("critique_response dispatch failed")
                 result_text = "Tool execution failed; check Home Assistant logs."
             chat_log.async_add_assistant_content_without_tools(
-                ToolResultContent(
+                _make_tool_result_content(
                     agent_id=agent_id,
                     tool_call_id=tc.id,
                     tool_name=tc.tool_name,

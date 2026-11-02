@@ -11,6 +11,15 @@ project follows [Semantic Versioning](https://semver.org/).
 > **Note:** the `5.4.0` section below is a roll-up: it covers `5.4.0` through
 > `5.4.7`, which were developed on one branch and are not separated here.
 
+## [5.6.7] - 2026-11-03
+
+### Fixed
+- **Tool calls crashed on Home Assistant 2026.10** with an unexpected
+  `tool_result` argument (#16). All SmartChain tool handlers now use the new
+  `llm.ToolResult` wrapper where required, while keeping older Home Assistant
+  versions working. Tool results are read through the current API without
+  deprecated-property warnings.
+
 ## [5.6.6] - 2026-10-09
 
 ### Fixed
